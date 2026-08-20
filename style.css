@@ -230,6 +230,14 @@ tbody tr:last-child td {
   font-weight: 700;
 }
 
+.day small {
+  display: block;
+  margin-top: 2px;
+  color: #6b7d70;
+  font-weight: 400;
+  font-size: 11px;
+}
+
 .row-final td {
   background: #f2f7f0;
 }
@@ -262,6 +270,14 @@ tbody tr:last-child td {
 .delta-off {
   background: var(--amber-light);
   color: var(--amber);
+}
+
+.ffv-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
 }
 
 .actual-status {

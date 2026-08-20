@@ -27,7 +27,7 @@ const CONFIG = {
 // Geocoding: api.postcodes.io (UK postcodes -> lat/lon)
 // Weather: api.open-meteo.com/v1/forecast with past_days to pull recent
 // recorded days alongside today. No key required for either.
-const GEOCODE_URL = "https://api.postcodes.io/postcodes/";
+const GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const MAX_ROLLBACK = 6;
 
@@ -36,6 +36,7 @@ const state = {
   rollback: 0,
   postcode: "TA6",
   selected: new Set(CONFIG.forecasters.filter(f => f.enabled).map(f => f.id)),
+  areaCode: "",
   actual: {
     status: "idle", // idle | loading | ready | error
     error: null,
@@ -151,6 +152,10 @@ function targetDateForRollback(rollbackDays) {
   return addDays(todayAtMidnight(), -rollbackDays);
 }
 
+function formatDateShort(date) {
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 function formatDateLong(date) {
   return date.toLocaleDateString(undefined, {
     weekday: "short",
@@ -166,15 +171,23 @@ function isoDate(date) {
 // ---- Actual weather fetching ----
 
 async function geocodePostcode(pc) {
-  const clean = pc.replace(/\s+/g, "");
-  const res = await fetch(GEOCODE_URL + encodeURIComponent(clean));
-  if (!res.ok) throw new Error("Postcode not found");
+  // Location is resolved from the first 3 characters of the postcode
+  // (area-level, not the exact address) via postcodes.io's outcode lookup.
+  // Note: some outward codes are 4 characters (e.g. "SW1A"); truncating to
+  // 3 will miss those and the lookup below will fail for them.
+  const areaCode = pc.replace(/\s+/g, "").slice(0, 3);
+  const res = await fetch(GEOCODE_URL + encodeURIComponent(areaCode));
+  if (!res.ok) throw new Error(`Area code "${areaCode}" not found`);
   const data = await res.json();
-  if (!data.result) throw new Error("Postcode not found");
+  if (!data.result) throw new Error(`Area code "${areaCode}" not found`);
+  const district = Array.isArray(data.result.admin_district)
+    ? data.result.admin_district[0]
+    : data.result.admin_district;
   return {
     lat: data.result.latitude,
     lon: data.result.longitude,
-    label: data.result.admin_district || data.result.parish || pc
+    label: district || areaCode,
+    areaCode
   };
 }
 
@@ -199,7 +212,8 @@ async function fetchActualWeather() {
   renderActualStatus();
 
   try {
-    const { lat, lon, label } = await geocodePostcode(state.postcode);
+    const { lat, lon, label, areaCode } = await geocodePostcode(state.postcode);
+    state.areaCode = areaCode;
 
     const params = new URLSearchParams({
       latitude: lat,
@@ -238,6 +252,7 @@ async function fetchActualWeather() {
     );
     state.actual.coordLabel = label;
     state.actual.status = "ready";
+    updateFFVHistory();
   } catch (err) {
     state.actual.status = "error";
     state.actual.error = err.message || "Could not load actual weather";
@@ -289,13 +304,125 @@ function renderActualStatus() {
     actualStatus.textContent = `Actual weather unavailable: ${state.actual.error}`;
     actualStatus.classList.add("is-error");
   } else if (state.actual.status === "ready") {
-    actualStatus.textContent = `Actual weather via Open-Meteo for ${state.actual.coordLabel}`;
+    const samples = ffvSampleTotal(state.condition);
+    const ffvNote = samples > 0
+      ? ` · fudge-factor data: ${samples} sample${samples === 1 ? "" : "s"} for ${CONFIG.conditions[state.condition].name} in ${state.areaCode}`
+      : "";
+    actualStatus.textContent = `Actual weather via Open-Meteo for ${state.actual.coordLabel}${ffvNote}`;
   } else {
     actualStatus.textContent = "";
   }
 }
 
-// ---- Table rendering ----
+// ---- Fudge Factor (FFV): 3-day mean of forecast values, corrected by a
+// per-area, per-source, per-condition, per-lead-time ratio learned from
+// past forecast-vs-actual comparisons. Stored in localStorage, keyed by
+// postcode area so different gardens build their own correction history.
+
+const FFV_MIN_SAMPLES = 3;
+const FFV_RATIO_CLAMP = [0.1, 5]; // guards against near-zero means blowing up the ratio
+
+function ffvStorageKey(areaCode) {
+  return `forecast-compare:ffv:${areaCode}`;
+}
+
+function loadFFVStore(areaCode) {
+  try {
+    const raw = localStorage.getItem(ffvStorageKey(areaCode));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFFVStore(areaCode, store) {
+  try {
+    localStorage.setItem(ffvStorageKey(areaCode), JSON.stringify(store));
+  } catch {
+    // Storage unavailable (e.g. private browsing) — FFV just won't persist.
+  }
+}
+
+// 3-day mean for a given day-out row. Day 1 averages with day 2 only
+// (there's no "day 0" forecast). Day 7 uses an invisible day 8 point,
+// computed the same way as any other day, giving it a proper centred mean.
+function threeDayMean(day, source, conditionName) {
+  if (day === 1) {
+    return (demoValue(1, source, conditionName) + demoValue(2, source, conditionName)) / 2;
+  }
+  if (day === 7) {
+    return (
+      demoValue(6, source, conditionName) +
+      demoValue(7, source, conditionName) +
+      demoValue(8, source, conditionName)
+    ) / 3;
+  }
+  return (
+    demoValue(day - 1, source, conditionName) +
+    demoValue(day, source, conditionName) +
+    demoValue(day + 1, source, conditionName)
+  ) / 3;
+}
+
+function clampRatio(ratio) {
+  return Math.min(FFV_RATIO_CLAMP[1], Math.max(FFV_RATIO_CLAMP[0], ratio));
+}
+
+// Sweeps every rollback position with a known Actual value and folds each
+// (mean, actual) pair into the running per-day FFV average for this area.
+// Safe to call repeatedly — revisiting the same target date just nudges an
+// already-idempotent running mean, it doesn't double-count meaningfully.
+function updateFFVHistory() {
+  if (!state.areaCode || state.actual.status !== "ready") return;
+
+  const store = loadFFVStore(state.areaCode);
+
+  for (let rollbackDays = 1; rollbackDays <= MAX_ROLLBACK; rollbackDays++) {
+    Object.keys(CONFIG.conditions).forEach(conditionName => {
+      const actual = actualValueFor(conditionName, rollbackDays);
+      if (actual === null || actual === undefined) return;
+
+      CONFIG.forecasters.forEach(source => {
+        for (let day = 1; day <= 7; day++) {
+          const mean = threeDayMean(day, source, conditionName);
+          if (!mean) continue; // skip zero/near-zero means, avoids ratio blow-ups
+
+          const ratio = clampRatio(actual / mean);
+
+          store[conditionName] ??= {};
+          store[conditionName][source.id] ??= {};
+          const entry = (store[conditionName][source.id][day] ??= { count: 0, sumRatio: 0 });
+          entry.count += 1;
+          entry.sumRatio += ratio;
+        }
+      });
+    });
+  }
+
+  saveFFVStore(state.areaCode, store);
+}
+
+// Returns the learned FFV for this source/condition/day, or null if there
+// isn't enough history yet to trust it.
+function ffvFor(source, conditionName, day) {
+  if (!state.areaCode) return null;
+  const store = loadFFVStore(state.areaCode);
+  const entry = store[conditionName]?.[source.id]?.[day];
+  if (!entry || entry.count < FFV_MIN_SAMPLES) return null;
+  return entry.sumRatio / entry.count;
+}
+
+function ffvSampleTotal(conditionName) {
+  if (!state.areaCode) return 0;
+  const store = loadFFVStore(state.areaCode);
+  const bySource = store[conditionName];
+  if (!bySource) return 0;
+  return Object.values(bySource).reduce((sum, byDay) => {
+    return sum + Object.values(byDay).reduce((s, e) => s + e.count, 0);
+  }, 0);
+}
+
+
 
 function renderTable() {
   const selectedSources = CONFIG.forecasters.filter(
@@ -343,15 +470,33 @@ function renderTable() {
     const row = document.createElement("tr");
     if (day === 1) row.classList.add("row-final");
 
+    const issueDate = addDays(targetDate, -day);
+
     const dayCell = document.createElement("td");
     dayCell.className = "day";
-    dayCell.textContent = day;
+
+    const dayNum = document.createElement("span");
+    dayNum.textContent = day;
+
+    const dayDate = document.createElement("small");
+    dayDate.textContent = formatDateShort(issueDate);
+
+    dayCell.append(dayNum, dayDate);
     row.appendChild(dayCell);
 
     selectedSources.forEach(source => {
       const cell = document.createElement("td");
       const value = demoValue(day, source, state.condition);
       cell.textContent = formatValue(value, state.condition);
+
+      const ffv = ffvFor(source, state.condition, day);
+      if (ffv !== null) {
+        const mean = threeDayMean(day, source, state.condition);
+        const adjusted = document.createElement("small");
+        adjusted.className = "ffv-hint";
+        adjusted.textContent = `≈${formatValue(mean * ffv, state.condition)} adj.`;
+        cell.appendChild(adjusted);
+      }
 
       if (day === 1 && actualKnown) {
         const delta = value - actual;
