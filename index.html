@@ -72,11 +72,19 @@
         Rows count down the days out from the target date — "1" is the last forecast before it. The Actual row shows what really happened, sourced live from Open-Meteo.
       </p>
       <p id="actualStatus" class="actual-status"></p>
+      <p id="metOfficeStatus" class="actual-status"></p>
+
+      <details class="backfill">
+        <summary>Real Met Office history (advanced)</summary>
+        <p>Pull a year of real UK Met Office model data straight into this area's fudge-factor history, rather than waiting for it to build up day by day. One-off, and it's a fairly big request.</p>
+        <button id="backfillButton" type="button">Backfill 1 year of real Met Office data</button>
+        <p id="backfillStatus" class="actual-status"></p>
+      </details>
     </section>
 
     <footer>
       <span>Forecast Compare</span>
-      <span>GitHub Pages compatible</span>
+      <span><a href="settings.html">Forecasters</a> · GitHub Pages compatible</span>
     </footer>
   </main>
 
