@@ -46,6 +46,17 @@ const METOFFICE_MODEL = "ukmo_global_deterministic_10km";
 // isn't cluttering the day-to-day view. Both pages read/write this same
 // localStorage key to stay in sync.
 const SELECTED_FORECASTERS_KEY = "forecast-compare:selectedForecasters";
+const ACCURACY_MODE_KEY = "forecast-compare:accuracyMode";
+
+function loadAccuracyMode() {
+  try {
+    const raw = localStorage.getItem(ACCURACY_MODE_KEY);
+    if (raw === "units" || raw === "percent" || raw === "both") return raw;
+  } catch {
+    // fall through to default
+  }
+  return "both";
+}
 
 function loadSelectedForecasters() {
   try {
@@ -97,6 +108,11 @@ const state = {
     status: "idle", // idle | loading | done | error
     error: null,
     samplesAdded: 0
+  },
+  history: {
+    status: "idle", // idle | loading | ready | error
+    error: null,
+    dayCount: 0
   }
 };
 
@@ -112,6 +128,9 @@ const actualStatus = document.getElementById("actualStatus");
 const metOfficeStatus = document.getElementById("metOfficeStatus");
 const backfillButton = document.getElementById("backfillButton");
 const backfillStatus = document.getElementById("backfillStatus");
+const accuracyMode = document.getElementById("accuracyMode");
+const accuracyBody = document.getElementById("accuracyBody");
+const historyStatus = document.getElementById("historyStatus");
 
 function demoValue(day, source, conditionName) {
   const sourceOffset = source.offset ?? 0;
@@ -355,6 +374,91 @@ async function fetchMetOfficeReal(lat, lon) {
   renderTable();
 }
 
+// The daily GitHub Action commits data/history.json — no location info in
+// it, just dates and numbers. This is Met Office's authoritative FFV
+// source: every load, its store entries are rebuilt from scratch by
+// replaying the whole file, so there's no incremental double-counting no
+// matter how often the page is opened. This is the "consistent collection
+// even if the app is barely opened" guarantee — the Action runs daily
+// regardless, and whatever it collected is just replayed here.
+const HISTORY_URL = "./data/history.json";
+
+function meanFromHistoryDay(dayEntry, day, conditionName) {
+  const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
+  const values = leadDays
+    .map(d => dayEntry.models?.metoffice?.[d]?.[conditionName])
+    .filter(v => v !== null && v !== undefined);
+  if (!values.length) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function renderHistoryStatus() {
+  if (!historyStatus) return;
+  historyStatus.classList.remove("is-error");
+
+  if (state.history.status === "loading") {
+    historyStatus.textContent = "Loading collected history…";
+  } else if (state.history.status === "error") {
+    historyStatus.textContent = `Collected history unavailable: ${state.history.error}`;
+    historyStatus.classList.add("is-error");
+  } else if (state.history.status === "ready") {
+    historyStatus.textContent = state.history.dayCount > 0
+      ? `Met Office accuracy is built from ${state.history.dayCount} day${state.history.dayCount === 1 ? "" : "s"} collected automatically once a day.`
+      : "No collected history yet — the daily Action hasn't run yet, or hasn't been set up.";
+  } else {
+    historyStatus.textContent = "";
+  }
+}
+
+async function loadCommittedHistory() {
+  if (!state.areaCode) return;
+
+  state.history.status = "loading";
+  state.history.error = null;
+  renderHistoryStatus();
+
+  try {
+    const res = await fetch(HISTORY_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("history.json not found");
+    const data = await res.json();
+    const dates = Object.keys(data.days || {});
+
+    const store = loadFFVStore(state.areaCode);
+    // Rebuild Met Office's entries from scratch — this file is the single
+    // source of truth for it, so a partial/incremental merge would risk
+    // exactly the double-counting this whole mechanism exists to avoid.
+    Object.keys(CONFIG.conditions).forEach(conditionName => {
+      if (store[conditionName]) delete store[conditionName].metoffice;
+    });
+
+    dates.forEach(date => {
+      const dayEntry = data.days[date];
+      if (!dayEntry.actual || !dayEntry.models?.metoffice) return;
+
+      REAL_METOFFICE_CONDITIONS.forEach(conditionName => {
+        const actual = dayEntry.actual[conditionName];
+        if (actual === null || actual === undefined) return;
+
+        for (let day = 1; day <= 7; day++) {
+          const mean = meanFromHistoryDay(dayEntry, day, conditionName);
+          if (!mean) continue;
+          recordFFVSample(store, conditionName, "metoffice", day, mean, actual);
+        }
+      });
+    });
+
+    saveFFVStore(state.areaCode, store);
+    state.history.status = "ready";
+    state.history.dayCount = dates.length;
+  } catch (err) {
+    state.history.status = "error";
+    state.history.error = err.message || "Could not load collected history";
+  }
+
+  renderHistoryStatus();
+  renderTable();
+}
+
 // Geocodes once, then kicks off Actual and the live Met Office fetch from
 // the same coordinates rather than each resolving location separately.
 async function loadLocationData() {
@@ -364,7 +468,7 @@ async function loadLocationData() {
     state.lon = lon;
     state.areaCode = areaCode;
     state.actual.coordLabel = label;
-    await Promise.all([fetchActualWeather(lat, lon), fetchMetOfficeReal(lat, lon)]);
+    await Promise.all([fetchActualWeather(lat, lon), fetchMetOfficeReal(lat, lon), loadCommittedHistory()]);
     updateFFVHistory();
     renderActualStatus();
     renderMetOfficeStatus();
@@ -528,10 +632,46 @@ function clampRatio(ratio) {
   return Math.min(FFV_RATIO_CLAMP[1], Math.max(FFV_RATIO_CLAMP[0], ratio));
 }
 
+// Records one (mean, actual) sample into the FFV store, extended to also
+// track accuracy: the raw error is straightforward (|mean - actual|).
+// The corrected error is scored using the FFV as it stood BEFORE this
+// sample is folded in — an honest, non-circular "how would today's
+// correction have done on this one" rather than retroactively applying
+// the final FFV to old data. Scoring only starts once FFV_MIN_SAMPLES is
+// already met, since there's no meaningful correction before that.
+function recordFFVSample(store, conditionName, sourceId, day, mean, actual) {
+  if (!mean) return; // guards against divide-by-zero ratios
+
+  store[conditionName] ??= {};
+  store[conditionName][sourceId] ??= {};
+  const entry = (store[conditionName][sourceId][day] ??= {
+    count: 0,
+    sumRatio: 0,
+    sumAbsErrorRaw: 0,
+    scoredCount: 0,
+    sumAbsErrorCorrected: 0
+  });
+
+  if (entry.count >= FFV_MIN_SAMPLES) {
+    const currentFFV = entry.sumRatio / entry.count;
+    entry.sumAbsErrorCorrected += Math.abs(mean * currentFFV - actual);
+    entry.scoredCount += 1;
+  }
+
+  entry.sumAbsErrorRaw += Math.abs(mean - actual);
+  entry.sumRatio += clampRatio(actual / mean);
+  entry.count += 1;
+}
+
 // Sweeps every rollback position with a known Actual value and folds each
-// (mean, actual) pair into the running per-day FFV average for this area.
-// Safe to call repeatedly — revisiting the same target date just nudges an
-// already-idempotent running mean, it doesn't double-count meaningfully.
+// (mean, actual) pair into the running per-day FFV average for this area,
+// for every DEMO source. Met Office is deliberately excluded here — its
+// FFV data comes from the committed history file instead (see
+// loadCommittedHistory), which is the single, de-duplicated source of
+// truth for it. Re-running this for the same rollback window on every
+// page load WOULD double-count if Met Office were included, since a
+// revisit re-adds the same days; the committed-history replay avoids
+// that by rebuilding from scratch each time rather than incrementing.
 function updateFFVHistory() {
   if (!state.areaCode || state.actual.status !== "ready") return;
 
@@ -542,20 +682,15 @@ function updateFFVHistory() {
       const actual = actualValueFor(conditionName, rollbackDays);
       if (actual === null || actual === undefined) return;
 
-      CONFIG.forecasters.forEach(source => {
-        for (let day = 1; day <= 7; day++) {
-          const mean = threeDayMean(day, source, conditionName, rollbackDays);
-          if (!mean) continue; // skip zero/near-zero means, avoids ratio blow-ups
-
-          const ratio = clampRatio(actual / mean);
-
-          store[conditionName] ??= {};
-          store[conditionName][source.id] ??= {};
-          const entry = (store[conditionName][source.id][day] ??= { count: 0, sumRatio: 0 });
-          entry.count += 1;
-          entry.sumRatio += ratio;
-        }
-      });
+      CONFIG.forecasters
+        .filter(source => source.id !== "metoffice")
+        .forEach(source => {
+          for (let day = 1; day <= 7; day++) {
+            const mean = threeDayMean(day, source, conditionName, rollbackDays);
+            if (!mean) continue; // skip zero/near-zero means, avoids ratio blow-ups
+            recordFFVSample(store, conditionName, source.id, day, mean, actual);
+          }
+        });
     });
   }
 
@@ -588,7 +723,100 @@ function ffvSampleTotal(conditionName) {
   }, 0);
 }
 
+// Approximate 0-100 closeness scale per condition — the error (in real
+// units) at which the score bottoms out at 0. Deliberately simple, not a
+// formal statistic; the average-error-in-units figure is the primary one.
+const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, sunshine: 4, uv: 3 };
 
+function accuracyPercent(avgError, conditionName) {
+  if (avgError === null) return null;
+  const scale = ACCURACY_SCALE[conditionName] ?? 10;
+  return Math.max(0, Math.min(100, 100 * (1 - avgError / scale)));
+}
+
+// Weighted average error across all 7 lead-time days for one source and
+// condition — a single "how far off is this source, typically" figure
+// rather than 7 separate per-day numbers. Weighted by sample count, not
+// averaged-of-averages, so days with more history count proportionally.
+function accuracyStatsFor(source, conditionName) {
+  if (!state.areaCode) return null;
+  const store = loadFFVStore(state.areaCode);
+  const byDay = store[conditionName]?.[source.id];
+  if (!byDay) return null;
+
+  let count = 0, sumAbsErrorRaw = 0, scoredCount = 0, sumAbsErrorCorrected = 0;
+  Object.values(byDay).forEach(entry => {
+    count += entry.count;
+    sumAbsErrorRaw += entry.sumAbsErrorRaw ?? 0;
+    scoredCount += entry.scoredCount ?? 0;
+    sumAbsErrorCorrected += entry.sumAbsErrorCorrected ?? 0;
+  });
+
+  if (count === 0) return null;
+
+  return {
+    count,
+    avgErrorRaw: sumAbsErrorRaw / count,
+    scoredCount,
+    avgErrorCorrected: scoredCount > 0 ? sumAbsErrorCorrected / scoredCount : null
+  };
+}
+
+
+
+function formatError(avgError, conditionName, mode) {
+  if (avgError === null) return "–";
+  const unit = CONFIG.conditions[conditionName].unit;
+  const unitsText = `±${formatValue(avgError, conditionName)}${unit}`;
+  const percentText = `${Math.round(accuracyPercent(avgError, conditionName))}%`;
+
+  if (mode === "units") return unitsText;
+  if (mode === "percent") return percentText;
+  return `${unitsText} (${percentText})`;
+}
+
+function renderAccuracy() {
+  if (!accuracyBody) return;
+  accuracyBody.innerHTML = "";
+
+  const mode = accuracyMode ? accuracyMode.value : "both";
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+
+  selectedSources.forEach(source => {
+    const stats = accuracyStatsFor(source, state.condition);
+    const row = document.createElement("tr");
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = source.name;
+    row.appendChild(nameCell);
+
+    const samplesCell = document.createElement("td");
+    samplesCell.textContent = stats ? stats.count : "0";
+    row.appendChild(samplesCell);
+
+    const rawCell = document.createElement("td");
+    rawCell.textContent = stats ? formatError(stats.avgErrorRaw, state.condition, mode) : "–";
+    row.appendChild(rawCell);
+
+    const correctedCell = document.createElement("td");
+    correctedCell.textContent = stats ? formatError(stats.avgErrorCorrected, state.condition, mode) : "–";
+    row.appendChild(correctedCell);
+
+    accuracyBody.appendChild(row);
+  });
+}
+
+if (accuracyMode) {
+  accuracyMode.value = loadAccuracyMode();
+  accuracyMode.addEventListener("change", () => {
+    try {
+      localStorage.setItem(ACCURACY_MODE_KEY, accuracyMode.value);
+    } catch {
+      // display-only preference, fine if it doesn't persist
+    }
+    renderAccuracy();
+  });
+}
 
 function renderTable() {
   const selectedSources = CONFIG.forecasters.filter(
@@ -615,6 +843,7 @@ function renderTable() {
   selectedSources.forEach(source => {
     const th = document.createElement("th");
     th.colSpan = 2;
+    th.className = "th-source";
     th.textContent = source.name;
     sourceRow.appendChild(th);
 
@@ -737,6 +966,7 @@ function renderTable() {
   tbody.appendChild(actualRow);
 
   table.appendChild(tbody);
+  renderAccuracy();
 }
 
 // ---- One-off Met Office history backfill ----
@@ -865,12 +1095,7 @@ async function backfillMetOfficeHistory() {
           const mean = values.reduce((a, b) => a + b, 0) / values.length;
           if (!mean) continue;
 
-          const ratio = clampRatio(actual / mean);
-          store[conditionName] ??= {};
-          store[conditionName].metoffice ??= {};
-          const entry = (store[conditionName].metoffice[day] ??= { count: 0, sumRatio: 0 });
-          entry.count += 1;
-          entry.sumRatio += ratio;
+          recordFFVSample(store, conditionName, "metoffice", day, mean, actual);
           samplesAdded += 1;
         }
       });

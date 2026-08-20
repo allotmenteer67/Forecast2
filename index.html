@@ -74,9 +74,36 @@
       <p id="actualStatus" class="actual-status"></p>
       <p id="metOfficeStatus" class="actual-status"></p>
 
+      <details class="accuracy" open>
+        <summary>Accuracy so far</summary>
+        <p>How far Raw and Corrected typically land from Actual, for the selected condition — averaged across all "days out". More samples make this more trustworthy.</p>
+        <p id="historyStatus" class="actual-status"></p>
+        <label class="accuracy-mode">
+          Show
+          <select id="accuracyMode">
+            <option value="both">Both units and %</option>
+            <option value="units">Units only</option>
+            <option value="percent">Percent only</option>
+          </select>
+        </label>
+        <div class="table-wrap">
+          <table id="accuracyTable">
+            <thead>
+              <tr>
+                <th>Forecaster</th>
+                <th>Samples</th>
+                <th>Raw</th>
+                <th>Corrected</th>
+              </tr>
+            </thead>
+            <tbody id="accuracyBody"></tbody>
+          </table>
+        </div>
+      </details>
+
       <details class="backfill">
         <summary>Real Met Office history (advanced)</summary>
-        <p>Pull a year of real UK Met Office model data straight into this area's fudge-factor history, rather than waiting for it to build up day by day. One-off, and it's a fairly big request.</p>
+        <p>Now that a daily Action collects data automatically (see below), this is mainly for filling in the gap before it's built up much — or reaching further back than the rolling window it keeps. Pull a year of real UK Met Office model data straight into this area's fudge-factor history. One-off, and it's a fairly big request.</p>
         <button id="backfillButton" type="button">Backfill 1 year of real Met Office data</button>
         <p id="backfillStatus" class="actual-status"></p>
       </details>

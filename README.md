@@ -91,6 +91,53 @@ FFV data lives entirely in the browser (no server, no account) and is
 scoped to the postcode area, so different gardens/locations build up
 independent correction histories.
 
+## Accuracy scoring
+
+A collapsible "Accuracy so far" section (open by default) shows, per
+forecaster, how far Raw and Corrected typically land from Actual for
+whichever condition is selected — averaged across all 7 "days out" rows,
+weighted by sample count. Two numbers per cell: the average error in the
+condition's own units (e.g. "±1.2mm"), and an approximate 0–100% closeness
+score (a simple heuristic, not a formal statistic — see `ACCURACY_SCALE`
+in `app.js`). A dropdown lets you show units only, percent only, or both;
+the choice persists in `localStorage`.
+
+Corrected accuracy is scored honestly rather than retroactively: each
+sample is checked against whatever FFV existed *before* that sample was
+folded in, so it reflects how the correction would actually have
+performed in practice, not hindsight applied to old data.
+
+## Automatic daily collection
+
+A GitHub Action (`.github/workflows/collect-weather.yml`) runs once a day,
+fetches a 7-day rolling window of real Actual + Met Office data, and
+commits the result to `data/history.json`. That file deliberately holds
+**no location information** — just dates and weather numbers — so it's
+safe in a public repo. The app fetches it on every load and rebuilds Met
+Office's FFV entries from scratch each time, so revisiting the page never
+double-counts, and a single missed run self-heals on the next one (the
+window overlaps by design).
+
+**One-time setup**, since the location itself has to stay out of the
+repo: in the repo's **Settings → Secrets and variables → Actions**, add
+two repository secrets:
+
+- `FORECAST_LAT` — your postcode area's latitude
+- `FORECAST_LON` — your postcode area's longitude
+
+(Loading the app once and checking what it resolved your postcode to is
+the easiest way to get these — or look up the postcode area on
+postcodes.io directly.) Secrets are masked in logs and never appear in
+the repo's history, unlike a value hardcoded in the workflow file.
+
+Once the secrets are set, the Action runs automatically on its daily
+schedule — or trigger it manually from the repo's **Actions** tab
+(**Collect weather data → Run workflow**) to test it or catch up sooner.
+
+Adding more real Open-Meteo models later (ECMWF, GFS, DWD ICON, etc.) is
+a matter of adding entries to the `MODELS` array in
+`scripts/collect-weather.js`, plus a matching forecaster id in `app.js`.
+
 ## Pages
 
 - `index.html` — the day-to-day comparison view
