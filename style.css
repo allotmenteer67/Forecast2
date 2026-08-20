@@ -1,0 +1,298 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1f2a24;
+  background: #f4f6f1;
+  --accent: #2f6f4f;
+  --accent-dark: #234f39;
+  --accent-light: #e4efe6;
+  --amber: #b5651d;
+  --amber-light: #fbeee0;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+header {
+  margin-bottom: 20px;
+}
+
+h1 {
+  margin: 0 0 5px;
+  font-size: 30px;
+  color: var(--accent-dark);
+}
+
+header p {
+  margin: 0;
+  color: #5b6b60;
+}
+
+.controls,
+.comparison {
+  background: white;
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(31, 42, 36, .08);
+  border: 1px solid #e7ede6;
+}
+
+.controls {
+  display: grid;
+  gap: 18px;
+}
+
+label,
+fieldset,
+.rollback {
+  font-weight: 600;
+}
+
+.location-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input[type="text"],
+#postcode,
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #c3d0c6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: white;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 16px;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+legend {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.check input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.rollback-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+#rollback {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.range-labels {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7d70;
+  font-size: 12px;
+}
+
+.rollback p,
+.note {
+  margin: 7px 0 0;
+  color: #6b7d70;
+  font-size: 13px;
+}
+
+.target-date {
+  font-weight: 700;
+  color: var(--accent-dark);
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+.table-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.table-title h2 {
+  margin: 0;
+  color: var(--accent-dark);
+}
+
+#locationLabel {
+  color: #6b7d70;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 560px;
+}
+
+th,
+td {
+  padding: 11px 13px;
+  text-align: left;
+  border-bottom: 1px solid #e8eee9;
+  white-space: nowrap;
+}
+
+th {
+  background: var(--accent-light);
+  font-size: 13px;
+  color: var(--accent-dark);
+}
+
+th small {
+  display: block;
+  margin-top: 2px;
+  color: #6b7d70;
+  font-weight: 400;
+}
+
+tbody tr:nth-child(even) {
+  background: #fafbf9;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.day {
+  font-weight: 700;
+}
+
+.row-final td {
+  background: #f2f7f0;
+}
+
+.row-actual {
+  border-top: 2px solid var(--accent);
+}
+
+.row-actual td {
+  background: var(--accent-light);
+  font-weight: 700;
+  color: var(--accent-dark);
+  white-space: normal;
+}
+
+.delta {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.delta-close {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.delta-off {
+  background: var(--amber-light);
+  color: var(--amber);
+}
+
+.actual-status {
+  margin: 8px 0 0;
+  color: #6b7d70;
+  font-size: 12px;
+}
+
+.actual-status.is-error {
+  color: var(--amber);
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7d70;
+  font-size: 12px;
+  padding: 5px;
+}
+
+@media (max-width: 600px) {
+  .app {
+    padding: 12px;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+
+  .controls,
+  .comparison {
+    padding: 14px;
+  }
+}

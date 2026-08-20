@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#2f6f4f">
+  <title>Forecast Compare</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Forecast Compare</h1>
+      <p>Compare what different forecasters predicted, against what actually happened.</p>
+    </header>
+
+    <section class="controls">
+      <label>
+        Location
+        <div class="location-row">
+          <input id="postcode" value="TA6" maxlength="10" autocomplete="postal-code">
+          <button id="updateLocation">Update</button>
+        </div>
+      </label>
+
+      <label>
+        Condition
+        <select id="condition">
+          <option value="rain">Rain</option>
+          <option value="cloud">Cloud</option>
+          <option value="wind">Wind</option>
+          <option value="temperature">Temperature</option>
+          <option value="sunshine">Sunshine</option>
+          <option value="uv">UV</option>
+        </select>
+      </label>
+
+      <fieldset>
+        <legend>Forecasters</legend>
+        <div id="forecasters" class="checks"></div>
+      </fieldset>
+
+      <div class="rollback">
+        <div class="rollback-title">
+          <strong>Target date</strong>
+          <span id="rollbackLabel">Latest forecast — today</span>
+        </div>
+        <input id="rollback" type="range" min="0" max="6" step="1" value="0">
+        <div class="range-labels">
+          <span>Today</span>
+          <span>6 days back</span>
+        </div>
+        <p id="targetDateLabel" class="target-date">Target date: today</p>
+        <p>Roll back to pick a target date, then see how each forecaster's prediction changed as it approached — checked against what actually happened.</p>
+      </div>
+    </section>
+
+    <section class="comparison">
+      <div class="table-title">
+        <h2 id="conditionTitle">Rain</h2>
+        <span id="locationLabel">TA6</span>
+      </div>
+
+      <div class="table-wrap">
+        <table id="forecastTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <p class="note">
+        Rows count down the days out from the target date — "1" is the last forecast before it. The Actual row shows what really happened, sourced live from Open-Meteo.
+      </p>
+      <p id="actualStatus" class="actual-status"></p>
+    </section>
+
+    <footer>
+      <span>Forecast Compare</span>
+      <span>GitHub Pages compatible</span>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
