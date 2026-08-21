@@ -660,6 +660,14 @@ function metOfficeWindDirectionFor(day, rollbackDays) {
   return byDay?.windDirection?.[idx] ?? null;
 }
 
+// Whether this source has genuine real data behind it for this
+// condition — currently just Met Office for Rain/Cloud/Wind/Temperature.
+// Shared between forecastValueFor (per-cell fallback) and the headline
+// (which filters to real sources only, so demo noise can't dilute it).
+function isRealSource(source, conditionName) {
+  return source.id === "metoffice" && REAL_METOFFICE_CONDITIONS.has(conditionName);
+}
+
 // The single point where a cell's forecast value is decided: real Met
 // Office data for Rain/Cloud/Wind/Temperature when it's loaded, the demo
 // formula for everything else (including Met Office's own Sunshine/UV,
@@ -668,7 +676,7 @@ function metOfficeWindDirectionFor(day, rollbackDays) {
 // demo, so threeDayMean's day-7 edge case never mixes real and demo
 // values in the same average — see threeDayMean below.
 function forecastValueFor(day, source, conditionName, rollbackDays) {
-  if (source.id === "metoffice" && REAL_METOFFICE_CONDITIONS.has(conditionName)) {
+  if (isRealSource(source, conditionName)) {
     if (day > 7) return null;
     const real = metOfficeValueFor(conditionName, day, rollbackDays);
     if (real !== null) return real;
@@ -939,7 +947,15 @@ function freshestDayFor(rollbackDays) {
 function headlineValueFor(conditionName) {
   const day = freshestDayFor(state.rollback);
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
-  const values = selectedSources
+  const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
+  // Draw only from sources with genuine data behind them, so 11 demo
+  // forecasters can never outvote the one real signal. Falls back to the
+  // full selection only when no real source exists for this condition at
+  // all yet (currently Sunshine and UV) — otherwise the headline would
+  // just go blank rather than show a best-effort estimate.
+  const sourcesToUse = realSources.length > 0 ? realSources : selectedSources;
+
+  const values = sourcesToUse
     .map(source => {
       const ffv = ffvFor(source, conditionName, day);
       if (ffv !== null) {
