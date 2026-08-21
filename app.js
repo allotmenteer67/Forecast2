@@ -78,7 +78,8 @@ const GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
-const MAX_ROLLBACK = 6;
+const MAX_ROLLBACK = 7; // days into the past the slider (and Actual) can reach
+const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live forecast) can reach
 
 // Real Met Office data (Open-Meteo's Previous Runs API) only covers these
 // four conditions — Sunshine and UV aren't in that dataset, so Met Office
@@ -417,7 +418,7 @@ async function fetchMetOfficeReal(lat, lon) {
       longitude: lon,
       hourly: hourlyVars.join(","),
       past_days: MAX_ROLLBACK,
-      forecast_days: 1,
+      forecast_days: MAX_FUTURE + 1,
       models: METOFFICE_MODEL,
       wind_speed_unit: "mph",
       timezone: "auto"
@@ -584,10 +585,13 @@ async function loadLocationData() {
   }
 }
 
+// Actual can only ever be past or today — the array is never extended
+// into the future (there's nothing to fetch: it hasn't happened), so any
+// future rollbackDays correctly falls outside these bounds.
 function actualIndexForRollback(rollbackDays) {
-  // dates[] is oldest-first, length MAX_ROLLBACK+1, last entry is today.
+  if (rollbackDays < 0) return null;
   const idx = state.actual.dates.length - 1 - rollbackDays;
-  return idx >= 0 ? idx : null;
+  return idx >= 0 && idx < state.actual.dates.length ? idx : null;
 }
 
 function actualValueFor(conditionName, rollbackDays) {
@@ -617,11 +621,21 @@ function actualValueFor(conditionName, rollbackDays) {
   }
 }
 
+// Met Office's live window spans MAX_ROLLBACK days back through MAX_FUTURE
+// days ahead (see fetchMetOfficeReal) — a wider span than Actual's, since
+// it also carries today's live forecast for upcoming dates. Index MAX_ROLLBACK
+// is always "today", same convention as actualIndexForRollback but over a
+// longer array.
+function metOfficeIndexForRollback(rollbackDays) {
+  const idx = MAX_ROLLBACK - rollbackDays;
+  return idx >= 0 && idx < state.metOffice.dates.length ? idx : null;
+}
+
 // Real Met Office value for a condition/lead-day/target-date, or null if
 // not loaded, not covered by this dataset, or out of the fetched window.
 function metOfficeValueFor(conditionName, day, rollbackDays) {
   if (state.metOffice.status !== "ready" || day > 7) return null;
-  const idx = actualIndexForRollback(rollbackDays);
+  const idx = metOfficeIndexForRollback(rollbackDays);
   if (idx === null) return null;
   const byDay = state.metOffice.byLeadDay[day];
   if (!byDay) return null;
@@ -640,7 +654,7 @@ function metOfficeValueFor(conditionName, day, rollbackDays) {
 // shows this alongside the median speed but sourced/labelled separately.
 function metOfficeWindDirectionFor(day, rollbackDays) {
   if (state.metOffice.status !== "ready" || day > 7) return null;
-  const idx = actualIndexForRollback(rollbackDays);
+  const idx = metOfficeIndexForRollback(rollbackDays);
   if (idx === null) return null;
   const byDay = state.metOffice.byLeadDay[day];
   return byDay?.windDirection?.[idx] ?? null;
@@ -909,18 +923,30 @@ function median(values) {
 // 45°C in November) gets outvoted rather than dragging an average off
 // course, with no arbitrary rejection threshold needed.
 const HEADLINE_CONDITIONS = ["rain", "temperature", "wind", "sunshine"];
-const HEADLINE_DAY = 1; // the most refined forecast for the target date
+
+// The freshest available real forecast for the current target date. For
+// past/today (rollback >= 0) that's always day 1 — the closest forecast
+// issued before the target. For a future target, day 1 doesn't exist yet
+// (it'd need to be issued after today) — the freshest REAL data is
+// whichever lead-time equals how far ahead the target is, since that's
+// the one issued today. Using day 1 unconditionally would silently fall
+// back to demo data for anything more than a day ahead.
+function freshestDayFor(rollbackDays) {
+  if (rollbackDays >= 0) return 1;
+  return Math.min(7, Math.max(1, -rollbackDays));
+}
 
 function headlineValueFor(conditionName) {
+  const day = freshestDayFor(state.rollback);
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
   const values = selectedSources
     .map(source => {
-      const ffv = ffvFor(source, conditionName, HEADLINE_DAY);
+      const ffv = ffvFor(source, conditionName, day);
       if (ffv !== null) {
-        const mean = threeDayMean(HEADLINE_DAY, source, conditionName, state.rollback);
+        const mean = threeDayMean(day, source, conditionName, state.rollback);
         if (mean !== null) return mean * ffv;
       }
-      return forecastValueFor(HEADLINE_DAY, source, conditionName, state.rollback);
+      return forecastValueFor(day, source, conditionName, state.rollback);
     })
     .filter(v => v !== null && v !== undefined);
   return median(values);
@@ -929,6 +955,7 @@ function headlineValueFor(conditionName) {
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
+  const day = freshestDayFor(state.rollback);
 
   HEADLINE_CONDITIONS.forEach(conditionName => {
     const value = headlineValueFor(conditionName);
@@ -946,12 +973,12 @@ function renderHeadline() {
     cell.append(label, valueEl);
 
     if (conditionName === "wind") {
-      const direction = metOfficeWindDirectionFor(HEADLINE_DAY, state.rollback);
+      const direction = metOfficeWindDirectionFor(day, state.rollback);
       const compass = compassLabel(direction);
       if (compass) {
         const dirEl = document.createElement("small");
         dirEl.className = "headline-direction";
-        dirEl.textContent = `${compass} (Met Office)`;
+        dirEl.textContent = compass;
         cell.appendChild(dirEl);
       }
     }
@@ -1059,13 +1086,14 @@ function renderTable() {
   const tbody = document.createElement("tbody");
   const targetDate = targetDateForRollback(state.rollback);
   const rollbackDays = state.rollback;
+  const freshestDay = freshestDayFor(rollbackDays);
   const actualToday = actualValueFor(state.condition, 0);
   const actual = actualValueFor(state.condition, rollbackDays);
   const actualKnown = state.actual.status === "ready" && rollbackDays > 0 && actual !== null;
 
   [7, 6, 5, 4, 3, 2, 1].forEach(day => {
     const row = document.createElement("tr");
-    if (day === 1) row.classList.add("row-final");
+    if (day === freshestDay) row.classList.add("row-final");
 
     const issueDate = addDays(targetDate, -day);
 
@@ -1108,7 +1136,7 @@ function renderTable() {
         cell.appendChild(adjusted);
       }
 
-      if (day === 1 && actualKnown) {
+      if (day === freshestDay && actualKnown) {
         const delta = value - actual;
         const badge = document.createElement("span");
         badge.className =
@@ -1140,6 +1168,8 @@ function renderTable() {
     actualCell.textContent = "Loading…";
   } else if (state.actual.status === "error") {
     actualCell.textContent = "Unavailable";
+  } else if (rollbackDays < 0) {
+    actualCell.textContent = `Hasn't happened yet — ${formatDateLong(targetDate)} is ${-rollbackDays} day${rollbackDays === -1 ? "" : "s"} away`;
   } else if (rollbackDays === 0) {
     actualCell.textContent = actualToday !== null
       ? `${formatValue(actualToday, state.condition)} so far today (still recording)`
@@ -1304,10 +1334,7 @@ async function backfillMetOfficeHistory() {
 
 function updateRollbackLabel() {
   const targetDate = targetDateForRollback(state.rollback);
-  rollbackLabel.textContent =
-    state.rollback === 0
-      ? "Latest forecast — today"
-      : `${state.rollback} day${state.rollback === 1 ? "" : "s"} back`;
+  rollbackLabel.textContent = state.rollback === 0 ? "Today" : formatDateShort(targetDate);
   targetDateLabel.textContent = `Target date: ${formatDateLong(targetDate)}`;
 }
 
@@ -1316,8 +1343,12 @@ condition.addEventListener("change", () => {
   renderTable();
 });
 
+// The slider's raw input runs min-to-max left-to-right as normal, but we
+// want LEFT = past and RIGHT = future — so the raw value is negated to
+// get rollbackDays (positive = past, negative = future), keeping that
+// existing convention unchanged everywhere else in the app.
 rollback.addEventListener("input", () => {
-  state.rollback = Number(rollback.value);
+  state.rollback = -Number(rollback.value);
   updateRollbackLabel();
   renderTable();
 });

@@ -49,7 +49,7 @@ header p {
 }
 
 .headline {
-  background: var(--accent);
+  background: #dcebe1;
   border-radius: 14px;
   padding: 16px 18px;
   margin-bottom: 16px;
@@ -68,7 +68,7 @@ header p {
 }
 
 .headline-label {
-  color: #d9ecdf;
+  color: #4c6a58;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
@@ -76,14 +76,14 @@ header p {
 }
 
 .headline-value {
-  color: white;
+  color: var(--accent-dark);
   font-size: 26px;
   font-weight: 700;
   line-height: 1.2;
 }
 
 .headline-direction {
-  color: #d9ecdf;
+  color: #4c6a58;
   font-size: 11px;
 }
 
@@ -272,17 +272,17 @@ td.col-raw {
 }
 
 th.th-source {
-  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);
+  box-shadow: inset 1px 0 0 #8fb59d, inset -1px 0 0 #8fb59d;
 }
 
 th.sub-corrected,
 td.col-corrected {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 1px 0 0 #8fb59d;
 }
 
 th.sub-raw,
 td.col-raw {
-  box-shadow: inset -2px 0 0 var(--accent);
+  box-shadow: inset -1px 0 0 #8fb59d;
 }
 
 /* Alternating tint per forecaster (every other pair of columns), so each
