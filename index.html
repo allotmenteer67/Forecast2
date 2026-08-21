@@ -11,18 +11,13 @@
   <main class="app">
     <header>
       <h1>Forecast Compare</h1>
-      <p>Compare what different forecasters predicted, against what actually happened.</p>
     </header>
 
-    <section class="controls">
-      <label>
-        Location
-        <div class="location-row">
-          <input id="postcode" value="TA6" maxlength="10" autocomplete="postal-code">
-          <button id="updateLocation">Update</button>
-        </div>
-      </label>
+    <section class="headline">
+      <div id="headlineGrid" class="headline-grid"></div>
+    </section>
 
+    <section class="controls">
       <label>
         Condition
         <select id="condition">
@@ -46,13 +41,7 @@
           <span>6 days back</span>
         </div>
         <p id="targetDateLabel" class="target-date">Target date: today</p>
-        <p>Roll back to pick a target date, then see how each forecaster's prediction changed as it approached — checked against what actually happened.</p>
       </div>
-
-      <fieldset>
-        <legend>Forecasters</legend>
-        <div id="forecasters" class="checks"></div>
-      </fieldset>
     </section>
 
     <section class="comparison">
@@ -68,15 +57,23 @@
         </table>
       </div>
 
-      <p class="note">
-        Rows count down the days out from the target date — "1" is the last forecast before it. The Actual row shows what really happened, sourced live from Open-Meteo.
-      </p>
-      <p id="actualStatus" class="actual-status"></p>
-      <p id="metOfficeStatus" class="actual-status"></p>
+      <p id="actualStatus" class="actual-status status-error-only"></p>
+      <p id="metOfficeStatus" class="actual-status status-error-only"></p>
+    </section>
 
+    <section class="controls">
+      <label>
+        Location
+        <div class="location-row">
+          <input id="postcode" value="TA6" maxlength="10" autocomplete="postal-code">
+          <button id="updateLocation">Update</button>
+        </div>
+      </label>
+    </section>
+
+    <section class="comparison">
       <details class="accuracy" open>
         <summary>Accuracy so far</summary>
-        <p>How far Raw and Corrected typically land from Actual, for the selected condition — averaged across all "days out". More samples make this more trustworthy.</p>
         <p id="historyStatus" class="actual-status"></p>
         <label class="accuracy-mode">
           Show
@@ -103,7 +100,6 @@
 
       <details class="backfill">
         <summary>Real Met Office history (advanced)</summary>
-        <p>Now that a daily Action collects data automatically (see below), this is mainly for filling in the gap before it's built up much — or reaching further back than the rolling window it keeps. Pull a year of real UK Met Office model data straight into this area's fudge-factor history. One-off, and it's a fairly big request.</p>
         <button id="backfillButton" type="button">Backfill 1 year of real Met Office data</button>
         <p id="backfillStatus" class="actual-status"></p>
       </details>
@@ -111,7 +107,7 @@
 
     <footer>
       <span>Forecast Compare</span>
-      <span><a href="settings.html">Forecasters</a> · GitHub Pages compatible</span>
+      <span><a href="help.html">Help</a> · <a href="settings.html">Forecasters</a></span>
     </footer>
   </main>
 

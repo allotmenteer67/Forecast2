@@ -23,6 +23,53 @@ const CONFIG = {
   }
 };
 
+// Everything is stored and computed internally in these native units —
+// rain in mm, wind in mph, temperature in °C — regardless of the display
+// toggle below. Only formatValue() and unit labels convert for display;
+// FFV, accuracy, and all other math always operate on native values, so
+// the toggle can never skew the numbers themselves, only how they're shown.
+const UNIT_SYSTEM_KEY = "forecast-compare:unitSystem";
+const CONDITION_UNIT_LABELS = {
+  rain: { metric: "mm", imperial: "in" },
+  cloud: { metric: "%", imperial: "%" },
+  wind: { metric: "km/h", imperial: "mph" },
+  temperature: { metric: "°C", imperial: "°F" },
+  sunshine: { metric: "hrs", imperial: "hrs" },
+  uv: { metric: "index", imperial: "index" }
+};
+
+function loadUnitSystem() {
+  try {
+    const raw = localStorage.getItem(UNIT_SYSTEM_KEY);
+    if (raw === "metric" || raw === "imperial") return raw;
+  } catch {
+    // fall through to default
+  }
+  return "metric";
+}
+
+function unitLabel(conditionName) {
+  return CONDITION_UNIT_LABELS[conditionName]?.[state.unitSystem] ?? CONFIG.conditions[conditionName].unit;
+}
+
+// Converts a native-unit value (mm / mph / °C) to whichever system the
+// toggle is set to. Cloud, Sunshine, and UV are unitless/universal and
+// pass through unchanged either way. isDelta matters only for
+// temperature: a DIFFERENCE (badge deltas, accuracy error magnitudes)
+// scales by 9/5 with no +32 offset — converting a 2°C gap should give a
+// 3.6°F gap, not 2×9/5+32.
+function convertForDisplay(value, conditionName, isDelta = false) {
+  if (value === null || value === undefined) return value;
+  if (state.unitSystem === "imperial") {
+    if (conditionName === "rain") return value / 25.4; // mm -> in
+    if (conditionName === "temperature") return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
+    return value; // wind is already mph natively
+  }
+  // metric
+  if (conditionName === "wind") return value * 1.60934; // mph -> km/h
+  return value; // rain (mm) and temperature (°C) are already metric natively
+}
+
 // ---- Actual weather (Open-Meteo, no API key) ----
 // Geocoding: api.postcodes.io (UK postcodes -> lat/lon)
 // Weather: api.open-meteo.com/v1/forecast with past_days to pull recent
@@ -71,7 +118,7 @@ function loadSelectedForecasters() {
 function emptyMetOfficeByLeadDay() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], cloud: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windDirection: [], cloud: [] };
   }
   return byLeadDay;
 }
@@ -81,6 +128,7 @@ const state = {
   rollback: 0,
   postcode: "TA6",
   selected: loadSelectedForecasters(),
+  unitSystem: loadUnitSystem(),
   areaCode: "",
   lat: null,
   lon: null,
@@ -131,6 +179,7 @@ const backfillStatus = document.getElementById("backfillStatus");
 const accuracyMode = document.getElementById("accuracyMode");
 const accuracyBody = document.getElementById("accuracyBody");
 const historyStatus = document.getElementById("historyStatus");
+const headlineGrid = document.getElementById("headlineGrid");
 
 function demoValue(day, source, conditionName) {
   const sourceOffset = source.offset ?? 0;
@@ -166,10 +215,14 @@ function demoValue(day, source, conditionName) {
   return value;
 }
 
-function formatValue(value, conditionName) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "–";
+function formatValue(rawValue, conditionName, isDelta = false) {
+  if (rawValue === null || rawValue === undefined || Number.isNaN(rawValue)) return "–";
+  const value = convertForDisplay(rawValue, conditionName, isDelta);
   if (conditionName === "cloud") {
     return Math.round(value).toString();
+  }
+  if (conditionName === "rain" && state.unitSystem === "imperial") {
+    return value.toFixed(2); // inches are small numbers; 1dp loses too much
   }
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
@@ -260,6 +313,32 @@ function averageCloudByDay(hourlyTimes, hourlyCloud, dayCount) {
   return aggregateHourlyByDay(hourlyTimes, hourlyCloud, dayCount, "mean");
 }
 
+// Direction can't be averaged (0° and 360° are the same direction but
+// average to a meaningless 180°), so this reports the direction AT the
+// hour the day's peak wind speed occurred, paired with it rather than
+// blended across the day.
+function directionAtPeakHour(hourlyTimes, speedValues, directionValues, dayCount) {
+  const buckets = Array.from({ length: dayCount }, () => []);
+  hourlyTimes.forEach((t, i) => {
+    const dayIndex = Math.floor(i / 24);
+    if (dayIndex < dayCount && speedValues[i] !== null && speedValues[i] !== undefined) {
+      buckets[dayIndex].push({ speed: speedValues[i], direction: directionValues[i] });
+    }
+  });
+  return buckets.map(entries => {
+    if (!entries.length) return null;
+    const peak = entries.reduce((a, b) => (b.speed > a.speed ? b : a));
+    return peak.direction ?? null;
+  });
+}
+
+const COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+function compassLabel(degrees) {
+  if (degrees === null || degrees === undefined) return null;
+  const index = Math.round(degrees / 22.5) % 16;
+  return COMPASS_POINTS[index];
+}
+
 async function fetchActualWeather(lat, lon) {
   state.actual.status = "loading";
   state.actual.error = null;
@@ -280,6 +359,7 @@ async function fetchActualWeather(lat, lon) {
       hourly: "cloudcover",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
+      wind_speed_unit: "mph",
       timezone: "auto"
     });
 
@@ -327,6 +407,7 @@ async function fetchMetOfficeReal(lat, lon) {
         `temperature_2m_previous_day${d}`,
         `precipitation_previous_day${d}`,
         `wind_speed_10m_previous_day${d}`,
+        `wind_direction_10m_previous_day${d}`,
         `cloud_cover_previous_day${d}`
       );
     }
@@ -338,6 +419,7 @@ async function fetchMetOfficeReal(lat, lon) {
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       models: METOFFICE_MODEL,
+      wind_speed_unit: "mph",
       timezone: "auto"
     });
 
@@ -352,12 +434,14 @@ async function fetchMetOfficeReal(lat, lon) {
     for (let d = 1; d <= 7; d++) {
       const tempMax = aggregateHourlyByDay(hourlyTimes, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "max");
       const tempMin = aggregateHourlyByDay(hourlyTimes, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "min");
+      const windSpeedHourly = data.hourly[`wind_speed_10m_previous_day${d}`];
       byLeadDay[d] = {
         tempMax,
         tempMin,
         tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
         precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
-        wind: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
+        wind: aggregateHourlyByDay(hourlyTimes, windSpeedHourly, dayCount, "max"),
+        windDirection: directionAtPeakHour(hourlyTimes, windSpeedHourly, data.hourly[`wind_direction_10m_previous_day${d}`], dayCount),
         cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean")
       };
     }
@@ -461,6 +545,16 @@ async function loadCommittedHistory() {
 
 // Geocodes once, then kicks off Actual and the live Met Office fetch from
 // the same coordinates rather than each resolving location separately.
+function metOfficeHasAnyHistory() {
+  if (!state.areaCode) return false;
+  const store = loadFFVStore(state.areaCode);
+  return Object.keys(CONFIG.conditions).some(conditionName => {
+    const bySource = store[conditionName]?.metoffice;
+    if (!bySource) return false;
+    return Object.values(bySource).some(entry => entry.count > 0);
+  });
+}
+
 async function loadLocationData() {
   try {
     const { lat, lon, label, areaCode } = await geocodePostcode(state.postcode);
@@ -470,6 +564,16 @@ async function loadLocationData() {
     state.actual.coordLabel = label;
     await Promise.all([fetchActualWeather(lat, lon), fetchMetOfficeReal(lat, lon), loadCommittedHistory()]);
     updateFFVHistory();
+
+    // First time this postcode area has ever been seen (no Met Office
+    // samples at all yet, even after the committed-history replay above):
+    // pull a year of real history automatically rather than leaving it to
+    // be found via the advanced backfill button. Only ever fires once per
+    // area — after it runs, count > 0 and this is skipped on future loads.
+    if (!metOfficeHasAnyHistory()) {
+      await backfillMetOfficeHistory();
+    }
+
     renderActualStatus();
     renderMetOfficeStatus();
     renderTable();
@@ -531,6 +635,17 @@ function metOfficeValueFor(conditionName, day, rollbackDays) {
   }
 }
 
+// Wind direction, Met Office only — no other source has real direction
+// data, so unlike speed there's no demo fallback here; the headline
+// shows this alongside the median speed but sourced/labelled separately.
+function metOfficeWindDirectionFor(day, rollbackDays) {
+  if (state.metOffice.status !== "ready" || day > 7) return null;
+  const idx = actualIndexForRollback(rollbackDays);
+  if (idx === null) return null;
+  const byDay = state.metOffice.byLeadDay[day];
+  return byDay?.windDirection?.[idx] ?? null;
+}
+
 // The single point where a cell's forecast value is decided: real Met
 // Office data for Rain/Cloud/Wind/Temperature when it's loaded, the demo
 // formula for everything else (including Met Office's own Sunshine/UV,
@@ -550,12 +665,15 @@ function forecastValueFor(day, source, conditionName, rollbackDays) {
 function renderMetOfficeStatus() {
   if (!metOfficeStatus) return;
   metOfficeStatus.classList.remove("is-error");
+  const errorOnly = metOfficeStatus.classList.contains("status-error-only");
 
-  if (state.metOffice.status === "loading") {
-    metOfficeStatus.textContent = "Loading real Met Office data…";
-  } else if (state.metOffice.status === "error") {
+  if (state.metOffice.status === "error") {
     metOfficeStatus.textContent = `Met Office real data unavailable: ${state.metOffice.error} (falling back to demo)`;
     metOfficeStatus.classList.add("is-error");
+  } else if (errorOnly) {
+    metOfficeStatus.textContent = "";
+  } else if (state.metOffice.status === "loading") {
+    metOfficeStatus.textContent = "Loading real Met Office data…";
   } else if (state.metOffice.status === "ready") {
     metOfficeStatus.textContent =
       "Met Office: real UK Met Office model data for Rain, Cloud, Wind and Temperature. Sunshine and UV remain demo (not available from this data source).";
@@ -566,12 +684,15 @@ function renderMetOfficeStatus() {
 
 function renderActualStatus() {
   actualStatus.classList.remove("is-error");
+  const errorOnly = actualStatus.classList.contains("status-error-only");
 
-  if (state.actual.status === "loading") {
-    actualStatus.textContent = "Loading actual weather…";
-  } else if (state.actual.status === "error") {
+  if (state.actual.status === "error") {
     actualStatus.textContent = `Actual weather unavailable: ${state.actual.error}`;
     actualStatus.classList.add("is-error");
+  } else if (errorOnly) {
+    actualStatus.textContent = "";
+  } else if (state.actual.status === "loading") {
+    actualStatus.textContent = "Loading actual weather…";
   } else if (state.actual.status === "ready") {
     const samples = ffvSampleTotal(state.condition);
     const ffvNote = samples > 0
@@ -766,13 +887,77 @@ function accuracyStatsFor(source, conditionName) {
 
 function formatError(avgError, conditionName, mode) {
   if (avgError === null) return "–";
-  const unit = CONFIG.conditions[conditionName].unit;
-  const unitsText = `±${formatValue(avgError, conditionName)}${unit}`;
+  const unitsText = `±${formatValue(avgError, conditionName, true)}${unitLabel(conditionName)}`;
   const percentText = `${Math.round(accuracyPercent(avgError, conditionName))}%`;
 
   if (mode === "units") return unitsText;
   if (mode === "percent") return percentText;
   return `${unitsText} (${percentText})`;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// The headline figure: for each of the four displayed conditions, the
+// median across every CHOSEN forecaster's day-1 value (Corrected where
+// enough samples exist, Raw otherwise) at the current target date. Median
+// rather than mean deliberately — a single wildly-off value (e.g. a stray
+// 45°C in November) gets outvoted rather than dragging an average off
+// course, with no arbitrary rejection threshold needed.
+const HEADLINE_CONDITIONS = ["rain", "temperature", "wind", "sunshine"];
+const HEADLINE_DAY = 1; // the most refined forecast for the target date
+
+function headlineValueFor(conditionName) {
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  const values = selectedSources
+    .map(source => {
+      const ffv = ffvFor(source, conditionName, HEADLINE_DAY);
+      if (ffv !== null) {
+        const mean = threeDayMean(HEADLINE_DAY, source, conditionName, state.rollback);
+        if (mean !== null) return mean * ffv;
+      }
+      return forecastValueFor(HEADLINE_DAY, source, conditionName, state.rollback);
+    })
+    .filter(v => v !== null && v !== undefined);
+  return median(values);
+}
+
+function renderHeadline() {
+  if (!headlineGrid) return;
+  headlineGrid.innerHTML = "";
+
+  HEADLINE_CONDITIONS.forEach(conditionName => {
+    const value = headlineValueFor(conditionName);
+    const cell = document.createElement("div");
+    cell.className = "headline-cell";
+
+    const label = document.createElement("span");
+    label.className = "headline-label";
+    label.textContent = CONFIG.conditions[conditionName].name;
+
+    const valueEl = document.createElement("span");
+    valueEl.className = "headline-value";
+    valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+
+    cell.append(label, valueEl);
+
+    if (conditionName === "wind") {
+      const direction = metOfficeWindDirectionFor(HEADLINE_DAY, state.rollback);
+      const compass = compassLabel(direction);
+      if (compass) {
+        const dirEl = document.createElement("small");
+        dirEl.className = "headline-direction";
+        dirEl.textContent = `${compass} (Met Office)`;
+        cell.appendChild(dirEl);
+      }
+    }
+
+    headlineGrid.appendChild(cell);
+  });
 }
 
 function renderAccuracy() {
@@ -840,7 +1025,9 @@ function renderTable() {
 
   const subRow = document.createElement("tr");
 
-  selectedSources.forEach(source => {
+  selectedSources.forEach((source, index) => {
+    const tintClass = index % 2 === 1 ? " forecaster-tint" : "";
+
     const th = document.createElement("th");
     th.colSpan = 2;
     th.className = "th-source";
@@ -848,20 +1035,20 @@ function renderTable() {
     sourceRow.appendChild(th);
 
     const correctedTh = document.createElement("th");
-    correctedTh.className = "sub-corrected";
+    correctedTh.className = "sub-corrected" + tintClass;
     const correctedLabel = document.createElement("span");
     correctedLabel.textContent = "Corrected";
     const correctedUnit = document.createElement("small");
-    correctedUnit.textContent = conditionData.unit;
+    correctedUnit.textContent = unitLabel(state.condition);
     correctedTh.append(correctedLabel, correctedUnit);
     subRow.appendChild(correctedTh);
 
     const rawTh = document.createElement("th");
-    rawTh.className = "sub-raw";
+    rawTh.className = "sub-raw" + tintClass;
     const rawLabel = document.createElement("span");
     rawLabel.textContent = "Raw";
     const rawUnit = document.createElement("small");
-    rawUnit.textContent = conditionData.unit;
+    rawUnit.textContent = unitLabel(state.condition);
     rawTh.append(rawLabel, rawUnit);
     subRow.appendChild(rawTh);
   });
@@ -894,12 +1081,13 @@ function renderTable() {
     dayCell.append(dayNum, dayDate);
     row.appendChild(dayCell);
 
-    selectedSources.forEach(source => {
+    selectedSources.forEach((source, index) => {
+      const tintClass = index % 2 === 1 ? " forecaster-tint" : "";
       const value = forecastValueFor(day, source, state.condition, rollbackDays);
       const ffv = ffvFor(source, state.condition, day);
 
       const correctedCell = document.createElement("td");
-      correctedCell.className = "col-corrected";
+      correctedCell.className = "col-corrected" + tintClass;
       if (ffv !== null) {
         const mean = threeDayMean(day, source, state.condition, rollbackDays);
         correctedCell.textContent = mean !== null ? formatValue(mean * ffv, state.condition) : "–";
@@ -909,7 +1097,7 @@ function renderTable() {
       row.appendChild(correctedCell);
 
       const cell = document.createElement("td");
-      cell.className = "col-raw";
+      cell.className = "col-raw" + tintClass;
       cell.textContent = formatValue(value, state.condition);
 
       if (SHOW_INLINE_FFV_HINT && ffv !== null) {
@@ -925,7 +1113,7 @@ function renderTable() {
         const badge = document.createElement("span");
         badge.className =
           "delta " + (Math.abs(delta) <= Math.abs(actual) * 0.15 + 0.3 ? "delta-close" : "delta-off");
-        badge.textContent = (delta >= 0 ? "+" : "") + formatValue(delta, state.condition);
+        badge.textContent = (delta >= 0 ? "+" : "") + formatValue(delta, state.condition, true);
         cell.appendChild(badge);
       }
 
@@ -957,7 +1145,7 @@ function renderTable() {
       ? `${formatValue(actualToday, state.condition)} so far today (still recording)`
       : "Still recording today";
   } else if (actual !== null) {
-    actualCell.textContent = `${formatValue(actual, state.condition)} ${conditionData.unit} on ${formatDateLong(targetDate)}`;
+    actualCell.textContent = `${formatValue(actual, state.condition)} ${unitLabel(state.condition)} on ${formatDateLong(targetDate)}`;
   } else {
     actualCell.textContent = "–";
   }
@@ -967,6 +1155,7 @@ function renderTable() {
 
   table.appendChild(tbody);
   renderAccuracy();
+  renderHeadline();
 }
 
 // ---- One-off Met Office history backfill ----
@@ -1022,6 +1211,7 @@ async function backfillMetOfficeHistory() {
       hourly: "cloudcover",
       start_date: isoDate(start),
       end_date: isoDate(end),
+      wind_speed_unit: "mph",
       timezone: "auto"
     });
     const actualRes = await fetch(`${ARCHIVE_URL}?${actualParams.toString()}`);
@@ -1056,6 +1246,7 @@ async function backfillMetOfficeHistory() {
       start_date: isoDate(start),
       end_date: isoDate(end),
       models: METOFFICE_MODEL,
+      wind_speed_unit: "mph",
       timezone: "auto"
     });
     const moRes = await fetch(`${PREVIOUS_RUNS_URL}?${moParams.toString()}`);

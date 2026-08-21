@@ -64,6 +64,32 @@ Actual and the Previous Runs API for Met Office's lead-time forecasts —
 so the Met Office FFV doesn't have to build up one day at a time. It's a
 large one-off request, not something that runs automatically.
 
+## The headline figure
+
+A box at the top of the page shows one number per condition (Rain,
+Temperature, Wind, Sunshine) — the **median** across every selected
+forecaster's most-refined forecast for the target date, using each
+source's Corrected value where it has enough FFV history, Raw otherwise.
+Median deliberately, not mean: one wildly-off value (a stray 45°C in
+November) gets outvoted rather than skewing the figure, with no
+threshold to tune. It's built from whatever's currently selected on the
+Forecasters page — mostly demo data today, genuinely more trustworthy as
+real sources and FFV history grow over time.
+
+Wind direction (shown alongside the headline's wind figure) comes from
+Met Office specifically — the only source with real direction data,
+reported at the hour the day's peak wind speed occurred (direction can't
+be meaningfully averaged the way speed can: 0° and 360° are the same
+direction but average to a nonsensical 180°).
+
+## Auto-backfill on first setup
+
+The first time a postcode area has no Met Office FFV history at all, the
+app automatically runs the same year-long backfill the advanced button
+triggers manually — no need to find and press it. It only ever fires
+once per area; after that, the daily Action and the committed history
+file keep it current.
+
 ## Fudge factor (FFV)
 
 For each forecaster, condition, and day-out row, the app keeps a running
@@ -138,12 +164,31 @@ Adding more real Open-Meteo models later (ECMWF, GFS, DWD ICON, etc.) is
 a matter of adding entries to the `MODELS` array in
 `scripts/collect-weather.js`, plus a matching forecaster id in `app.js`.
 
+## Units
+
+Metric or Imperial is set on the Forecasters (`settings.html`) page and
+persists in `localStorage`. Rain converts mm ↔ inches, Wind converts
+km/h ↔ mph, Temperature converts °C ↔ °F. Cloud, Sunshine, and UV are
+unitless/universal and don't change. Internally everything is always
+stored and computed in native units (mm, mph, °C) regardless of the
+toggle — FFV, accuracy scoring, and all other math are unaffected by
+display choice; only `formatValue()` and the unit labels convert.
+
+(Fixed alongside this: every live fetch now explicitly requests
+`wind_speed_unit: "mph"` from Open-Meteo. It previously didn't, so wind
+values were actually being returned in km/h while labelled "mph" —
+about 1.6× too low as displayed. That's corrected in the live fetches,
+the backfill, and the daily collector script.)
+
 ## Pages
 
-- `index.html` — the day-to-day comparison view
-- `settings.html` — choose which forecasters appear (moved off the main
-  page since it's not something you'd change often); both pages read and
-  write the same `localStorage` key so the choice carries over
+- `index.html` — the day-to-day comparison view; kept to controls and
+  live status only, no explanatory text
+- `help.html` — everything that used to be inline instructional text on
+  the main page now lives here instead
+- `settings.html` — choose which forecasters appear and pick Metric or
+  Imperial units (moved off the main page since neither is a daily
+  decision); all three pages read/write shared `localStorage` keys
 
 ## GitHub Pages
 

@@ -48,6 +48,45 @@ header p {
   border: 1px solid #e7ede6;
 }
 
+.headline {
+  background: var(--accent);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(31, 42, 36, .12);
+}
+
+.headline-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+}
+
+.headline-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.headline-label {
+  color: #d9ecdf;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.headline-value {
+  color: white;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.headline-direction {
+  color: #d9ecdf;
+  font-size: 11px;
+}
+
 .controls {
   display: grid;
   gap: 18px;
@@ -226,6 +265,38 @@ th.sub-raw {
   background: #f2f7f0;
 }
 
+th.th-source,
+td.col-corrected,
+td.col-raw {
+  box-shadow: none;
+}
+
+th.th-source {
+  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);
+}
+
+th.sub-corrected,
+td.col-corrected {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+th.sub-raw,
+td.col-raw {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+/* Alternating tint per forecaster (every other pair of columns), so each
+   group reads clearly even before the border registers. */
+.forecaster-tint td.col-corrected,
+.forecaster-tint th.sub-corrected {
+  background: #eef5ec;
+}
+
+.forecaster-tint td.col-raw,
+.forecaster-tint th.sub-raw {
+  background: #e8f1e5;
+}
+
 td.col-corrected {
   font-weight: 700;
   color: var(--accent-dark);
@@ -251,6 +322,23 @@ footer a:hover,
 .back-link {
   margin: 0 0 10px;
   font-size: 13px;
+}
+
+.help-section h2 {
+  font-size: 15px;
+  color: var(--accent-dark);
+  margin: 18px 0 6px;
+}
+
+.help-section h2:first-child {
+  margin-top: 0;
+}
+
+.help-section p {
+  margin: 0 0 4px;
+  color: #445048;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 tbody tr:nth-child(even) {
@@ -329,6 +417,40 @@ tbody tr:last-child td {
   margin-top: 10px;
   font-size: 13px;
   color: #6b7d70;
+}
+
+.accuracy {
+  margin-top: 14px;
+  font-size: 13px;
+  color: #6b7d70;
+}
+
+.accuracy summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.accuracy p {
+  margin: 8px 0;
+}
+
+.accuracy-mode {
+  display: block;
+  margin: 8px 0 10px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.accuracy-mode select {
+  width: auto;
+  min-height: 36px;
+  margin-left: 6px;
+  display: inline-block;
+}
+
+#accuracyTable {
+  min-width: 420px;
 }
 
 .backfill summary {

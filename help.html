@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#2f6f4f">
+  <title>Help — Forecast Compare</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <p class="back-link"><a href="index.html">&larr; Back to Forecast Compare</a></p>
+      <h1>Help</h1>
+      <p>What everything on the main page means and does.</p>
+    </header>
+
+    <section class="controls help-section">
+      <h2>The headline figure</h2>
+      <p>The box at the top shows one number per condition — the <strong>median</strong> across every forecaster you've selected (Corrected where available, Raw otherwise), for the most refined forecast available for the target date. Median rather than an average deliberately: one wildly wrong value among several sensible ones gets outvoted rather than dragging the figure off course, with no threshold to tune. It'll get more trustworthy over time as more sources gain real data and FFV history behind them — early on, expect it to be rougher, since most forecasters feeding it are still placeholder data.</p>
+
+      <h2>Wind speed &amp; direction</h2>
+      <p>The wind figure shown is the <strong>windiest hour of the day</strong>, not a true gust and not a daily average — it sits between the two. Direction (shown next to the headline's wind figure) comes from Met Office specifically, since it's the only source with real direction data; it can't be meaningfully blended across the other, still-synthetic sources the way speed can.</p>
+      <p><strong>Coastal caveat:</strong> on light-wind days near the coast, local sea breezes can develop that a 10km-resolution forecast model may miss, mistime, or understate — worth bearing in mind if you're relying on this for a day on the water.</p>
+
+      <h2>Target date &amp; rollback</h2>
+      <p>The slider picks a <strong>target date</strong> — today, or up to 6 days back. Roll it back to see how each forecaster's prediction for that date changed as it approached, checked against what actually happened.</p>
+
+      <h2>Days out</h2>
+      <p>Rows count down the days out from the target date — "1" is the last forecast issued before it. The date shown next to each row number is when that forecast was made.</p>
+
+      <h2>Corrected vs Raw</h2>
+      <p>Each forecaster shows two columns. <strong>Raw</strong> is the forecast value itself. <strong>Corrected</strong> applies a learned adjustment (the "fudge factor," see below) to bring it closer to what usually turns out to be true. The <strong>Actual</strong> row at the bottom is what really happened, sourced live from Open-Meteo.</p>
+
+      <h2>The fudge factor (FFV)</h2>
+      <p>For each forecaster, condition, and day-out row, the app keeps a running 3-day mean of the forecast value, compared over time against Actual. The ratio between them — actual ÷ mean — is averaged into a Fudge Factor Value. Once a cell has at least 3 samples, Corrected shows <code>mean × FFV</code>. It's tracked separately per postcode area, so different locations build their own correction history, and it never stops learning — every new sample nudges the running average, for as long as the app collects data.</p>
+
+      <h2>Accuracy so far</h2>
+      <p>Shows how far Raw and Corrected typically land from Actual, for whichever condition is selected — averaged across all "days out", weighted by sample count. Two numbers: the average error in real units (e.g. "±1.2mm"), and an approximate 0–100% closeness score (a simple heuristic, not a formal statistic). Corrected accuracy is scored honestly — each sample is checked against whatever FFV existed <em>before</em> that sample was folded in, not the final learned value applied backward, so it reflects how the correction would actually have performed in practice.</p>
+
+      <h2>Real Met Office data</h2>
+      <p>Met Office's Rain, Cloud, Wind, and Temperature figures are real UK Met Office model data (via Open-Meteo's Previous Runs API), not the demo formula the other forecasters currently use. Sunshine and UV aren't in that dataset, so Met Office falls back to the demo formula for those two only.</p>
+
+      <h2>Automatic daily collection</h2>
+      <p>A GitHub Action runs once a day, fetches a rolling window of real Actual and Met Office data, and commits it to the repo — no location information is stored in that file, just dates and numbers. The app replays the whole file fresh on every load to rebuild Met Office's accuracy figures, so opening the app more or less often doesn't change the result, and a single missed day self-heals on the next run.</p>
+
+      <h2>Backfill (advanced)</h2>
+      <p>A one-off action that pulls a full year of real Met Office history straight into the current postcode area's fudge-factor data, rather than waiting for the daily collection to build it up. Useful for filling the gap early on, or reaching further back than the rolling window normally keeps. It's a fairly large request, so it's not something to run often.</p>
+
+      <h2>Units</h2>
+      <p>Metric or Imperial can be set on the <a href="settings.html">Forecasters</a> page. Rain converts between mm and inches, Wind between km/h and mph, and Temperature between °C and °F — Cloud, Sunshine, and UV are the same either way.</p>
+    </section>
+
+    <footer>
+      <span>Forecast Compare</span>
+      <span>Help</span>
+    </footer>
+  </main>
+</body>
+</html>
