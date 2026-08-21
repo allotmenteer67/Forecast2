@@ -1,4 +1,4 @@
-# Forecast Compare
+# Cloude
 
 A simple browser-based weather forecast comparison tool designed for GitHub Pages.
 
@@ -63,6 +63,34 @@ current postcode area, using Open-Meteo's Historical Weather Archive for
 Actual and the Previous Runs API for Met Office's lead-time forecasts —
 so the Met Office FFV doesn't have to build up one day at a time. It's a
 large one-off request, not something that runs automatically.
+
+## Target date: past and future
+
+The rollback slider spans a full two weeks — 7 days back through 7 days
+ahead, today in the middle, left = past, right = future. Internally this
+is still one `rollback` value (positive = past, negative = future); the
+slider's raw input is just negated so the on-screen direction reads
+naturally (left = further back, right = further ahead), rather than
+inverting that convention everywhere else in the code.
+
+**Past/today** works exactly as before: full lead-time comparison, real
+Actual weather, FFV training, accuracy scoring.
+
+**Future** reuses the same machinery to produce a genuine prediction: the
+Corrected column applies FFV (learned entirely from past data) to today's
+live forecast, turning "raw forecast" into "the app's own best guess."
+The **freshest available real day** shifts with how far ahead you're
+looking — 3 days ahead, the freshest real Met Office data is the
+lead-3 forecast (issued today), not lead-1 (which would need to be issued
+tomorrow and doesn't exist yet). Rows for lead times that haven't been
+issued yet just fall back to demo data, same convention already used
+everywhere else in the app when real data isn't available — not a new
+special case. FFV training itself only ever runs over past dates (it
+can't be otherwise — accuracy requires a known Actual), so looking into
+the future never pollutes or skews it.
+
+The headline figure and delta badge both follow this same freshest-day
+logic automatically.
 
 ## The headline figure
 

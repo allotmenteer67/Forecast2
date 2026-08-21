@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
-  <title>Forecast Compare</title>
+  <title>Cloude</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="app">
     <header>
-      <h1>Forecast Compare</h1>
+      <h1>Cloude</h1>
     </header>
 
     <section class="headline">
@@ -35,10 +35,11 @@
           <strong>Target date</strong>
           <span id="rollbackLabel">Latest forecast — today</span>
         </div>
-        <input id="rollback" type="range" min="0" max="6" step="1" value="0">
+        <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
         <div class="range-labels">
+          <span>7 days ago</span>
           <span>Today</span>
-          <span>6 days back</span>
+          <span>7 days ahead</span>
         </div>
         <p id="targetDateLabel" class="target-date">Target date: today</p>
       </div>
@@ -106,7 +107,7 @@
     </section>
 
     <footer>
-      <span>Forecast Compare</span>
+      <span>Cloude</span>
       <span><a href="help.html">Help</a> · <a href="settings.html">Forecasters</a></span>
     </footer>
   </main>

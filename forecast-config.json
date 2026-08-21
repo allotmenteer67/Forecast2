@@ -1,5 +1,5 @@
 {
-  "name": "Forecast Compare",
+  "name": "Cloude",
   "version": "0.4.0",
   "platform": "GitHub Pages",
   "technology": [
@@ -35,7 +35,7 @@
   "forecaster_data": "demo",
   "actual_data": {
     "source": "Open-Meteo",
-    "geocoding": "postcodes.io",
+    "geocoding": "postcodes.io outcodes (first 3 characters of postcode)",
     "live": true,
     "note": "Actual weather is fetched live for the selected target date. Forecaster predictions remain demo data until real forecast APIs are wired in per source."
   }

@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
-  <title>Help — Forecast Compare</title>
+  <title>Help — Cloude</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="app">
     <header>
-      <p class="back-link"><a href="index.html">&larr; Back to Forecast Compare</a></p>
+      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
       <h1>Help</h1>
       <p>What everything on the main page means and does.</p>
     </header>
@@ -24,13 +24,13 @@
       <p><strong>Coastal caveat:</strong> on light-wind days near the coast, local sea breezes can develop that a 10km-resolution forecast model may miss, mistime, or understate — worth bearing in mind if you're relying on this for a day on the water.</p>
 
       <h2>Target date &amp; rollback</h2>
-      <p>The slider picks a <strong>target date</strong> — today, or up to 6 days back. Roll it back to see how each forecaster's prediction for that date changed as it approached, checked against what actually happened.</p>
+      <p>The slider picks a <strong>target date</strong> — anywhere from 7 days ago to 7 days ahead, with today in the middle. On the past side, roll back to see how each forecaster's prediction for that date changed as it approached, checked against what actually happened. On the future side, the app uses everything it's learned (the fudge factor, see below) to turn today's forecasts into its own best prediction — the further ahead you look, the less real data is behind it yet, since only Met Office has genuine forecast data and it can only be as fresh as today's forecast run allows.</p>
 
       <h2>Days out</h2>
       <p>Rows count down the days out from the target date — "1" is the last forecast issued before it. The date shown next to each row number is when that forecast was made.</p>
 
       <h2>Corrected vs Raw</h2>
-      <p>Each forecaster shows two columns. <strong>Raw</strong> is the forecast value itself. <strong>Corrected</strong> applies a learned adjustment (the "fudge factor," see below) to bring it closer to what usually turns out to be true. The <strong>Actual</strong> row at the bottom is what really happened, sourced live from Open-Meteo.</p>
+      <p>Each forecaster shows two columns. <strong>Raw</strong> is the forecast value itself. <strong>Corrected</strong> applies a learned adjustment (the "fudge factor," see below) to bring it closer to what usually turns out to be true. The <strong>Actual</strong> row at the bottom is what really happened, sourced live from Open-Meteo — for a future target date, that row just shows how far away the date is, since it hasn't happened yet.</p>
 
       <h2>The fudge factor (FFV)</h2>
       <p>For each forecaster, condition, and day-out row, the app keeps a running 3-day mean of the forecast value, compared over time against Actual. The ratio between them — actual ÷ mean — is averaged into a Fudge Factor Value. Once a cell has at least 3 samples, Corrected shows <code>mean × FFV</code>. It's tracked separately per postcode area, so different locations build their own correction history, and it never stops learning — every new sample nudges the running average, for as long as the app collects data.</p>
@@ -52,7 +52,7 @@
     </section>
 
     <footer>
-      <span>Forecast Compare</span>
+      <span>Cloude</span>
       <span>Help</span>
     </footer>
   </main>

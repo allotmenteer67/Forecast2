@@ -4,16 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
-  <title>Forecasters — Forecast Compare</title>
+  <title>Forecasters — Cloude</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="app">
     <header>
-      <p class="back-link"><a href="index.html">&larr; Back to Forecast Compare</a></p>
+      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
       <h1>Forecasters</h1>
       <p>Choose which sources appear in the comparison table.</p>
     </header>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Units</legend>
+        <div class="checks">
+          <label class="check">
+            <input type="radio" name="unitSystem" id="unitMetric" value="metric">
+            <span>Metric (mm, km/h, °C)</span>
+          </label>
+          <label class="check">
+            <input type="radio" name="unitSystem" id="unitImperial" value="imperial">
+            <span>Imperial (in, mph, °F)</span>
+          </label>
+        </div>
+      </fieldset>
+    </section>
 
     <section class="controls">
       <fieldset>
@@ -23,7 +39,7 @@
     </section>
 
     <footer>
-      <span>Forecast Compare</span>
+      <span>Cloude</span>
       <span>Settings</span>
     </footer>
   </main>
