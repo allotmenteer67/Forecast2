@@ -136,11 +136,15 @@ threshold to tune. It's built from whatever's currently selected on the
 Forecasters page — mostly demo data today, genuinely more trustworthy as
 real sources and FFV history grow over time.
 
-Wind direction (shown alongside the headline's wind figure) comes from
-Met Office specifically — the only source with real direction data,
-reported at the hour the day's peak wind speed occurred (direction can't
-be meaningfully averaged the way speed can: 0° and 360° are the same
-direction but average to a nonsensical 180°).
+Wind direction (shown as a rotating arrow, plus compass letters
+underneath, alongside the headline's wind figure — works for both the
+daily and hourly views now) comes from Met Office specifically — the
+only source with real direction data, reported at the hour the day's
+peak wind speed occurred for the daily view, or live for whichever hour
+the hour slider is on. The arrow points **downwind** (deliberately
+rotated 180° from the raw meteorological reading, which is the direction
+wind blows *from*) — more directly useful for "which way will this push
+me" than the met-convention reading.
 
 ## Auto-backfill on first setup
 
@@ -223,6 +227,19 @@ schedule — or trigger it manually from the repo's **Actions** tab
 Adding more real Open-Meteo models later (ECMWF, GFS, DWD ICON, etc.) is
 a matter of adding entries to the `MODELS` array in
 `scripts/collect-weather.js`, plus a matching forecaster id in `app.js`.
+
+## Display precision
+
+Figures round to the nearest whole number throughout (`Math.round`),
+except:
+
+- **Rain** — stays at 1 decimal place (2 for imperial), since typical
+  daily totals are well under 1mm/1in and would just read as "0"
+  otherwise.
+- **Deltas and accuracy errors** (`isDelta: true` in `formatValue`) —
+  keep 1 decimal place too, since a good accuracy score is a small
+  number close to zero, and rounding it away would defeat the point of
+  showing it.
 
 ## Units
 

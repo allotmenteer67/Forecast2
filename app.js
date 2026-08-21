@@ -170,6 +170,7 @@ const state = {
     temperature: [],
     precipitation: [],
     windSpeed: [],
+    windDirection: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
     sunsetByDate: {}
   },
@@ -245,13 +246,19 @@ function demoValue(day, source, conditionName) {
 function formatValue(rawValue, conditionName, isDelta = false) {
   if (rawValue === null || rawValue === undefined || Number.isNaN(rawValue)) return "–";
   const value = convertForDisplay(rawValue, conditionName, isDelta);
-  if (conditionName === "cloud") {
-    return Math.round(value).toString();
+  if (conditionName === "rain") {
+    // Rain values are typically well under 1 unit — whole numbers would
+    // read as "0" on most days, so this keeps decimal precision even
+    // though everything else has been simplified to whole numbers.
+    return state.unitSystem === "imperial" ? value.toFixed(2) : value.toFixed(1);
   }
-  if (conditionName === "rain" && state.unitSystem === "imperial") {
-    return value.toFixed(2); // inches are small numbers; 1dp loses too much
+  if (isDelta) {
+    // Deltas and accuracy errors are often small numbers near zero —
+    // rounding to whole units would hide the precision that makes an
+    // accuracy score meaningful in the first place.
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
   }
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  return Math.round(value).toString();
 }
 
 // ---- Target date helpers ----
@@ -364,6 +371,15 @@ function compassLabel(degrees) {
   if (degrees === null || degrees === undefined) return null;
   const index = Math.round(degrees / 22.5) % 16;
   return COMPASS_POINTS[index];
+}
+
+// Meteorological wind direction is the direction the wind blows FROM.
+// The arrow instead points where it's blowing TO (downwind) — more
+// directly useful for "which way will this push me," given the app's
+// watersports use case — so it's rotated 180° from the raw reading.
+function windArrowRotation(degrees) {
+  if (degrees === null || degrees === undefined) return null;
+  return (degrees + 180) % 360;
 }
 
 async function fetchActualWeather(lat, lon) {
@@ -532,7 +548,7 @@ async function fetchHourlyForecast(lat, lon) {
     const params = new URLSearchParams({
       latitude: lat,
       longitude: lon,
-      hourly: "temperature_2m,precipitation,wind_speed_10m",
+      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m",
       daily: "sunrise,sunset",
       models: METOFFICE_MODEL,
       wind_speed_unit: "mph",
@@ -552,6 +568,7 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.temperature = data.hourly.temperature_2m.slice(from);
     state.hourly.precipitation = data.hourly.precipitation.slice(from);
     state.hourly.windSpeed = data.hourly.wind_speed_10m.slice(from);
+    state.hourly.windDirection = data.hourly.wind_direction_10m.slice(from);
 
     state.hourly.sunriseByDate = {};
     state.hourly.sunsetByDate = {};
@@ -1155,14 +1172,22 @@ function renderHeadline() {
 
     if (conditionName === "wind") {
       const direction = showHourly
-        ? null // hourly direction isn't fetched — speed only at this resolution for now
+        ? state.hourly.windDirection?.[state.hourIndex] ?? null
         : metOfficeWindDirectionFor(day, state.rollback);
       const compass = compassLabel(direction);
-      if (compass) {
+      const rotation = windArrowRotation(direction);
+      if (compass !== null && rotation !== null) {
+        const arrow = document.createElement("span");
+        arrow.className = "wind-arrow";
+        arrow.textContent = "↑";
+        arrow.style.transform = `rotate(${rotation}deg)`;
+        arrow.setAttribute("aria-hidden", "true");
+
         const dirEl = document.createElement("small");
         dirEl.className = "headline-direction";
         dirEl.textContent = compass;
-        cell.appendChild(dirEl);
+
+        cell.append(arrow, dirEl);
       }
     }
 

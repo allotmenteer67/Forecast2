@@ -103,6 +103,13 @@ header p {
   font-size: 24px !important;
 }
 
+.wind-arrow {
+  display: inline-block;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--accent-dark);
+}
+
 .hour-slider {
   margin-top: 14px;
   padding-top: 12px;
@@ -127,6 +134,12 @@ header p {
 .controls {
   display: grid;
   gap: 18px;
+}
+
+.condition-box {
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  padding: 10px 12px 12px;
 }
 
 label,

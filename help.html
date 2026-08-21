@@ -23,7 +23,7 @@
       <p>A second, smaller slider under the grid shows the next 24 or 48 hours (set on the Forecasters page), always starting from right now — it doesn't move when the main Date slider does; the two are independent. Dragging it temporarily swaps Rain, Temperature, and Wind for that specific hour's figure, using Met Office's live forecast corrected by the same FFV as the rest of the app. It lingers for 5 seconds after you let go, so there's a moment to actually read it, then reverts to the daily view — touching the Date slider reverts it immediately instead of waiting. Sunshine doesn't have an hourly reading (a daily total doesn't split into one), so it stays on its normal figure, shown dimmed while the hour slider is active — and swapped for a moon phase icon specifically at night, when a sunshine number would otherwise look like a mistake.</p>
 
       <h2>Wind speed &amp; direction</h2>
-      <p>The wind figure shown is the <strong>windiest hour of the day</strong>, not a true gust and not a daily average — it sits between the two. Direction (shown next to the headline's wind figure) comes from Met Office specifically, since it's the only source with real direction data; it can't be meaningfully blended across the other, still-synthetic sources the way speed can. Direction isn't shown while the hour slider is active — only the daily figure has it right now.</p>
+      <p>The wind figure shown is the <strong>windiest hour of the day</strong>, not a true gust and not a daily average — it sits between the two. Direction (shown as a rotating arrow next to the wind figure, with the compass letters underneath) comes from Met Office specifically, since it's the only source with real direction data. The arrow points <strong>downwind</strong> — the direction the wind is blowing toward, not the meteorological "coming from" convention — since that's more directly useful for knowing which way it'll push you.</p>
       <p><strong>Coastal caveat:</strong> on light-wind days near the coast, local sea breezes can develop that a 10km-resolution forecast model may miss, mistime, or understate — worth bearing in mind if you're relying on this for a day on the water.</p>
 
       <h2>Target date &amp; rollback</h2>
@@ -51,7 +51,7 @@
       <p>A one-off action that pulls a full year of real Met Office history straight into the current postcode area's FFV data, rather than waiting for the daily collection to build it up. Useful for filling the gap early on, or reaching further back than the rolling window normally keeps. It's a fairly large request, so it's not something to run often.</p>
 
       <h2>Units</h2>
-      <p>Metric or Imperial can be set on the <a href="settings.html">Forecasters</a> page. Rain converts between mm and inches, Wind between km/h and mph, and Temperature between °C and °F — Cloud, Sunshine, and UV are the same either way.</p>
+      <p>Metric or Imperial can be set on the <a href="settings.html">Forecasters</a> page. Rain converts between mm and inches, Wind between km/h and mph, and Temperature between °C and °F — Cloud, Sunshine, and UV are the same either way. Figures are shown to the nearest whole number throughout, except Rain (which stays at one or two decimal places — most days are well under 1mm/1in, so a whole number would just read as "0") and accuracy scores (which need decimal precision to actually be useful, since good ones are small numbers close to zero).</p>
     </section>
 
     <footer>
