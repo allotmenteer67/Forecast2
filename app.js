@@ -162,7 +162,20 @@ const state = {
     status: "idle", // idle | loading | ready | error
     error: null,
     dayCount: 0
-  }
+  },
+  hourly: {
+    status: "idle", // idle | loading | ready | error
+    error: null,
+    times: [], // ISO datetime strings, aligned across all arrays below
+    temperature: [],
+    precipitation: [],
+    windSpeed: [],
+    sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
+    sunsetByDate: {}
+  },
+  hourIndex: 0, // 0 = now; the hour slider's current position
+  hourlyActive: false, // true while dragging or within the 5s hold after
+  hourlyHoldTimer: null
 };
 
 const postcode = document.getElementById("postcode");
@@ -180,6 +193,20 @@ const accuracyMode = document.getElementById("accuracyMode");
 const accuracyBody = document.getElementById("accuracyBody");
 const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
+const headlineDate = document.getElementById("headlineDate");
+const hourSlider = document.getElementById("hourSlider");
+const hourLabel = document.getElementById("hourLabel");
+
+const HOUR_RANGE_KEY = "forecast-compare:hourRange";
+function loadHourRange() {
+  try {
+    const raw = localStorage.getItem(HOUR_RANGE_KEY);
+    if (raw === "24" || raw === "48") return Number(raw);
+  } catch {
+    // fall through to default
+  }
+  return 48;
+}
 
 function demoValue(day, source, conditionName) {
   const sourceOffset = source.offset ?? 0;
@@ -467,6 +494,79 @@ async function fetchMetOfficeReal(lat, lon) {
 // regardless, and whatever it collected is just replayed here.
 const HISTORY_URL = "./data/history.json";
 
+// ---- Moon phase & day/night (for the Sunshine cell while the hour
+// slider is active) ----
+// Standard synodic-month approximation: days since a known new moon,
+// mod the ~29.53-day cycle. Accurate to within about a day, plenty for
+// a decorative icon rather than a navigation instrument.
+const MOON_PHASE_EMOJI = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
+const KNOWN_NEW_MOON = Date.UTC(2000, 0, 6, 18, 14); // 2000-01-06 18:14 UTC
+const SYNODIC_MONTH_MS = 29.530588 * 24 * 60 * 60 * 1000;
+
+function moonPhaseEmoji(date) {
+  const age = ((date.getTime() - KNOWN_NEW_MOON) % SYNODIC_MONTH_MS + SYNODIC_MONTH_MS) % SYNODIC_MONTH_MS;
+  const fraction = age / SYNODIC_MONTH_MS; // 0 = new, 0.5 = full
+  const index = Math.round(fraction * 8) % 8;
+  return MOON_PHASE_EMOJI[index];
+}
+
+function isDaytime(date) {
+  const dateKey = isoDate(date);
+  const sunrise = state.hourly.sunriseByDate[dateKey];
+  const sunset = state.hourly.sunsetByDate[dateKey];
+  if (!sunrise || !sunset) return true; // no data yet — default to day, safest fallback
+  const t = date.getTime();
+  return t >= new Date(sunrise).getTime() && t < new Date(sunset).getTime();
+}
+
+// The hourly slider's data source. Deliberately NOT the previous_dayN
+// lead-time data used elsewhere — that answers "what was forecast N days
+// ago," which isn't what "what's happening in the next 24-48h" needs.
+// This is a plain live forecast: what the model currently thinks, right
+// now, for the hours immediately ahead.
+async function fetchHourlyForecast(lat, lon) {
+  state.hourly.status = "loading";
+  state.hourly.error = null;
+
+  try {
+    const params = new URLSearchParams({
+      latitude: lat,
+      longitude: lon,
+      hourly: "temperature_2m,precipitation,wind_speed_10m",
+      daily: "sunrise,sunset",
+      models: METOFFICE_MODEL,
+      wind_speed_unit: "mph",
+      forecast_days: 3,
+      timezone: "auto"
+    });
+
+    const res = await fetch(`${WEATHER_URL}?${params.toString()}`);
+    if (!res.ok) throw new Error("Hourly forecast lookup failed");
+    const data = await res.json();
+
+    const now = new Date();
+    const startIdx = data.hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
+    const from = startIdx >= 0 ? startIdx : 0;
+
+    state.hourly.times = data.hourly.time.slice(from);
+    state.hourly.temperature = data.hourly.temperature_2m.slice(from);
+    state.hourly.precipitation = data.hourly.precipitation.slice(from);
+    state.hourly.windSpeed = data.hourly.wind_speed_10m.slice(from);
+
+    state.hourly.sunriseByDate = {};
+    state.hourly.sunsetByDate = {};
+    data.daily.time.forEach((date, i) => {
+      state.hourly.sunriseByDate[date] = data.daily.sunrise[i];
+      state.hourly.sunsetByDate[date] = data.daily.sunset[i];
+    });
+
+    state.hourly.status = "ready";
+  } catch (err) {
+    state.hourly.status = "error";
+    state.hourly.error = err.message || "Could not load hourly forecast";
+  }
+}
+
 function meanFromHistoryDay(dayEntry, day, conditionName) {
   const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
   const values = leadDays
@@ -562,7 +662,12 @@ async function loadLocationData() {
     state.lon = lon;
     state.areaCode = areaCode;
     state.actual.coordLabel = label;
-    await Promise.all([fetchActualWeather(lat, lon), fetchMetOfficeReal(lat, lon), loadCommittedHistory()]);
+    await Promise.all([
+      fetchActualWeather(lat, lon),
+      fetchMetOfficeReal(lat, lon),
+      loadCommittedHistory(),
+      fetchHourlyForecast(lat, lon)
+    ]);
     updateFFVHistory();
 
     // First time this postcode area has ever been seen (no Met Office
@@ -967,13 +1072,51 @@ function headlineValueFor(conditionName) {
   return median(values);
 }
 
+function currentHourDate() {
+  const iso = state.hourly.times[state.hourIndex];
+  return iso ? new Date(iso) : new Date();
+}
+
+// Reuses the existing daily FFV rather than a new hour-specific one —
+// day 1's correction for the first 24h, day 2's beyond that. Slower to
+// mature would mean starting from zero across dozens of buckets instead
+// of borrowing history that's already there.
+function hourlyValueFor(conditionName) {
+  if (state.hourly.status !== "ready") return null;
+  const idx = state.hourIndex;
+  if (idx === null || idx === undefined) return null;
+
+  let raw;
+  switch (conditionName) {
+    case "rain": raw = state.hourly.precipitation[idx]; break;
+    case "wind": raw = state.hourly.windSpeed[idx]; break;
+    case "temperature": raw = state.hourly.temperature[idx]; break;
+    default: return null; // Sunshine has no hourly reading — see renderHeadline
+  }
+  if (raw === null || raw === undefined) return null;
+
+  const metOffice = CONFIG.forecasters.find(source => source.id === "metoffice");
+  const day = idx < 24 ? 1 : 2;
+  const ffv = ffvFor(metOffice, conditionName, day);
+  return ffv !== null ? raw * ffv : raw;
+}
+
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
   const day = freshestDayFor(state.rollback);
 
+  if (headlineDate) {
+    headlineDate.textContent = state.rollback === 0
+      ? "Today"
+      : formatDateLong(targetDateForRollback(state.rollback));
+  }
+
+  const hourDate = currentHourDate();
+  const showHourly = state.hourlyActive && state.hourly.status === "ready";
+  const night = showHourly && !isDaytime(hourDate);
+
   HEADLINE_CONDITIONS.forEach(conditionName => {
-    const value = headlineValueFor(conditionName);
     const cell = document.createElement("div");
     cell.className = "headline-cell";
 
@@ -983,12 +1126,37 @@ function renderHeadline() {
 
     const valueEl = document.createElement("span");
     valueEl.className = "headline-value";
-    valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+
+    if (conditionName === "sunshine") {
+      // No hourly concept — a daily total doesn't decompose into an
+      // hour's reading. Shown dimmed while the hour slider is active (so
+      // it doesn't look broken for not responding), and swapped for the
+      // moon phase specifically at night, when a sunshine figure would
+      // otherwise look like a mistake rather than just irrelevant.
+      const value = headlineValueFor(conditionName);
+      if (showHourly) cell.classList.add("headline-cell-dimmed");
+      if (night) {
+        valueEl.textContent = moonPhaseEmoji(hourDate);
+        valueEl.classList.add("headline-moon");
+      } else {
+        valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+      }
+    } else if (showHourly) {
+      const value = hourlyValueFor(conditionName);
+      valueEl.textContent = value !== null
+        ? `${formatValue(value, conditionName)}${unitLabel(conditionName)}`
+        : "–";
+    } else {
+      const value = headlineValueFor(conditionName);
+      valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+    }
 
     cell.append(label, valueEl);
 
     if (conditionName === "wind") {
-      const direction = metOfficeWindDirectionFor(day, state.rollback);
+      const direction = showHourly
+        ? null // hourly direction isn't fetched — speed only at this resolution for now
+        : metOfficeWindDirectionFor(day, state.rollback);
       const compass = compassLabel(direction);
       if (compass) {
         const dirEl = document.createElement("small");
@@ -1363,9 +1531,69 @@ condition.addEventListener("change", () => {
 // existing convention unchanged everywhere else in the app.
 rollback.addEventListener("input", () => {
   state.rollback = -Number(rollback.value);
+  cancelHourlyHold();
   updateRollbackLabel();
   renderTable();
 });
+
+function updateHourLabel() {
+  if (!hourLabel) return;
+  if (state.hourIndex === 0) {
+    hourLabel.textContent = "Now";
+    return;
+  }
+  const iso = state.hourly.times[state.hourIndex];
+  if (!iso) {
+    hourLabel.textContent = `+${state.hourIndex}h`;
+    return;
+  }
+  const d = new Date(iso);
+  const crossesDay = isoDate(d) !== isoDate(new Date());
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  hourLabel.textContent = crossesDay ? `${time}, ${formatDateShort(d)}` : time;
+}
+
+function cancelHourlyHold() {
+  if (state.hourlyHoldTimer) {
+    clearTimeout(state.hourlyHoldTimer);
+    state.hourlyHoldTimer = null;
+  }
+  state.hourlyActive = false;
+  state.hourIndex = 0;
+  if (hourSlider) hourSlider.value = 0;
+  updateHourLabel();
+}
+
+if (hourSlider) {
+  hourSlider.max = String(loadHourRange());
+
+  hourSlider.addEventListener("input", () => {
+    if (state.hourlyHoldTimer) {
+      clearTimeout(state.hourlyHoldTimer);
+      state.hourlyHoldTimer = null;
+    }
+    state.hourIndex = Number(hourSlider.value);
+    state.hourlyActive = true;
+    updateHourLabel();
+    renderHeadline();
+  });
+
+  const startHold = () => {
+    if (!state.hourlyActive) return;
+    if (state.hourlyHoldTimer) clearTimeout(state.hourlyHoldTimer);
+    // Lingers for 5s so there's a moment to actually read the dragged-to
+    // value before it reverts, rather than snapping back the instant a
+    // finger lifts.
+    state.hourlyHoldTimer = setTimeout(() => {
+      cancelHourlyHold();
+      renderHeadline();
+    }, 5000);
+  };
+
+  hourSlider.addEventListener("pointerup", startHold);
+  hourSlider.addEventListener("touchend", startHold);
+  hourSlider.addEventListener("mouseup", startHold);
+}
 
 document.getElementById("updateLocation").addEventListener("click", () => {
   state.postcode = postcode.value.trim().toUpperCase();
@@ -1378,5 +1606,6 @@ if (backfillButton) {
 }
 
 updateRollbackLabel();
+updateHourLabel();
 renderTable();
 loadLocationData();

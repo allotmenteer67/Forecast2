@@ -87,6 +87,43 @@ header p {
   font-size: 11px;
 }
 
+.headline-date {
+  margin: 0 0 12px;
+  color: var(--accent-dark);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.headline-cell-dimmed .headline-value,
+.headline-cell-dimmed .headline-label {
+  opacity: 0.5;
+}
+
+.headline-moon {
+  font-size: 24px !important;
+}
+
+.hour-slider {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(76, 106, 88, 0.25);
+}
+
+.hour-slider-title {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4c6a58;
+  margin-bottom: 4px;
+}
+
+.hour-slider input[type="range"] {
+  width: 100%;
+  height: 4px;
+  accent-color: #4c6a58;
+}
+
 .controls {
   display: grid;
   gap: 18px;

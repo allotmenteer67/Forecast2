@@ -92,6 +92,38 @@ the future never pollutes or skews it.
 The headline figure and delta badge both follow this same freshest-day
 logic automatically.
 
+## Hour slider
+
+A second slider beneath the headline grid, always anchored to "now"
+rather than following the Date slider — the two are fully independent.
+Its data source is deliberately a plain live forecast (`WEATHER_URL` with
+`models=ukmo_global_deterministic_10km`, `forecast_days: 3`), not the
+`previous_dayN` lead-time data used everywhere else — that answers "what
+was forecast N days ago," not "what's happening in the next two days."
+
+Rather than building a slow-maturing hour-specific FFV (24 hours × up to
+48 lead-hours would mean hundreds of buckets competing for the same pool
+of history), it reuses the existing daily FFV: day 1's correction for
+the first 24h, day 2's beyond that. Met Office only, same as the rest of
+the real-data features — demo sources have never had an hourly concept.
+
+Dragging updates Rain/Temperature/Wind live; releasing starts a 5-second
+hold (`state.hourlyHoldTimer`) before reverting to the daily view, so
+there's a moment to read the dragged-to value. Touching the Date slider
+calls `cancelHourlyHold()` and reverts immediately instead — an
+unambiguous "done with hourly" signal.
+
+Sunshine has no hourly reading (a daily total doesn't split into one),
+so it stays on its daily figure, shown at reduced opacity
+(`.headline-cell-dimmed`) while hourly is active. Specifically at night
+(checked against real sunrise/sunset for the currently-shown hour) it
+swaps to a moon phase emoji instead — a simple synodic-month
+approximation (`moonPhaseEmoji()`), accurate to within about a day, which
+is plenty for a decorative icon.
+
+24 vs 48 hour range is set on the Forecasters page and persists in
+`localStorage` (`forecast-compare:hourRange`).
+
 ## The headline figure
 
 A box at the top of the page shows one number per condition (Rain,

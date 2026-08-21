@@ -14,7 +14,15 @@
     </header>
 
     <section class="headline">
+      <p id="headlineDate" class="headline-date">Today</p>
       <div id="headlineGrid" class="headline-grid"></div>
+      <div class="hour-slider">
+        <div class="hour-slider-title">
+          <span>Hour</span>
+          <span id="hourLabel">Now</span>
+        </div>
+        <input id="hourSlider" type="range" min="0" max="48" step="1" value="0">
+      </div>
     </section>
 
     <section class="controls">
@@ -32,7 +40,7 @@
 
       <div class="rollback">
         <div class="rollback-title">
-          <strong>Target date</strong>
+          <strong>Date</strong>
           <span id="rollbackLabel">Today</span>
         </div>
         <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
@@ -41,7 +49,6 @@
           <span>Today</span>
           <span>7 days ahead</span>
         </div>
-        <p id="targetDateLabel" class="target-date">Target date: today</p>
       </div>
     </section>
 

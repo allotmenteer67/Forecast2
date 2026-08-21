@@ -17,6 +17,64 @@ const FORECASTERS = [
 ];
 
 const SELECTED_FORECASTERS_KEY = "forecast-compare:selectedForecasters";
+const UNIT_SYSTEM_KEY = "forecast-compare:unitSystem";
+
+function loadUnitSystem() {
+  try {
+    const raw = localStorage.getItem(UNIT_SYSTEM_KEY);
+    if (raw === "metric" || raw === "imperial") return raw;
+  } catch {
+    // fall through to default
+  }
+  return "metric";
+}
+
+const HOUR_RANGE_KEY = "forecast-compare:hourRange";
+
+function loadHourRange() {
+  try {
+    const raw = localStorage.getItem(HOUR_RANGE_KEY);
+    if (raw === "24" || raw === "48") return raw;
+  } catch {
+    // fall through to default
+  }
+  return "48";
+}
+
+const hourRange48 = document.getElementById("hourRange48");
+const hourRange24 = document.getElementById("hourRange24");
+const currentHourRange = loadHourRange();
+if (hourRange48 && hourRange24) {
+  hourRange48.checked = currentHourRange === "48";
+  hourRange24.checked = currentHourRange === "24";
+
+  [hourRange48, hourRange24].forEach(input => {
+    input.addEventListener("change", () => {
+      try {
+        localStorage.setItem(HOUR_RANGE_KEY, input.value);
+      } catch {
+        // display-only preference, fine if it doesn't persist
+      }
+    });
+  });
+}
+const unitMetric = document.getElementById("unitMetric");
+const unitImperial = document.getElementById("unitImperial");
+const currentUnitSystem = loadUnitSystem();
+if (unitMetric && unitImperial) {
+  unitMetric.checked = currentUnitSystem === "metric";
+  unitImperial.checked = currentUnitSystem === "imperial";
+
+  [unitMetric, unitImperial].forEach(input => {
+    input.addEventListener("change", () => {
+      try {
+        localStorage.setItem(UNIT_SYSTEM_KEY, input.value);
+      } catch {
+        // display-only preference, fine if it doesn't persist
+      }
+    });
+  });
+}
 
 function loadSelected() {
   try {
