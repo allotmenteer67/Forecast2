@@ -169,7 +169,6 @@ const postcode = document.getElementById("postcode");
 const condition = document.getElementById("condition");
 const rollback = document.getElementById("rollback");
 const rollbackLabel = document.getElementById("rollbackLabel");
-const targetDateLabel = document.getElementById("targetDateLabel");
 const table = document.getElementById("forecastTable");
 const conditionTitle = document.getElementById("conditionTitle");
 const locationLabel = document.getElementById("locationLabel");
@@ -718,7 +717,7 @@ function renderActualStatus() {
   } else if (state.actual.status === "ready") {
     const samples = ffvSampleTotal(state.condition);
     const ffvNote = samples > 0
-      ? ` · fudge-factor data: ${samples} sample${samples === 1 ? "" : "s"} for ${CONFIG.conditions[state.condition].name} in ${state.areaCode}`
+      ? ` · FFV data: ${samples} sample${samples === 1 ? "" : "s"} for ${CONFIG.conditions[state.condition].name} in ${state.areaCode}`
       : "";
     actualStatus.textContent = `Actual weather via Open-Meteo for ${state.actual.coordLabel}${ffvNote}`;
   } else {
@@ -1228,7 +1227,7 @@ function renderBackfillStatus() {
     backfillStatus.textContent = `Backfill failed: ${state.backfill.error}`;
     backfillStatus.classList.add("is-error");
   } else if (state.backfill.status === "done") {
-    backfillStatus.textContent = `Done — added ${state.backfill.samplesAdded} real Met Office samples to ${state.areaCode || "this area"}'s fudge-factor history.`;
+    backfillStatus.textContent = `Done — added ${state.backfill.samplesAdded} real Met Office samples to ${state.areaCode || "this area"}'s FFV history.`;
   } else {
     backfillStatus.textContent = "";
   }
@@ -1350,8 +1349,7 @@ async function backfillMetOfficeHistory() {
 
 function updateRollbackLabel() {
   const targetDate = targetDateForRollback(state.rollback);
-  rollbackLabel.textContent = state.rollback === 0 ? "Today" : formatDateShort(targetDate);
-  targetDateLabel.textContent = `Target date: ${formatDateLong(targetDate)}`;
+  rollbackLabel.textContent = state.rollback === 0 ? "Today" : formatDateLong(targetDate);
 }
 
 condition.addEventListener("change", () => {
