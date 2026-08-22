@@ -3,6 +3,7 @@
 // with no build step. Only id/name/enabled matter on this page.
 const FORECASTERS = [
   { id: "metoffice", name: "Met Office", enabled: true },
+  { id: "ecmwf", name: "ECMWF", enabled: true },
   { id: "bbc", name: "BBC", enabled: true },
   { id: "meteo", name: "Meteoblue", enabled: true },
   { id: "yr", name: "YR", enabled: true },

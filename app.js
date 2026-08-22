@@ -1,6 +1,7 @@
 const CONFIG = {
   forecasters: [
     { id: "metoffice", name: "Met Office", enabled: true, offset: 0 },
+    { id: "ecmwf", name: "ECMWF", enabled: true, offset: 0.2 },
     { id: "bbc", name: "BBC", enabled: true, offset: 0.6 },
     { id: "meteo", name: "Meteoblue", enabled: true, offset: -0.5 },
     { id: "yr", name: "YR", enabled: true, offset: 0.9 },
@@ -81,14 +82,26 @@ const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 const MAX_ROLLBACK = 7; // days into the past the slider (and Actual) can reach
 const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live forecast) can reach
 
-// Real Met Office data (Open-Meteo's Previous Runs API) only covers these
-// four conditions — Sunshine and UV aren't in that dataset, so Met Office
-// stays on the demo formula for those two.
-const REAL_METOFFICE_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature"]);
-// The pure global 10km model (rather than the seamless UKV+global blend)
-// so every lead-time offset 1-7 is available on equal footing — UKV 2km
-// only forecasts 2 days out, which would make longer lead times inconsistent.
-const METOFFICE_MODEL = "ukmo_global_deterministic_10km";
+// Real data (Open-Meteo's Previous Runs API) only covers these four
+// conditions for any source — Sunshine and UV aren't in that dataset, so
+// real sources fall back to the demo formula for those two.
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature"]);
+
+// Every source with genuine data behind it. Adding another real source
+// later is just another entry here — everything downstream (fetching,
+// FFV, accuracy, the headline) already loops over this rather than
+// naming a specific source.
+const REAL_SOURCES = [
+  // The pure global 10km model (rather than the seamless UKV+global
+  // blend) so every lead-time offset 1-7 is available on equal footing —
+  // UKV 2km only forecasts 2 days out, which would make longer lead
+  // times inconsistent.
+  { id: "metoffice", model: "ukmo_global_deterministic_10km" },
+  { id: "ecmwf", model: "ecmwf_ifs025" }
+];
+function realSourceIds() {
+  return REAL_SOURCES.map(s => s.id);
+}
 
 // Forecaster selection now lives on its own page (settings.html) so it
 // isn't cluttering the day-to-day view. Both pages read/write this same
@@ -116,12 +129,25 @@ function loadSelectedForecasters() {
   return new Set(CONFIG.forecasters.filter(f => f.enabled).map(f => f.id));
 }
 
-function emptyMetOfficeByLeadDay() {
+function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
     byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windDirection: [], cloud: [] };
   }
   return byLeadDay;
+}
+
+function emptyRealSourcesState() {
+  const bySource = {};
+  REAL_SOURCES.forEach(({ id }) => {
+    bySource[id] = {
+      status: "idle", // idle | loading | ready | error
+      error: null,
+      dates: [],
+      byLeadDay: emptyLeadDayData()
+    };
+  });
+  return bySource;
 }
 
 const state = {
@@ -147,12 +173,7 @@ const state = {
     uv_index_max: [],
     cloud_mean: []
   },
-  metOffice: {
-    status: "idle", // idle | loading | ready | error
-    error: null,
-    dates: [],
-    byLeadDay: emptyMetOfficeByLeadDay()
-  },
+  realSources: emptyRealSourcesState(),
   backfill: {
     status: "idle", // idle | loading | done | error
     error: null,
@@ -187,7 +208,7 @@ const table = document.getElementById("forecastTable");
 const conditionTitle = document.getElementById("conditionTitle");
 const locationLabel = document.getElementById("locationLabel");
 const actualStatus = document.getElementById("actualStatus");
-const metOfficeStatus = document.getElementById("metOfficeStatus");
+const realSourceStatus = document.getElementById("metOfficeStatus");
 const backfillButton = document.getElementById("backfillButton");
 const backfillStatus = document.getElementById("backfillStatus");
 const accuracyMode = document.getElementById("accuracyMode");
@@ -434,14 +455,16 @@ async function fetchActualWeather(lat, lon) {
   renderTable();
 }
 
-// Live Met Office real data for the same rolling 7-day window as Actual —
-// one lead-time series (previous_day1..7) per condition, all sharing the
-// same valid-time axis as state.actual, so the same rollback index works
-// for both (see actualIndexForRollback).
-async function fetchMetOfficeReal(lat, lon) {
-  state.metOffice.status = "loading";
-  state.metOffice.error = null;
-  renderMetOfficeStatus();
+// Live real data for the same rolling window as Actual (extended into
+// the future too) — one lead-time series (previous_day1..7) per
+// condition, all sharing the same valid-time axis as state.actual, so
+// the same rollback index works for both. Called once per REAL_SOURCES
+// entry, in parallel, from loadLocationData.
+async function fetchRealSourceLive(sourceId, model, lat, lon) {
+  const slot = state.realSources[sourceId];
+  slot.status = "loading";
+  slot.error = null;
+  renderRealSourceStatus();
 
   try {
     const hourlyVars = [];
@@ -461,18 +484,18 @@ async function fetchMetOfficeReal(lat, lon) {
       hourly: hourlyVars.join(","),
       past_days: MAX_ROLLBACK,
       forecast_days: MAX_FUTURE + 1,
-      models: METOFFICE_MODEL,
+      models: model,
       wind_speed_unit: "mph",
       timezone: "auto"
     });
 
     const res = await fetch(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
-    if (!res.ok) throw new Error("Met Office data lookup failed");
+    if (!res.ok) throw new Error("Data lookup failed");
     const data = await res.json();
 
     const hourlyTimes = data.hourly.time;
     const dayCount = Math.floor(hourlyTimes.length / 24);
-    const byLeadDay = emptyMetOfficeByLeadDay();
+    const byLeadDay = emptyLeadDayData();
 
     for (let d = 1; d <= 7; d++) {
       const tempMax = aggregateHourlyByDay(hourlyTimes, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "max");
@@ -489,15 +512,15 @@ async function fetchMetOfficeReal(lat, lon) {
       };
     }
 
-    state.metOffice.dates = data.daily?.time || [];
-    state.metOffice.byLeadDay = byLeadDay;
-    state.metOffice.status = "ready";
+    slot.dates = data.daily?.time || [];
+    slot.byLeadDay = byLeadDay;
+    slot.status = "ready";
   } catch (err) {
-    state.metOffice.status = "error";
-    state.metOffice.error = err.message || "Could not load Met Office data";
+    slot.status = "error";
+    slot.error = err.message || "Could not load data";
   }
 
-  renderMetOfficeStatus();
+  renderRealSourceStatus();
   renderTable();
 }
 
@@ -550,7 +573,7 @@ async function fetchHourlyForecast(lat, lon) {
       longitude: lon,
       hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m",
       daily: "sunrise,sunset",
-      models: METOFFICE_MODEL,
+      models: REAL_SOURCES.find(s => s.id === "metoffice").model, // hourly stays Met Office-specific for now — see README
       wind_speed_unit: "mph",
       forecast_days: 3,
       timezone: "auto"
@@ -584,10 +607,10 @@ async function fetchHourlyForecast(lat, lon) {
   }
 }
 
-function meanFromHistoryDay(dayEntry, day, conditionName) {
+function meanFromHistoryDay(dayEntry, sourceId, day, conditionName) {
   const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
   const values = leadDays
-    .map(d => dayEntry.models?.metoffice?.[d]?.[conditionName])
+    .map(d => dayEntry.models?.[sourceId]?.[d]?.[conditionName])
     .filter(v => v !== null && v !== undefined);
   if (!values.length) return null;
   return values.reduce((a, b) => a + b, 0) / values.length;
@@ -604,7 +627,7 @@ function renderHistoryStatus() {
     historyStatus.classList.add("is-error");
   } else if (state.history.status === "ready") {
     historyStatus.textContent = state.history.dayCount > 0
-      ? `Met Office accuracy is built from ${state.history.dayCount} day${state.history.dayCount === 1 ? "" : "s"} collected automatically once a day.`
+      ? `Real-source accuracy is built from ${state.history.dayCount} day${state.history.dayCount === 1 ? "" : "s"} collected automatically once a day.`
       : "No collected history yet — the daily Action hasn't run yet, or hasn't been set up.";
   } else {
     historyStatus.textContent = "";
@@ -625,26 +648,32 @@ async function loadCommittedHistory() {
     const dates = Object.keys(data.days || {});
 
     const store = loadFFVStore(state.areaCode);
-    // Rebuild Met Office's entries from scratch — this file is the single
-    // source of truth for it, so a partial/incremental merge would risk
-    // exactly the double-counting this whole mechanism exists to avoid.
+    // Rebuild every real source's entries from scratch — this file is the
+    // single source of truth for them, so a partial/incremental merge
+    // would risk exactly the double-counting this mechanism exists to avoid.
     Object.keys(CONFIG.conditions).forEach(conditionName => {
-      if (store[conditionName]) delete store[conditionName].metoffice;
+      realSourceIds().forEach(sourceId => {
+        if (store[conditionName]) delete store[conditionName][sourceId];
+      });
     });
 
     dates.forEach(date => {
       const dayEntry = data.days[date];
-      if (!dayEntry.actual || !dayEntry.models?.metoffice) return;
+      if (!dayEntry.actual) return;
 
-      REAL_METOFFICE_CONDITIONS.forEach(conditionName => {
-        const actual = dayEntry.actual[conditionName];
-        if (actual === null || actual === undefined) return;
+      realSourceIds().forEach(sourceId => {
+        if (!dayEntry.models?.[sourceId]) return;
 
-        for (let day = 1; day <= 7; day++) {
-          const mean = meanFromHistoryDay(dayEntry, day, conditionName);
-          if (!mean) continue;
-          recordFFVSample(store, conditionName, "metoffice", day, mean, actual);
-        }
+        REAL_DATA_CONDITIONS.forEach(conditionName => {
+          const actual = dayEntry.actual[conditionName];
+          if (actual === null || actual === undefined) return;
+
+          for (let day = 1; day <= 7; day++) {
+            const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
+            if (!mean) continue;
+            recordFFVSample(store, conditionName, sourceId, day, mean, actual);
+          }
+        });
       });
     });
 
@@ -662,14 +691,16 @@ async function loadCommittedHistory() {
 
 // Geocodes once, then kicks off Actual and the live Met Office fetch from
 // the same coordinates rather than each resolving location separately.
-function metOfficeHasAnyHistory() {
+function anyRealSourceHasHistory() {
   if (!state.areaCode) return false;
   const store = loadFFVStore(state.areaCode);
-  return Object.keys(CONFIG.conditions).some(conditionName => {
-    const bySource = store[conditionName]?.metoffice;
-    if (!bySource) return false;
-    return Object.values(bySource).some(entry => entry.count > 0);
-  });
+  return realSourceIds().some(sourceId =>
+    Object.keys(CONFIG.conditions).some(conditionName => {
+      const bySource = store[conditionName]?.[sourceId];
+      if (!bySource) return false;
+      return Object.values(bySource).some(entry => entry.count > 0);
+    })
+  );
 }
 
 async function loadLocationData() {
@@ -681,23 +712,24 @@ async function loadLocationData() {
     state.actual.coordLabel = label;
     await Promise.all([
       fetchActualWeather(lat, lon),
-      fetchMetOfficeReal(lat, lon),
+      ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
       loadCommittedHistory(),
       fetchHourlyForecast(lat, lon)
     ]);
     updateFFVHistory();
 
-    // First time this postcode area has ever been seen (no Met Office
+    // First time this postcode area has ever been seen (no real-source
     // samples at all yet, even after the committed-history replay above):
-    // pull a year of real history automatically rather than leaving it to
-    // be found via the advanced backfill button. Only ever fires once per
-    // area — after it runs, count > 0 and this is skipped on future loads.
-    if (!metOfficeHasAnyHistory()) {
-      await backfillMetOfficeHistory();
+    // pull a year of real history automatically for every real source
+    // rather than leaving it to be found via the advanced backfill
+    // button. Only ever fires once per area — after it runs, count > 0
+    // and this is skipped on future loads.
+    if (!anyRealSourceHasHistory()) {
+      await backfillRealSourceHistory();
     }
 
     renderActualStatus();
-    renderMetOfficeStatus();
+    renderRealSourceStatus();
     renderTable();
   } catch (err) {
     state.actual.status = "error";
@@ -742,23 +774,25 @@ function actualValueFor(conditionName, rollbackDays) {
   }
 }
 
-// Met Office's live window spans MAX_ROLLBACK days back through MAX_FUTURE
-// days ahead (see fetchMetOfficeReal) — a wider span than Actual's, since
-// it also carries today's live forecast for upcoming dates. Index MAX_ROLLBACK
-// is always "today", same convention as actualIndexForRollback but over a
-// longer array.
-function metOfficeIndexForRollback(rollbackDays) {
+// Each real source's live window spans MAX_ROLLBACK days back through
+// MAX_FUTURE days ahead (see fetchRealSourceLive) — wider than Actual's,
+// since it also carries today's live forecast for upcoming dates. Index
+// MAX_ROLLBACK is always "today", same convention as
+// actualIndexForRollback but over a longer array.
+function realSourceIndexForRollback(sourceId, rollbackDays) {
   const idx = MAX_ROLLBACK - rollbackDays;
-  return idx >= 0 && idx < state.metOffice.dates.length ? idx : null;
+  const dates = state.realSources[sourceId]?.dates ?? [];
+  return idx >= 0 && idx < dates.length ? idx : null;
 }
 
-// Real Met Office value for a condition/lead-day/target-date, or null if
-// not loaded, not covered by this dataset, or out of the fetched window.
-function metOfficeValueFor(conditionName, day, rollbackDays) {
-  if (state.metOffice.status !== "ready" || day > 7) return null;
-  const idx = metOfficeIndexForRollback(rollbackDays);
+// Real value for a given source/condition/lead-day/target-date, or null
+// if not loaded, not covered, or out of the fetched window.
+function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
+  const slot = state.realSources[sourceId];
+  if (!slot || slot.status !== "ready" || day > 7) return null;
+  const idx = realSourceIndexForRollback(sourceId, rollbackDays);
   if (idx === null) return null;
-  const byDay = state.metOffice.byLeadDay[day];
+  const byDay = slot.byLeadDay[day];
   if (!byDay) return null;
 
   switch (conditionName) {
@@ -770,58 +804,64 @@ function metOfficeValueFor(conditionName, day, rollbackDays) {
   }
 }
 
-// Wind direction, Met Office only — no other source has real direction
-// data, so unlike speed there's no demo fallback here; the headline
-// shows this alongside the median speed but sourced/labelled separately.
-function metOfficeWindDirectionFor(day, rollbackDays) {
-  if (state.metOffice.status !== "ready" || day > 7) return null;
-  const idx = metOfficeIndexForRollback(rollbackDays);
+// Wind direction for a given real source — no demo source has direction
+// data, so unlike speed there's no fallback here.
+function realSourceWindDirectionFor(sourceId, day, rollbackDays) {
+  const slot = state.realSources[sourceId];
+  if (!slot || slot.status !== "ready" || day > 7) return null;
+  const idx = realSourceIndexForRollback(sourceId, rollbackDays);
   if (idx === null) return null;
-  const byDay = state.metOffice.byLeadDay[day];
+  const byDay = slot.byLeadDay[day];
   return byDay?.windDirection?.[idx] ?? null;
 }
 
 // Whether this source has genuine real data behind it for this
-// condition — currently just Met Office for Rain/Cloud/Wind/Temperature.
-// Shared between forecastValueFor (per-cell fallback) and the headline
-// (which filters to real sources only, so demo noise can't dilute it).
+// condition. Shared between forecastValueFor (per-cell fallback) and the
+// headline (which filters to real sources only, so demo noise can't
+// dilute it).
 function isRealSource(source, conditionName) {
-  return source.id === "metoffice" && REAL_METOFFICE_CONDITIONS.has(conditionName);
+  return realSourceIds().includes(source.id) && REAL_DATA_CONDITIONS.has(conditionName);
 }
 
-// The single point where a cell's forecast value is decided: real Met
-// Office data for Rain/Cloud/Wind/Temperature when it's loaded, the demo
-// formula for everything else (including Met Office's own Sunshine/UV,
-// and as a fallback while real data is loading or if it errors).
-// Day > 7 always returns null for Met Office rather than falling back to
-// demo, so threeDayMean's day-7 edge case never mixes real and demo
-// values in the same average — see threeDayMean below.
+// The single point where a cell's forecast value is decided: real data
+// for Rain/Cloud/Wind/Temperature when it's loaded for this source, the
+// demo formula for everything else (including a real source's own
+// Sunshine/UV, and as a fallback while real data is loading or if it
+// errors). Day > 7 always returns null for a real source rather than
+// falling back to demo, so threeDayMean's day-7 edge case never mixes
+// real and demo values in the same average — see threeDayMean below.
 function forecastValueFor(day, source, conditionName, rollbackDays) {
   if (isRealSource(source, conditionName)) {
     if (day > 7) return null;
-    const real = metOfficeValueFor(conditionName, day, rollbackDays);
+    const real = realSourceValueFor(source.id, conditionName, day, rollbackDays);
     if (real !== null) return real;
   }
   return demoValue(day, source, conditionName);
 }
 
-function renderMetOfficeStatus() {
-  if (!metOfficeStatus) return;
-  metOfficeStatus.classList.remove("is-error");
-  const errorOnly = metOfficeStatus.classList.contains("status-error-only");
+function renderRealSourceStatus() {
+  if (!realSourceStatus) return;
+  realSourceStatus.classList.remove("is-error");
+  const errorOnly = realSourceStatus.classList.contains("status-error-only");
 
-  if (state.metOffice.status === "error") {
-    metOfficeStatus.textContent = `Met Office real data unavailable: ${state.metOffice.error} (falling back to demo)`;
-    metOfficeStatus.classList.add("is-error");
+  const errored = REAL_SOURCES.filter(({ id }) => state.realSources[id].status === "error");
+  const loading = REAL_SOURCES.filter(({ id }) => state.realSources[id].status === "loading");
+  const ready = REAL_SOURCES.filter(({ id }) => state.realSources[id].status === "ready");
+
+  if (errored.length > 0) {
+    const names = errored.map(({ id }) => CONFIG.forecasters.find(f => f.id === id)?.name || id);
+    realSourceStatus.textContent = `${names.join(", ")} real data unavailable (falling back to demo)`;
+    realSourceStatus.classList.add("is-error");
   } else if (errorOnly) {
-    metOfficeStatus.textContent = "";
-  } else if (state.metOffice.status === "loading") {
-    metOfficeStatus.textContent = "Loading real Met Office data…";
-  } else if (state.metOffice.status === "ready") {
-    metOfficeStatus.textContent =
-      "Met Office: real UK Met Office model data for Rain, Cloud, Wind and Temperature. Sunshine and UV remain demo (not available from this data source).";
+    realSourceStatus.textContent = "";
+  } else if (loading.length > 0) {
+    realSourceStatus.textContent = "Loading real forecast data…";
+  } else if (ready.length > 0) {
+    const names = ready.map(({ id }) => CONFIG.forecasters.find(f => f.id === id)?.name || id);
+    realSourceStatus.textContent =
+      `Real data for Rain, Cloud, Wind and Temperature from: ${names.join(", ")}. Sunshine and UV remain demo (not available from these sources).`;
   } else {
-    metOfficeStatus.textContent = "";
+    realSourceStatus.textContent = "";
   }
 }
 
@@ -854,6 +894,21 @@ function renderActualStatus() {
 
 const FFV_MIN_SAMPLES = 3;
 const FFV_RATIO_CLAMP = [0.1, 5]; // guards against near-zero means blowing up the ratio
+const FFV_OFFSET_CLAMP = [-15, 15]; // °C — generous but rules out a single wild sample skewing things
+
+// Rain/Cloud/Wind are ratio quantities ("20% too high" is meaningful) so
+// a multiplicative correction (mean × FFV) is right for them. Temperature
+// in °C has no true zero — 20°C isn't "twice as hot" as 10°C — so a
+// ratio correction can behave oddly near/below freezing. It gets an
+// additive correction instead (mean + FFV), tracked as a separate running
+// average alongside the ratio one, rather than reinterpreting.
+function isRatioCondition(conditionName) {
+  return conditionName !== "temperature";
+}
+
+function applyCorrection(mean, ffv, conditionName) {
+  return isRatioCondition(conditionName) ? mean * ffv : mean + ffv;
+}
 
 function ffvStorageKey(areaCode) {
   return `forecast-compare:ffv:${areaCode}`;
@@ -896,6 +951,10 @@ function clampRatio(ratio) {
   return Math.min(FFV_RATIO_CLAMP[1], Math.max(FFV_RATIO_CLAMP[0], ratio));
 }
 
+function clampOffset(offset) {
+  return Math.min(FFV_OFFSET_CLAMP[1], Math.max(FFV_OFFSET_CLAMP[0], offset));
+}
+
 // Records one (mean, actual) sample into the FFV store, extended to also
 // track accuracy: the raw error is straightforward (|mean - actual|).
 // The corrected error is scored using the FFV as it stood BEFORE this
@@ -911,35 +970,40 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual) {
   const entry = (store[conditionName][sourceId][day] ??= {
     count: 0,
     sumRatio: 0,
+    sumOffset: 0,
     sumAbsErrorRaw: 0,
     scoredCount: 0,
     sumAbsErrorCorrected: 0
   });
 
   if (entry.count >= FFV_MIN_SAMPLES) {
-    const currentFFV = entry.sumRatio / entry.count;
-    entry.sumAbsErrorCorrected += Math.abs(mean * currentFFV - actual);
+    const currentFFV = isRatioCondition(conditionName)
+      ? entry.sumRatio / entry.count
+      : entry.sumOffset / entry.count;
+    entry.sumAbsErrorCorrected += Math.abs(applyCorrection(mean, currentFFV, conditionName) - actual);
     entry.scoredCount += 1;
   }
 
   entry.sumAbsErrorRaw += Math.abs(mean - actual);
   entry.sumRatio += clampRatio(actual / mean);
+  entry.sumOffset += clampOffset(actual - mean);
   entry.count += 1;
 }
 
 // Sweeps every rollback position with a known Actual value and folds each
 // (mean, actual) pair into the running per-day FFV average for this area,
-// for every DEMO source. Met Office is deliberately excluded here — its
-// FFV data comes from the committed history file instead (see
+// for every DEMO source. Real sources are deliberately excluded here —
+// their FFV data comes from the committed history file instead (see
 // loadCommittedHistory), which is the single, de-duplicated source of
-// truth for it. Re-running this for the same rollback window on every
-// page load WOULD double-count if Met Office were included, since a
+// truth for them. Re-running this for the same rollback window on every
+// page load WOULD double-count if real sources were included, since a
 // revisit re-adds the same days; the committed-history replay avoids
 // that by rebuilding from scratch each time rather than incrementing.
 function updateFFVHistory() {
   if (!state.areaCode || state.actual.status !== "ready") return;
 
   const store = loadFFVStore(state.areaCode);
+  const realIds = realSourceIds();
 
   for (let rollbackDays = 1; rollbackDays <= MAX_ROLLBACK; rollbackDays++) {
     Object.keys(CONFIG.conditions).forEach(conditionName => {
@@ -947,7 +1011,7 @@ function updateFFVHistory() {
       if (actual === null || actual === undefined) return;
 
       CONFIG.forecasters
-        .filter(source => source.id !== "metoffice")
+        .filter(source => !realIds.includes(source.id))
         .forEach(source => {
           for (let day = 1; day <= 7; day++) {
             const mean = threeDayMean(day, source, conditionName, rollbackDays);
@@ -962,13 +1026,15 @@ function updateFFVHistory() {
 }
 
 // Returns the learned FFV for this source/condition/day, or null if there
-// isn't enough history yet to trust it.
+// isn't enough history yet to trust it. For Temperature this is an
+// additive offset (°C); for everything else, a multiplicative ratio —
+// see applyCorrection for how each gets used.
 function ffvFor(source, conditionName, day) {
   if (!state.areaCode) return null;
   const store = loadFFVStore(state.areaCode);
   const entry = store[conditionName]?.[source.id]?.[day];
   if (!entry || entry.count < FFV_MIN_SAMPLES) return null;
-  return entry.sumRatio / entry.count;
+  return isRatioCondition(conditionName) ? entry.sumRatio / entry.count : entry.sumOffset / entry.count;
 }
 
 // The corrected (FFV-adjusted) value now gets its own column to the left
@@ -1081,7 +1147,7 @@ function headlineValueFor(conditionName) {
       const ffv = ffvFor(source, conditionName, day);
       if (ffv !== null) {
         const mean = threeDayMean(day, source, conditionName, state.rollback);
-        if (mean !== null) return mean * ffv;
+        if (mean !== null) return applyCorrection(mean, ffv, conditionName);
       }
       return forecastValueFor(day, source, conditionName, state.rollback);
     })
@@ -1115,7 +1181,18 @@ function hourlyValueFor(conditionName) {
   const metOffice = CONFIG.forecasters.find(source => source.id === "metoffice");
   const day = idx < 24 ? 1 : 2;
   const ffv = ffvFor(metOffice, conditionName, day);
-  return ffv !== null ? raw * ffv : raw;
+  return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
+}
+
+// Direction can't be medianed across sources the way speed can (it's
+// angular, not linear) — this just takes the first real source that has
+// a direction available, in REAL_SOURCES order.
+function anyRealWindDirection(day, rollbackDays) {
+  for (const { id } of REAL_SOURCES) {
+    const direction = realSourceWindDirectionFor(id, day, rollbackDays);
+    if (direction !== null) return direction;
+  }
+  return null;
 }
 
 function renderHeadline() {
@@ -1173,7 +1250,7 @@ function renderHeadline() {
     if (conditionName === "wind") {
       const direction = showHourly
         ? state.hourly.windDirection?.[state.hourIndex] ?? null
-        : metOfficeWindDirectionFor(day, state.rollback);
+        : anyRealWindDirection(day, state.rollback);
       const compass = compassLabel(direction);
       const rotation = windArrowRotation(direction);
       if (compass !== null && rotation !== null) {
@@ -1326,7 +1403,7 @@ function renderTable() {
       correctedCell.className = "col-corrected" + tintClass;
       if (ffv !== null) {
         const mean = threeDayMean(day, source, state.condition, rollbackDays);
-        correctedCell.textContent = mean !== null ? formatValue(mean * ffv, state.condition) : "–";
+        correctedCell.textContent = mean !== null ? formatValue(applyCorrection(mean, ffv, state.condition), state.condition) : "–";
       } else {
         correctedCell.textContent = "–";
       }
@@ -1340,7 +1417,7 @@ function renderTable() {
         const mean = threeDayMean(day, source, state.condition, rollbackDays);
         const adjusted = document.createElement("small");
         adjusted.className = "ffv-hint";
-        adjusted.textContent = mean !== null ? `≈${formatValue(mean * ffv, state.condition)} adj.` : "";
+        adjusted.textContent = mean !== null ? `≈${formatValue(applyCorrection(mean, ffv, state.condition), state.condition)} adj.` : "";
         cell.appendChild(adjusted);
       }
 
@@ -1396,12 +1473,12 @@ function renderTable() {
   renderHeadline();
 }
 
-// ---- One-off Met Office history backfill ----
-// A year of real (mean, actual) pairs for Met Office, so the FFV for
-// that source starts from a genuine base instead of building up one day
-// at a time. Manually triggered — this is a large request, not something
-// to re-run on every page load. Sunshine/UV aren't covered (see
-// REAL_METOFFICE_CONDITIONS) so they're skipped entirely here.
+// ---- One-off real-source history backfill ----
+// A year of real (mean, actual) pairs for every real source, so FFV
+// starts from a genuine base instead of building up one day at a time.
+// Manually triggered — this is a large request, not something to re-run
+// on every page load. Sunshine/UV aren't covered (see
+// REAL_DATA_CONDITIONS) so they're skipped entirely here.
 const BACKFILL_DAYS = 365;
 const BACKFILL_FIELD_FOR_CONDITION = {
   rain: "precip",
@@ -1415,19 +1492,58 @@ function renderBackfillStatus() {
   backfillStatus.classList.remove("is-error");
 
   if (state.backfill.status === "loading") {
-    backfillStatus.textContent = "Fetching a year of real Met Office data — this is a big request, may take a little while…";
+    backfillStatus.textContent = "Fetching a year of real data — this is a big request, may take a little while…";
   } else if (state.backfill.status === "error") {
     backfillStatus.textContent = `Backfill failed: ${state.backfill.error}`;
     backfillStatus.classList.add("is-error");
   } else if (state.backfill.status === "done") {
-    backfillStatus.textContent = `Done — added ${state.backfill.samplesAdded} real Met Office samples to ${state.areaCode || "this area"}'s FFV history.`;
+    backfillStatus.textContent = `Done — added ${state.backfill.samplesAdded} real samples to ${state.areaCode || "this area"}'s FFV history.`;
   } else {
     backfillStatus.textContent = "";
   }
   if (backfillButton) backfillButton.disabled = state.backfill.status === "loading";
 }
 
-async function backfillMetOfficeHistory() {
+async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
+  const hourlyVars = [];
+  for (let d = 1; d <= 7; d++) {
+    hourlyVars.push(
+      `temperature_2m_previous_day${d}`,
+      `precipitation_previous_day${d}`,
+      `wind_speed_10m_previous_day${d}`,
+      `cloud_cover_previous_day${d}`
+    );
+  }
+  const params = new URLSearchParams({
+    latitude: state.lat,
+    longitude: state.lon,
+    hourly: hourlyVars.join(","),
+    start_date: isoDate(start),
+    end_date: isoDate(end),
+    models: model,
+    wind_speed_unit: "mph",
+    timezone: "auto"
+  });
+  const res = await fetch(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
+  if (!res.ok) throw new Error(`${sourceId} history lookup failed`);
+  const data = await res.json();
+  const hourlyTime = data.hourly.time;
+
+  const byLeadDay = {};
+  for (let d = 1; d <= 7; d++) {
+    const tempMax = aggregateHourlyByDay(hourlyTime, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "max");
+    const tempMin = aggregateHourlyByDay(hourlyTime, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "min");
+    byLeadDay[d] = {
+      tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
+      precip: aggregateHourlyByDay(hourlyTime, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
+      wind: aggregateHourlyByDay(hourlyTime, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
+      cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean")
+    };
+  }
+  return byLeadDay;
+}
+
+async function backfillRealSourceHistory() {
   if (!state.lat || !state.lon || !state.areaCode) {
     state.backfill = { status: "error", error: "Load a location on the main page first", samplesAdded: 0 };
     renderBackfillStatus();
@@ -1441,7 +1557,9 @@ async function backfillMetOfficeHistory() {
     const end = todayAtMidnight();
     const start = addDays(end, -BACKFILL_DAYS);
 
-    // Real actual weather for the year (ERA5-backed archive).
+    // Real actual weather for the year (ERA5-backed archive) — fetched
+    // once and shared across every real source, since Actual doesn't
+    // depend on which forecast model is being scored against it.
     const actualParams = new URLSearchParams({
       latitude: state.lat,
       longitude: state.lon,
@@ -1467,41 +1585,10 @@ async function backfillMetOfficeHistory() {
       })
     };
 
-    // Real Met Office lead-time forecasts for the same year.
-    const hourlyVars = [];
-    for (let d = 1; d <= 7; d++) {
-      hourlyVars.push(
-        `temperature_2m_previous_day${d}`,
-        `precipitation_previous_day${d}`,
-        `wind_speed_10m_previous_day${d}`,
-        `cloud_cover_previous_day${d}`
-      );
-    }
-    const moParams = new URLSearchParams({
-      latitude: state.lat,
-      longitude: state.lon,
-      hourly: hourlyVars.join(","),
-      start_date: isoDate(start),
-      end_date: isoDate(end),
-      models: METOFFICE_MODEL,
-      wind_speed_unit: "mph",
-      timezone: "auto"
-    });
-    const moRes = await fetch(`${PREVIOUS_RUNS_URL}?${moParams.toString()}`);
-    if (!moRes.ok) throw new Error("Met Office history lookup failed");
-    const moData = await moRes.json();
-    const moHourlyTime = moData.hourly.time;
-
-    const byLeadDay = {};
-    for (let d = 1; d <= 7; d++) {
-      const tempMax = aggregateHourlyByDay(moHourlyTime, moData.hourly[`temperature_2m_previous_day${d}`], dayCount, "max");
-      const tempMin = aggregateHourlyByDay(moHourlyTime, moData.hourly[`temperature_2m_previous_day${d}`], dayCount, "min");
-      byLeadDay[d] = {
-        tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
-        precip: aggregateHourlyByDay(moHourlyTime, moData.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
-        wind: aggregateHourlyByDay(moHourlyTime, moData.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
-        cloud: aggregateHourlyByDay(moHourlyTime, moData.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean")
-      };
+    // Real lead-time forecasts for the same year, one fetch per source.
+    const byLeadDayBySource = {};
+    for (const { id, model } of REAL_SOURCES) {
+      byLeadDayBySource[id] = await fetchYearOfModelData(id, model, start, end, dayCount);
     }
 
     // Fold every (mean, actual) pair straight into the same FFV store the
@@ -1510,23 +1597,26 @@ async function backfillMetOfficeHistory() {
     let samplesAdded = 0;
 
     for (let i = 0; i < dayCount; i++) {
-      REAL_METOFFICE_CONDITIONS.forEach(conditionName => {
+      REAL_DATA_CONDITIONS.forEach(conditionName => {
         const actual = yearActual[BACKFILL_FIELD_FOR_CONDITION[conditionName]][i];
         if (actual === null || actual === undefined) return;
 
-        for (let day = 1; day <= 7; day++) {
-          const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
-          const field = BACKFILL_FIELD_FOR_CONDITION[conditionName];
-          const values = leadDays
-            .map(d => byLeadDay[d]?.[field]?.[i])
-            .filter(v => v !== null && v !== undefined);
-          if (!values.length) continue;
-          const mean = values.reduce((a, b) => a + b, 0) / values.length;
-          if (!mean) continue;
+        REAL_SOURCES.forEach(({ id: sourceId }) => {
+          const byLeadDay = byLeadDayBySource[sourceId];
+          for (let day = 1; day <= 7; day++) {
+            const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
+            const field = BACKFILL_FIELD_FOR_CONDITION[conditionName];
+            const values = leadDays
+              .map(d => byLeadDay[d]?.[field]?.[i])
+              .filter(v => v !== null && v !== undefined);
+            if (!values.length) return;
+            const mean = values.reduce((a, b) => a + b, 0) / values.length;
+            if (!mean) return;
 
-          recordFFVSample(store, conditionName, "metoffice", day, mean, actual);
-          samplesAdded += 1;
-        }
+            recordFFVSample(store, conditionName, sourceId, day, mean, actual);
+            samplesAdded += 1;
+          }
+        });
       });
     }
 
@@ -1554,8 +1644,16 @@ condition.addEventListener("change", () => {
 // want LEFT = past and RIGHT = future — so the raw value is negated to
 // get rollbackDays (positive = past, negative = future), keeping that
 // existing convention unchanged everywhere else in the app.
+function updateSliderFill(el) {
+  const min = Number(el.min);
+  const max = Number(el.max);
+  const percent = ((Number(el.value) - min) / (max - min)) * 100;
+  el.style.setProperty("--fill", `${percent}%`);
+}
+
 rollback.addEventListener("input", () => {
   state.rollback = -Number(rollback.value);
+  updateSliderFill(rollback);
   cancelHourlyHold();
   updateRollbackLabel();
   renderTable();
@@ -1585,12 +1683,16 @@ function cancelHourlyHold() {
   }
   state.hourlyActive = false;
   state.hourIndex = 0;
-  if (hourSlider) hourSlider.value = 0;
+  if (hourSlider) {
+    hourSlider.value = 0;
+    updateSliderFill(hourSlider);
+  }
   updateHourLabel();
 }
 
 if (hourSlider) {
   hourSlider.max = String(loadHourRange());
+  updateSliderFill(hourSlider);
 
   hourSlider.addEventListener("input", () => {
     if (state.hourlyHoldTimer) {
@@ -1599,6 +1701,7 @@ if (hourSlider) {
     }
     state.hourIndex = Number(hourSlider.value);
     state.hourlyActive = true;
+    updateSliderFill(hourSlider);
     updateHourLabel();
     renderHeadline();
   });
@@ -1627,9 +1730,10 @@ document.getElementById("updateLocation").addEventListener("click", () => {
 });
 
 if (backfillButton) {
-  backfillButton.addEventListener("click", backfillMetOfficeHistory);
+  backfillButton.addEventListener("click", backfillRealSourceHistory);
 }
 
+updateSliderFill(rollback);
 updateRollbackLabel();
 updateHourLabel();
 renderTable();

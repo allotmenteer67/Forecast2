@@ -51,18 +51,25 @@ hosting. Today's "Actual" figure is a running total and will read
 
 Forecaster figures for BBC, Meteoblue, YR, AccuWeather etc. are still
 demo/placeholder data — those providers don't offer free public APIs for
-past forecast runs. **Met Office is different**: Rain, Cloud, Wind and
-Temperature now use real UK Met Office model data (via Open-Meteo's
-Previous Runs API, model `ukmo_global_deterministic_10km`), both for the
-day-to-day table and for FFV. Sunshine and UV aren't in that dataset, so
-Met Office still uses the demo formula for those two conditions only.
+past forecast runs. **Real sources are different**: Rain, Cloud, Wind and
+Temperature use real model data (via Open-Meteo's Previous Runs API) for
+sources listed in `REAL_SOURCES` in `app.js` — currently Met Office
+(`ukmo_global_deterministic_10km`) and ECMWF (`ecmwf_ifs025`) — both for
+the day-to-day table and for FFV. Sunshine and UV aren't in that dataset,
+so real sources fall back to the demo formula for those two conditions
+only. Adding another real source later is just another entry in
+`REAL_SOURCES` (plus a matching forecaster in `CONFIG.forecasters` and
+`settings.js`) — everything else (fetching, indexing, FFV, accuracy, the
+headline) already loops over the registry rather than naming a specific
+source.
 
 An "advanced" section on the main page (collapsed by default) can backfill
-a year of real Met Office history straight into the FFV store for the
-current postcode area, using Open-Meteo's Historical Weather Archive for
-Actual and the Previous Runs API for Met Office's lead-time forecasts —
-so the Met Office FFV doesn't have to build up one day at a time. It's a
-large one-off request, not something that runs automatically.
+a year of real history straight into the FFV store for the current
+postcode area, for every real source — using Open-Meteo's Historical
+Weather Archive for Actual (fetched once, shared across sources) and the
+Previous Runs API for each source's own lead-time forecasts, so FFV
+doesn't have to build up one day at a time. It's a large one-off request,
+not something that runs automatically.
 
 ## Target date: past and future
 
@@ -80,9 +87,9 @@ Actual weather, FFV training, accuracy scoring.
 Corrected column applies FFV (learned entirely from past data) to today's
 live forecast, turning "raw forecast" into "the app's own best guess."
 The **freshest available real day** shifts with how far ahead you're
-looking — 3 days ahead, the freshest real Met Office data is the
-lead-3 forecast (issued today), not lead-1 (which would need to be issued
-tomorrow and doesn't exist yet). Rows for lead times that haven't been
+looking — 3 days ahead, the freshest real data for any given real source
+is the lead-3 forecast (issued today), not lead-1 (which would need to be
+issued tomorrow and doesn't exist yet). Rows for lead times that haven't been
 issued yet just fall back to demo data, same convention already used
 everywhere else in the app when real data isn't available — not a new
 special case. FFV training itself only ever runs over past dates (it
@@ -96,16 +103,20 @@ logic automatically.
 
 A second slider beneath the headline grid, always anchored to "now"
 rather than following the Date slider — the two are fully independent.
-Its data source is deliberately a plain live forecast (`WEATHER_URL` with
-`models=ukmo_global_deterministic_10km`, `forecast_days: 3`), not the
-`previous_dayN` lead-time data used everywhere else — that answers "what
-was forecast N days ago," not "what's happening in the next two days."
+Its data source is deliberately a plain live forecast (`WEATHER_URL`,
+Met Office's model specifically — see below), not the `previous_dayN`
+lead-time data used everywhere else — that answers "what was forecast N
+days ago," not "what's happening in the next two days."
 
 Rather than building a slow-maturing hour-specific FFV (24 hours × up to
 48 lead-hours would mean hundreds of buckets competing for the same pool
 of history), it reuses the existing daily FFV: day 1's correction for
-the first 24h, day 2's beyond that. Met Office only, same as the rest of
-the real-data features — demo sources have never had an hourly concept.
+the first 24h, day 2's beyond that. Deliberately Met Office only, even
+though the daily view now draws on multiple real sources (see
+`REAL_SOURCES`) — extending hourly to more than one source would mean a
+second live fetch per source, which felt like its own piece of work
+rather than something to fold in alongside adding ECMWF. Demo sources
+have never had an hourly concept regardless.
 
 Dragging updates Rain/Temperature/Wind live; releasing starts a 5-second
 hold (`state.hourlyHoldTimer`) before reverting to the daily view, so
@@ -132,15 +143,19 @@ forecaster's most-refined forecast for the target date, using each
 source's Corrected value where it has enough FFV history, Raw otherwise.
 Median deliberately, not mean: one wildly-off value (a stray 45°C in
 November) gets outvoted rather than skewing the figure, with no
-threshold to tune. It's built from whatever's currently selected on the
-Forecasters page — mostly demo data today, genuinely more trustworthy as
-real sources and FFV history grow over time.
+threshold to tune. `headlineValueFor()` filters to real sources only when
+any exist for that condition (see `isRealSource`), so demo noise can't
+dilute a real signal — currently Met Office and ECMWF for Rain/Cloud/
+Wind/Temperature, falling back to the full selection for Sunshine/UV
+since nothing real exists for those yet.
 
 Wind direction (shown as a rotating arrow, plus compass letters
 underneath, alongside the headline's wind figure — works for both the
-daily and hourly views now) comes from Met Office specifically — the
-only source with real direction data, reported at the hour the day's
-peak wind speed occurred for the daily view, or live for whichever hour
+daily and hourly views now) comes from whichever real source has it
+available first, in `REAL_SOURCES` order (`anyRealWindDirection()`) —
+direction can't be medianed across sources the way speed can, since it's
+angular, not linear. Reported at the hour the day's peak wind speed
+occurred for the daily view, or live for whichever hour
 the hour slider is on. The arrow points **downwind** (deliberately
 rotated 180° from the raw meteorological reading, which is the direction
 wind blows *from*) — more directly useful for "which way will this push
@@ -148,11 +163,11 @@ me" than the met-convention reading.
 
 ## Auto-backfill on first setup
 
-The first time a postcode area has no Met Office FFV history at all, the
+The first time a postcode area has no real-source FFV history at all, the
 app automatically runs the same year-long backfill the advanced button
-triggers manually — no need to find and press it. It only ever fires
-once per area; after that, the daily Action and the committed history
-file keep it current.
+triggers manually, for every source in `REAL_SOURCES` — no need to find
+and press it. It only ever fires once per area; after that, the daily
+Action and the committed history file keep it current.
 
 ## Fudge factor (FFV)
 
@@ -160,16 +175,23 @@ For each forecaster, condition, and day-out row, the app keeps a running
 3-day mean of the forecast value (day 1 and day 7 use a 2/3-point mean at
 the edges — see `threeDayMean()` in `app.js`). Every time Actual weather
 loads for a postcode area, that mean is compared against Actual for every
-past target date still in view, and the ratio (`actual ÷ mean`) is folded
-into a running average — the Fudge Factor Value — stored in the browser's
+past target date still in view, and the result is folded into a running
+average — the Fudge Factor Value — stored in the browser's
 `localStorage`, keyed by postcode area.
 
-Once a cell has at least 3 samples, an adjusted figure (`mean × FFV`)
-appears under it. Because the forecaster data is currently synthetic, this
-adjusted figure is only a proof of the mechanism for now — it becomes
-meaningful once real forecast data replaces the demo values, or as a
-standalone experiment if you're comparing the demo model's internal
-consistency against real Actual weather.
+**Two correction types, not one** (`isRatioCondition()` in `app.js`):
+Rain, Cloud, and Wind are ratio quantities, so FFV there is
+`actual ÷ mean`, applied as `mean × FFV`. Temperature has no true zero on
+the Celsius scale — 20°C isn't "twice as hot" as 10°C — so a
+multiplicative correction can misbehave near/below freezing. Temperature
+instead gets an additive FFV (`actual − mean`), applied as `mean + FFV`.
+Both are tracked as separate running sums in the same store entry
+(`sumRatio` and `sumOffset`), so the fix didn't require migrating or
+discarding any existing Temperature history — it just started
+accumulating the right kind of correction from that point on.
+`applyCorrection(mean, ffv, conditionName)` is the one place that decides
+which formula to use; every call site (the table, the headline, the
+hourly slider, accuracy scoring) goes through it.
 
 Once a cell has at least 3 samples, its Corrected column shows the
 adjusted figure (`mean × FFV`); before that it shows "–". An older,
@@ -200,13 +222,15 @@ performed in practice, not hindsight applied to old data.
 ## Automatic daily collection
 
 A GitHub Action (`.github/workflows/collect-weather.yml`) runs once a day,
-fetches a 7-day rolling window of real Actual + Met Office data, and
-commits the result to `data/history.json`. That file deliberately holds
-**no location information** — just dates and weather numbers — so it's
-safe in a public repo. The app fetches it on every load and rebuilds Met
-Office's FFV entries from scratch each time, so revisiting the page never
-double-counts, and a single missed run self-heals on the next one (the
-window overlaps by design).
+fetches a 7-day rolling window of real Actual + real-source data for
+every source in `MODELS` (the collector script's own registry, kept in
+sync with `REAL_SOURCES` in `app.js`), and commits the result to
+`data/history.json`. That file deliberately holds **no location
+information** — just dates and weather numbers — so it's safe in a
+public repo. The app fetches it on every load and rebuilds every real
+source's FFV entries from scratch each time, so revisiting the page
+never double-counts, and a single missed run self-heals on the next one
+(the window overlaps by design).
 
 **One-time setup**, since the location itself has to stay out of the
 repo: in the repo's **Settings → Secrets and variables → Actions**, add
@@ -224,9 +248,14 @@ Once the secrets are set, the Action runs automatically on its daily
 schedule — or trigger it manually from the repo's **Actions** tab
 (**Collect weather data → Run workflow**) to test it or catch up sooner.
 
-Adding more real Open-Meteo models later (ECMWF, GFS, DWD ICON, etc.) is
-a matter of adding entries to the `MODELS` array in
-`scripts/collect-weather.js`, plus a matching forecaster id in `app.js`.
+ECMWF was added this way as the second real source — a matter of adding
+an entry to `MODELS` in `scripts/collect-weather.js`, a matching entry
+in `REAL_SOURCES` in `app.js`, and a forecaster entry in both
+`CONFIG.forecasters` and `settings.js`'s list. Adding a third (GFS, DWD
+ICON, or any of the dozen or so other national models Open-Meteo covers
+the same way) is the same four small additions — everything else in the
+codebase already loops over the registries rather than naming a specific
+source.
 
 ## Display precision
 
