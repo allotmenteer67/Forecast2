@@ -118,22 +118,44 @@ second live fetch per source, which felt like its own piece of work
 rather than something to fold in alongside adding ECMWF. Demo sources
 have never had an hourly concept regardless.
 
-Dragging updates Rain/Temperature/Wind live; releasing starts a 5-second
-hold (`state.hourlyHoldTimer`) before reverting to the daily view, so
-there's a moment to read the dragged-to value. Touching the Date slider
-calls `cancelHourlyHold()` and reverts immediately instead — an
-unambiguous "done with hourly" signal.
+Dragging updates Rain/Temperature/Wind live. Originally this reverted to
+the daily view after a 5-second hold — removed after user testing showed
+it interrupting someone still actively fine-tuning a specific time, which
+defeated the point of the hold in the first place. Now `resetHourly()`
+only fires on an explicit signal: touching the Date slider, or the page
+going to background/closing (`visibilitychange`, checked via
+`document.hidden`) — "off screen" is treated as "done looking," not "5
+seconds have passed." A dragged position otherwise persists indefinitely.
 
-Sunshine has no hourly reading (a daily total doesn't split into one),
-so it stays on its daily figure, shown at reduced opacity
-(`.headline-cell-dimmed`) while hourly is active. Specifically at night
-(checked against real sunrise/sunset for the currently-shown hour) it
-swaps to a moon phase emoji instead — a simple synodic-month
-approximation (`moonPhaseEmoji()`), accurate to within about a day, which
-is plenty for a decorative icon.
+Sunshine has no hourly reading of its own (a daily total doesn't split
+into one), so while hourly is active it shows real hourly UV instead
+(`uv_index`, fetched alongside the rest of the hourly data), expressed
+as a percentage of that day's peak (`uv_index_max`) rather than a raw
+index number — `hourlyUVPercent()`. Combining UV into the Sunshine cell
+this way avoids a fifth headline cell while still surfacing genuine
+hour-by-hour data, unlike the flat daily Sunshine total. Specifically at
+night (checked against real sunrise/sunset for the currently-shown hour)
+it swaps to a moon phase emoji instead of a UV percentage — a simple
+synodic-month approximation (`moonPhaseEmoji()`), accurate to within
+about a day, which is plenty for a decorative icon; a UV% figure at
+night would just read as a string of zeros. The `.headline-cell-dimmed`
+CSS class from an earlier (dimmed-daily-figure) approach is no longer
+applied anywhere, but left in the stylesheet rather than removed.
 
 24 vs 48 hour range is set on the Forecasters page and persists in
 `localStorage` (`forecast-compare:hourRange`).
+
+## Headline units on the label line
+
+Each headline cell's unit now lives on the label ("RAIN mm") rather than
+appended to the value ("5.4mm") — the value shows just the number. This
+was specifically to stop the whole value string sliding around as digit
+count changes while the hour slider is dragged (a single-digit "5"
+becoming a two-digit "23" used to shift the trailing unit text with it,
+reading as choppy). `.headline-value` also uses `tabular-nums` so digit
+widths themselves stay consistent, not just the units. Sunshine's label
+swaps to "%" instead of "hrs" specifically while showing the hourly UV
+reading, since "hrs" wouldn't apply to a percentage.
 
 ## The headline figure
 

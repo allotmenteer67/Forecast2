@@ -192,12 +192,13 @@ const state = {
     precipitation: [],
     windSpeed: [],
     windDirection: [],
+    uvIndex: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
-    sunsetByDate: {}
+    sunsetByDate: {},
+    uvMaxByDate: {} // "YYYY-MM-DD" -> that day's peak UV index
   },
   hourIndex: 0, // 0 = now; the hour slider's current position
-  hourlyActive: false, // true while dragging or within the 5s hold after
-  hourlyHoldTimer: null
+  hourlyActive: false // true while the hour slider is showing a specific hour rather than "Now"
 };
 
 const postcode = document.getElementById("postcode");
@@ -207,6 +208,7 @@ const rollbackLabel = document.getElementById("rollbackLabel");
 const table = document.getElementById("forecastTable");
 const conditionTitle = document.getElementById("conditionTitle");
 const locationLabel = document.getElementById("locationLabel");
+const actualLine = document.getElementById("actualLine");
 const actualStatus = document.getElementById("actualStatus");
 const realSourceStatus = document.getElementById("metOfficeStatus");
 const backfillButton = document.getElementById("backfillButton");
@@ -558,6 +560,21 @@ function isDaytime(date) {
   return t >= new Date(sunrise).getTime() && t < new Date(sunset).getTime();
 }
 
+// Real hourly UV expressed as a percentage of that day's peak UV, rather
+// than a raw index number — more intuitive for a single hour ("75% of
+// today's strongest UV") than an absolute figure, and a natural way to
+// combine UV with Sunshine into one hourly reading (Sunshine itself has
+// no hourly concept — see hourlyValueFor). Null at night is expected and
+// handled by the moon swap instead, not shown as 0%.
+function hourlyUVPercent(idx) {
+  const uv = state.hourly.uvIndex?.[idx];
+  const iso = state.hourly.times?.[idx];
+  if (uv === null || uv === undefined || !iso) return null;
+  const dayMax = state.hourly.uvMaxByDate[isoDate(new Date(iso))];
+  if (!dayMax) return null;
+  return Math.round((uv / dayMax) * 100);
+}
+
 // The hourly slider's data source. Deliberately NOT the previous_dayN
 // lead-time data used elsewhere — that answers "what was forecast N days
 // ago," which isn't what "what's happening in the next 24-48h" needs.
@@ -571,8 +588,8 @@ async function fetchHourlyForecast(lat, lon) {
     const params = new URLSearchParams({
       latitude: lat,
       longitude: lon,
-      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m",
-      daily: "sunrise,sunset",
+      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,uv_index",
+      daily: "sunrise,sunset,uv_index_max",
       models: REAL_SOURCES.find(s => s.id === "metoffice").model, // hourly stays Met Office-specific for now — see README
       wind_speed_unit: "mph",
       forecast_days: 3,
@@ -592,12 +609,15 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.precipitation = data.hourly.precipitation.slice(from);
     state.hourly.windSpeed = data.hourly.wind_speed_10m.slice(from);
     state.hourly.windDirection = data.hourly.wind_direction_10m.slice(from);
+    state.hourly.uvIndex = data.hourly.uv_index.slice(from);
 
     state.hourly.sunriseByDate = {};
     state.hourly.sunsetByDate = {};
+    state.hourly.uvMaxByDate = {};
     data.daily.time.forEach((date, i) => {
       state.hourly.sunriseByDate[date] = data.daily.sunrise[i];
       state.hourly.sunsetByDate[date] = data.daily.sunset[i];
+      state.hourly.uvMaxByDate[date] = data.daily.uv_index_max[i];
     });
 
     state.hourly.status = "ready";
@@ -1216,33 +1236,44 @@ function renderHeadline() {
 
     const label = document.createElement("span");
     label.className = "headline-label";
-    label.textContent = CONFIG.conditions[conditionName].name;
 
     const valueEl = document.createElement("span");
     valueEl.className = "headline-value";
 
+    // Sunshine shows UV as a % while hourly is active during the day —
+    // the label needs to reflect that, not Sunshine's usual "hrs" unit.
+    const showingUVPercent = conditionName === "sunshine" && showHourly && !night;
+    label.textContent = showingUVPercent
+      ? `${CONFIG.conditions[conditionName].name} %`
+      : `${CONFIG.conditions[conditionName].name} ${unitLabel(conditionName)}`;
+
     if (conditionName === "sunshine") {
-      // No hourly concept — a daily total doesn't decompose into an
-      // hour's reading. Shown dimmed while the hour slider is active (so
-      // it doesn't look broken for not responding), and swapped for the
-      // moon phase specifically at night, when a sunshine figure would
-      // otherwise look like a mistake rather than just irrelevant.
-      const value = headlineValueFor(conditionName);
-      if (showHourly) cell.classList.add("headline-cell-dimmed");
-      if (night) {
-        valueEl.textContent = moonPhaseEmoji(hourDate);
-        valueEl.classList.add("headline-moon");
+      // Sunshine itself has no hourly concept — a daily total doesn't
+      // decompose into an hour's reading. While the hour slider is
+      // active, this cell shows real hourly UV instead, expressed as %
+      // of that day's peak (see hourlyUVPercent) — genuinely informative
+      // hour-by-hour, unlike a flat daily Sunshine figure, and a natural
+      // way to combine UV with Sunshine into one reading rather than a
+      // fifth headline cell. At night the UV% would just be a boring
+      // string of zeros, so the moon phase takes over there instead.
+      if (showHourly) {
+        if (night) {
+          valueEl.textContent = moonPhaseEmoji(hourDate);
+          valueEl.classList.add("headline-moon");
+        } else {
+          const percent = hourlyUVPercent(state.hourIndex);
+          valueEl.textContent = percent !== null ? String(percent) : "–";
+        }
       } else {
-        valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+        const value = headlineValueFor(conditionName);
+        valueEl.textContent = formatValue(value, conditionName);
       }
     } else if (showHourly) {
       const value = hourlyValueFor(conditionName);
-      valueEl.textContent = value !== null
-        ? `${formatValue(value, conditionName)}${unitLabel(conditionName)}`
-        : "–";
+      valueEl.textContent = value !== null ? formatValue(value, conditionName) : "–";
     } else {
       const value = headlineValueFor(conditionName);
-      valueEl.textContent = `${formatValue(value, conditionName)}${unitLabel(conditionName)}`;
+      valueEl.textContent = formatValue(value, conditionName);
     }
 
     cell.append(label, valueEl);
@@ -1256,7 +1287,17 @@ function renderHeadline() {
       if (compass !== null && rotation !== null) {
         const arrow = document.createElement("span");
         arrow.className = "wind-arrow";
-        arrow.textContent = "↑";
+        // A hand-drawn shape, not a font glyph — arrow characters like "↑"
+        // aren't actually centered within their own em-box in most fonts,
+        // so even a perfectly centered CSS box rotates an off-center
+        // picture. This SVG's geometry is centered on the viewBox
+        // deliberately, so rotation has no font-rendering ambiguity to
+        // go wrong.
+        arrow.innerHTML =
+          '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">' +
+          '<line x1="12" y1="19" x2="12" y2="5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>' +
+          '<polygon points="12,3 7,9 17,9" fill="currentColor"/>' +
+          '</svg>';
         arrow.style.transform = `rotate(${rotation}deg)`;
         arrow.setAttribute("aria-hidden", "true");
 
@@ -1333,6 +1374,7 @@ function renderTable() {
   const dayHead = document.createElement("th");
   dayHead.textContent = "Day out";
   dayHead.rowSpan = 2;
+  dayHead.className = "day-head";
   sourceRow.appendChild(dayHead);
 
   const subRow = document.createElement("tr");
@@ -1436,39 +1478,31 @@ function renderTable() {
     tbody.appendChild(row);
   });
 
-  // Actual weather row — one real value for the target date, spanning
-  // all visible forecaster columns for comparison.
-  const actualRow = document.createElement("tr");
-  actualRow.className = "row-actual";
+  table.appendChild(tbody);
 
-  const actualLabelCell = document.createElement("td");
-  actualLabelCell.className = "day";
-  actualLabelCell.textContent = "Actual";
-  actualRow.appendChild(actualLabelCell);
-
-  const actualCell = document.createElement("td");
-  actualCell.colSpan = selectedSources.length * 2;
-
-  if (state.actual.status === "loading") {
-    actualCell.textContent = "Loading…";
-  } else if (state.actual.status === "error") {
-    actualCell.textContent = "Unavailable";
-  } else if (rollbackDays < 0) {
-    actualCell.textContent = `Hasn't happened yet — ${formatDateLong(targetDate)} is ${-rollbackDays} day${rollbackDays === -1 ? "" : "s"} away`;
-  } else if (rollbackDays === 0) {
-    actualCell.textContent = actualToday !== null
-      ? `${formatValue(actualToday, state.condition)} so far today (still recording)`
-      : "Still recording today";
-  } else if (actual !== null) {
-    actualCell.textContent = `${formatValue(actual, state.condition)} ${unitLabel(state.condition)} on ${formatDateLong(targetDate)}`;
-  } else {
-    actualCell.textContent = "–";
+  // Actual weather — deliberately NOT a row inside the horizontally
+  // scrolling table. With enough forecasters selected the table scrolls
+  // wide, and a colspan cell's text scrolls away with it — this sits
+  // below the table-wrap instead, so it's always visible regardless of
+  // scroll position.
+  if (actualLine) {
+    if (state.actual.status === "loading") {
+      actualLine.textContent = "Actual: loading…";
+    } else if (state.actual.status === "error") {
+      actualLine.textContent = "Actual: unavailable";
+    } else if (rollbackDays < 0) {
+      actualLine.textContent = `Actual: hasn't happened yet — ${formatDateLong(targetDate)} is ${-rollbackDays} day${rollbackDays === -1 ? "" : "s"} away`;
+    } else if (rollbackDays === 0) {
+      actualLine.textContent = actualToday !== null
+        ? `Actual: ${formatValue(actualToday, state.condition)} ${unitLabel(state.condition)} so far today (still recording)`
+        : "Actual: still recording today";
+    } else if (actual !== null) {
+      actualLine.textContent = `Actual: ${formatValue(actual, state.condition)} ${unitLabel(state.condition)} on ${formatDateLong(targetDate)}`;
+    } else {
+      actualLine.textContent = "Actual: –";
+    }
   }
 
-  actualRow.appendChild(actualCell);
-  tbody.appendChild(actualRow);
-
-  table.appendChild(tbody);
   renderAccuracy();
   renderHeadline();
 }
@@ -1654,7 +1688,7 @@ function updateSliderFill(el) {
 rollback.addEventListener("input", () => {
   state.rollback = -Number(rollback.value);
   updateSliderFill(rollback);
-  cancelHourlyHold();
+  resetHourly();
   updateRollbackLabel();
   renderTable();
 });
@@ -1676,11 +1710,13 @@ function updateHourLabel() {
   hourLabel.textContent = crossesDay ? `${time}, ${formatDateShort(d)}` : time;
 }
 
-function cancelHourlyHold() {
-  if (state.hourlyHoldTimer) {
-    clearTimeout(state.hourlyHoldTimer);
-    state.hourlyHoldTimer = null;
-  }
+// No timer-based revert — a dragged position stays put indefinitely so
+// there's never a countdown pressuring someone still fine-tuning a
+// specific time. Only resets on an explicit signal: touching the Date
+// slider (below), or the page being backgrounded/closed (see the
+// visibilitychange listener below) — "off screen" is treated as "done
+// looking," not "5 seconds have passed."
+function resetHourly() {
   state.hourlyActive = false;
   state.hourIndex = 0;
   if (hourSlider) {
@@ -1695,33 +1731,23 @@ if (hourSlider) {
   updateSliderFill(hourSlider);
 
   hourSlider.addEventListener("input", () => {
-    if (state.hourlyHoldTimer) {
-      clearTimeout(state.hourlyHoldTimer);
-      state.hourlyHoldTimer = null;
-    }
     state.hourIndex = Number(hourSlider.value);
     state.hourlyActive = true;
     updateSliderFill(hourSlider);
     updateHourLabel();
     renderHeadline();
   });
-
-  const startHold = () => {
-    if (!state.hourlyActive) return;
-    if (state.hourlyHoldTimer) clearTimeout(state.hourlyHoldTimer);
-    // Lingers for 5s so there's a moment to actually read the dragged-to
-    // value before it reverts, rather than snapping back the instant a
-    // finger lifts.
-    state.hourlyHoldTimer = setTimeout(() => {
-      cancelHourlyHold();
-      renderHeadline();
-    }, 5000);
-  };
-
-  hourSlider.addEventListener("pointerup", startHold);
-  hourSlider.addEventListener("touchend", startHold);
-  hourSlider.addEventListener("mouseup", startHold);
 }
+
+// Resets the hourly slider once the page is backgrounded or closed, so
+// it's back at "Now" whenever it's next opened — without needing a
+// countdown that could interrupt someone still actively looking at it.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && state.hourlyActive) {
+    resetHourly();
+    renderHeadline();
+  }
+});
 
 document.getElementById("updateLocation").addEventListener("click", () => {
   state.postcode = postcode.value.trim().toUpperCase();
