@@ -1276,7 +1276,11 @@ function renderHeadline() {
       valueEl.textContent = formatValue(value, conditionName);
     }
 
-    cell.append(label, valueEl);
+    const valueRow = document.createElement("div");
+    valueRow.className = "headline-value-row";
+    valueRow.appendChild(valueEl);
+
+    cell.append(label, valueRow);
 
     if (conditionName === "wind") {
       const direction = showHourly
@@ -1305,7 +1309,11 @@ function renderHeadline() {
         dirEl.className = "headline-direction";
         dirEl.textContent = compass;
 
-        cell.append(arrow, dirEl);
+        // Same row as the value, not a new line below it — otherwise the
+        // cell's height itself changes depending on whether direction
+        // data happens to be available, causing the whole grid to jump
+        // as the slider moves between states.
+        valueRow.append(arrow, dirEl);
       }
     }
 

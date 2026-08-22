@@ -75,6 +75,15 @@ header p {
   letter-spacing: 0.03em;
 }
 
+.headline-value-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 31px; /* matches .headline-value's own line height, so the
+                        row's height never depends on whether the wind
+                        arrow happens to be present */
+}
+
 .headline-value {
   color: var(--accent-dark);
   font-size: 26px;
@@ -150,9 +159,9 @@ input[type="range"]::-webkit-slider-runnable-track {
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 30px;
-  height: 30px;
-  margin-top: -13px;
+  width: 20px;
+  height: 20px;
+  margin-top: -8px;
   border-radius: 50%;
   background: white;
   border: 2px solid var(--accent);
@@ -172,8 +181,8 @@ input[type="range"]::-moz-range-progress {
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 30px;
-  height: 30px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: white;
   border: 2px solid var(--accent);
@@ -346,14 +355,14 @@ table {
 
 th.day-head,
 td.day {
-  width: 76px;
+  width: 70px;
 }
 
 th.sub-corrected,
 th.sub-raw,
 td.col-corrected,
 td.col-raw {
-  width: 88px;
+  width: 108px;
 }
 
 th,
