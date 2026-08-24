@@ -225,6 +225,17 @@ fieldset,
   margin-top: 7px;
 }
 
+.geo-button {
+  margin-top: 8px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  width: 100%;
+}
+
+.geo-button:hover {
+  background: #d4e6da;
+}
+
 input,
 select,
 button {
@@ -478,6 +489,7 @@ footer a:hover,
 .back-link {
   margin: 0 0 10px;
   font-size: 13px;
+  text-align: right;
 }
 
 .help-section h2 {

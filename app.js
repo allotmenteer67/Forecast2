@@ -271,6 +271,8 @@ const placeMenu = document.getElementById("placeMenu");
 const placeMenuList = document.getElementById("placeMenuList");
 const placesList = document.getElementById("placesList");
 const addCurrentPlaceButton = document.getElementById("addCurrentPlace");
+const useMyLocationButton = document.getElementById("useMyLocation");
+const geoStatus = document.getElementById("geoStatus");
 
 if (postcode) postcode.value = state.postcode;
 
@@ -372,6 +374,22 @@ function isoDate(date) {
 }
 
 // ---- Actual weather fetching ----
+
+// Reverse of geocodePostcode: given the device's raw coordinates (from
+// navigator.geolocation), finds the nearest real postcode via postcodes.io's
+// reverse-lookup endpoint. Everything else in the app (FFV storage, saved
+// places, the area-code label) is keyed on a postcode string, so this just
+// feeds a postcode into the existing switchToPostcode() flow rather than
+// needing a separate lat/lon-based code path.
+async function reverseGeocodeCoords(lat, lon) {
+  const url = `https://api.postcodes.io/postcodes?lon=${lon}&lat=${lat}&limit=1`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Could not look up a postcode for your location");
+  const data = await res.json();
+  const nearest = data.result?.[0]?.postcode;
+  if (!nearest) throw new Error("No postcode found near your location");
+  return nearest;
+}
 
 async function geocodePostcode(pc) {
   // Location is resolved from the first 3 characters of the postcode
@@ -2013,6 +2031,47 @@ if (addCurrentPlaceButton) {
       renderPlacesList();
       renderPlaceMenu();
     }
+  });
+}
+
+function renderGeoStatus(message, isError) {
+  if (!geoStatus) return;
+  geoStatus.classList.toggle("is-error", !!isError);
+  geoStatus.textContent = message || "";
+}
+
+if (useMyLocationButton) {
+  useMyLocationButton.addEventListener("click", () => {
+    if (!("geolocation" in navigator)) {
+      renderGeoStatus("Geolocation isn't available in this browser.", true);
+      return;
+    }
+    renderGeoStatus("Finding your location…", false);
+    navigator.geolocation.getCurrentPosition(
+      async position => {
+        try {
+          const pc = await reverseGeocodeCoords(position.coords.latitude, position.coords.longitude);
+          renderGeoStatus("", false);
+          state.postcode = pc;
+          if (postcode) postcode.value = pc;
+          saveCurrentPostcode(pc);
+          renderPlaceChip();
+          renderPlacesList();
+          loadLocationData();
+        } catch (err) {
+          renderGeoStatus(err.message || "Could not find a postcode for your location.", true);
+        }
+      },
+      error => {
+        renderGeoStatus(
+          error.code === error.PERMISSION_DENIED
+            ? "Location permission was denied."
+            : "Could not get your location.",
+          true
+        );
+      },
+      { enableHighAccuracy: false, timeout: 10000 }
+    );
   });
 }
 

@@ -17,30 +17,12 @@ const FORECASTERS = [
   { id: "tomorrow", name: "Tomorrow.io", enabled: false }
 ];
 
-const SELECTED_FORECASTERS_KEY = "forecast-compare:selectedForecasters";
-const UNIT_SYSTEM_KEY = "forecast-compare:unitSystem";
-
-function loadUnitSystem() {
-  try {
-    const raw = localStorage.getItem(UNIT_SYSTEM_KEY);
-    if (raw === "metric" || raw === "imperial") return raw;
-  } catch {
-    // fall through to default
-  }
-  return "metric";
-}
-
-const HOUR_RANGE_KEY = "forecast-compare:hourRange";
-
-function loadHourRange() {
-  try {
-    const raw = localStorage.getItem(HOUR_RANGE_KEY);
-    if (raw === "24" || raw === "48") return raw;
-  } catch {
-    // fall through to default
-  }
-  return "48";
-}
+// UNIT_SYSTEM_KEY, HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, loadUnitSystem(),
+// and loadHourRange() all now come from app.js, which this page loads first —
+// settings.html includes both scripts in the same global scope, so
+// redeclaring the same names here would be a duplicate-const syntax error
+// that silently breaks this entire file (which is exactly what was
+// happening: nothing on this page was saving because the file never ran).
 
 const hourRange48 = document.getElementById("hourRange48");
 const hourRange24 = document.getElementById("hourRange24");
