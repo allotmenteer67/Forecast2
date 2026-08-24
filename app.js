@@ -119,6 +119,50 @@ function loadAccuracyMode() {
   return "both";
 }
 
+// Current postcode and a short list of saved "places" (e.g. home,
+// allotment) are shared across all three pages via localStorage, so
+// switching between them doesn't need retyping and reuses whatever FFV
+// history that area has already built up rather than looking like a
+// brand new location every time.
+const CURRENT_POSTCODE_KEY = "forecast-compare:currentPostcode";
+const PLACES_KEY = "forecast-compare:places";
+
+function loadCurrentPostcode() {
+  try {
+    const raw = localStorage.getItem(CURRENT_POSTCODE_KEY);
+    if (raw) return raw;
+  } catch {
+    // fall through to default
+  }
+  return "TA6";
+}
+
+function saveCurrentPostcode(pc) {
+  try {
+    localStorage.setItem(CURRENT_POSTCODE_KEY, pc);
+  } catch {
+    // Storage unavailable — current postcode just won't persist.
+  }
+}
+
+function loadPlaces() {
+  try {
+    const raw = localStorage.getItem(PLACES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // fall through to default
+  }
+  return [];
+}
+
+function savePlaces(places) {
+  try {
+    localStorage.setItem(PLACES_KEY, JSON.stringify(places));
+  } catch {
+    // Storage unavailable — saved places just won't persist.
+  }
+}
+
 function loadSelectedForecasters() {
   try {
     const raw = localStorage.getItem(SELECTED_FORECASTERS_KEY);
@@ -153,7 +197,7 @@ function emptyRealSourcesState() {
 const state = {
   condition: "rain",
   rollback: 0,
-  postcode: "TA6",
+  postcode: loadCurrentPostcode(),
   selected: loadSelectedForecasters(),
   unitSystem: loadUnitSystem(),
   areaCode: "",
@@ -220,6 +264,14 @@ const headlineGrid = document.getElementById("headlineGrid");
 const headlineDate = document.getElementById("headlineDate");
 const hourSlider = document.getElementById("hourSlider");
 const hourLabel = document.getElementById("hourLabel");
+const placeChip = document.getElementById("placeChip");
+const placeChipLabel = document.getElementById("placeChipLabel");
+const placeMenu = document.getElementById("placeMenu");
+const placeMenuList = document.getElementById("placeMenuList");
+const placesList = document.getElementById("placesList");
+const addCurrentPlaceButton = document.getElementById("addCurrentPlace");
+
+if (postcode) postcode.value = state.postcode;
 
 const HOUR_RANGE_KEY = "forecast-compare:hourRange";
 function loadHourRange() {
@@ -886,6 +938,7 @@ function renderRealSourceStatus() {
 }
 
 function renderActualStatus() {
+  if (!actualStatus) return;
   actualStatus.classList.remove("is-error");
   const errorOnly = actualStatus.classList.contains("status-error-only");
 
@@ -1365,6 +1418,19 @@ if (accuracyMode) {
 }
 
 function renderTable() {
+  // The comparison table only exists on the Compare page — the front
+  // page and Settings share this same script but don't render it, so
+  // everything table-specific is skipped there rather than throwing on
+  // missing elements. renderAccuracy() and renderHeadline() still run
+  // unconditionally at the end of this function since they guard
+  // themselves and need to update independently (e.g. the front page's
+  // headline reacting to its own Date slider).
+  if (!table) {
+    renderAccuracy();
+    renderHeadline();
+    return;
+  }
+
   const selectedSources = CONFIG.forecasters.filter(
     source => state.selected.has(source.id)
   );
@@ -1373,6 +1439,20 @@ function renderTable() {
 
   conditionTitle.textContent = conditionData.name;
   locationLabel.textContent = state.postcode || "Location";
+
+  // Column widths are fixed per-cell (see style.css) but the number of
+  // forecaster columns varies with how many are selected. table-layout:
+  // fixed only respects those per-cell widths up to the table's own
+  // width — anything narrower than the real content width just
+  // compresses every column proportionally, which is what was making
+  // the table unreadable on a phone (numbers overlapping). Setting the
+  // table's min-width here to the actual required width (day column +
+  // 2 columns per selected forecaster) guarantees table-layout:fixed
+  // always has enough room, so .table-wrap's horizontal scroll kicks in
+  // properly instead.
+  const DAY_COLUMN_WIDTH = 70;
+  const FORECASTER_PAIR_WIDTH = 108 * 2;
+  table.style.minWidth = `${DAY_COLUMN_WIDTH + FORECASTER_PAIR_WIDTH * selectedSources.length}px`;
 
   table.innerHTML = "";
 
@@ -1673,14 +1753,17 @@ async function backfillRealSourceHistory() {
 }
 
 function updateRollbackLabel() {
+  if (!rollbackLabel) return;
   const targetDate = targetDateForRollback(state.rollback);
   rollbackLabel.textContent = state.rollback === 0 ? "Today" : formatDateLong(targetDate);
 }
 
-condition.addEventListener("change", () => {
-  state.condition = condition.value;
-  renderTable();
-});
+if (condition) {
+  condition.addEventListener("change", () => {
+    state.condition = condition.value;
+    renderTable();
+  });
+}
 
 // The slider's raw input runs min-to-max left-to-right as normal, but we
 // want LEFT = past and RIGHT = future — so the raw value is negated to
@@ -1693,13 +1776,15 @@ function updateSliderFill(el) {
   el.style.setProperty("--fill", `${percent}%`);
 }
 
-rollback.addEventListener("input", () => {
-  state.rollback = -Number(rollback.value);
-  updateSliderFill(rollback);
-  resetHourly();
-  updateRollbackLabel();
-  renderTable();
-});
+if (rollback) {
+  rollback.addEventListener("input", () => {
+    state.rollback = -Number(rollback.value);
+    updateSliderFill(rollback);
+    resetHourly();
+    updateRollbackLabel();
+    renderTable();
+  });
+}
 
 function updateHourLabel() {
   if (!hourLabel) return;
@@ -1757,18 +1842,155 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-document.getElementById("updateLocation").addEventListener("click", () => {
-  state.postcode = postcode.value.trim().toUpperCase();
-  postcode.value = state.postcode;
-  loadLocationData();
-});
+const updateLocationButton = document.getElementById("updateLocation");
+if (updateLocationButton) {
+  updateLocationButton.addEventListener("click", () => {
+    state.postcode = postcode.value.trim().toUpperCase();
+    postcode.value = state.postcode;
+    saveCurrentPostcode(state.postcode);
+    loadLocationData();
+    renderPlaceChip();
+    renderPlacesList();
+  });
+}
 
 if (backfillButton) {
   backfillButton.addEventListener("click", backfillRealSourceHistory);
 }
 
-updateSliderFill(rollback);
-updateRollbackLabel();
+// ---- Saved places: quick-switch chip (front page header) and the
+// manage-places list (Settings). Both read/write the same PLACES_KEY /
+// CURRENT_POSTCODE_KEY, so a place saved on one page shows up on the
+// other without needing a shared framework.
+
+function switchToPostcode(pc) {
+  if (!pc || pc === state.postcode) return;
+  state.postcode = pc;
+  if (postcode) postcode.value = pc;
+  saveCurrentPostcode(pc);
+  renderPlaceChip();
+  renderPlacesList();
+  loadLocationData();
+}
+
+function renderPlaceChip() {
+  if (!placeChipLabel) return;
+  placeChipLabel.textContent = state.postcode || "Set location";
+}
+
+function closePlaceMenu() {
+  if (!placeMenu) return;
+  placeMenu.hidden = true;
+  if (placeChip) placeChip.setAttribute("aria-expanded", "false");
+}
+
+function renderPlaceMenu() {
+  if (!placeMenuList) return;
+  placeMenuList.innerHTML = "";
+  const places = loadPlaces();
+  if (!places.length) {
+    const hint = document.createElement("p");
+    hint.className = "place-menu-empty";
+    hint.textContent = "No saved places yet.";
+    placeMenuList.appendChild(hint);
+    return;
+  }
+  places.forEach(pc => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "place-menu-item" + (pc === state.postcode ? " is-current" : "");
+    item.textContent = pc;
+    item.addEventListener("click", () => {
+      closePlaceMenu();
+      switchToPostcode(pc);
+    });
+    placeMenuList.appendChild(item);
+  });
+}
+
+if (placeChip) {
+  renderPlaceChip();
+  placeChip.addEventListener("click", () => {
+    if (!placeMenu) return;
+    if (placeMenu.hidden) {
+      renderPlaceMenu();
+      placeMenu.hidden = false;
+      placeChip.setAttribute("aria-expanded", "true");
+    } else {
+      closePlaceMenu();
+    }
+  });
+  document.addEventListener("click", event => {
+    if (placeMenu && !placeMenu.hidden && !placeMenu.contains(event.target) && event.target !== placeChip) {
+      closePlaceMenu();
+    }
+  });
+}
+
+function renderPlacesList() {
+  if (!placesList) return;
+  placesList.innerHTML = "";
+  const places = loadPlaces();
+
+  if (!places.length) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "No saved places yet — save your current location below.";
+    placesList.appendChild(empty);
+  }
+
+  places.forEach(pc => {
+    const row = document.createElement("div");
+    row.className = "place-row" + (pc === state.postcode ? " is-current" : "");
+
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "place-row-switch";
+    switchBtn.textContent = pc === state.postcode ? `${pc} (current)` : pc;
+    switchBtn.disabled = pc === state.postcode;
+    switchBtn.addEventListener("click", () => switchToPostcode(pc));
+    row.appendChild(switchBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "place-row-remove";
+    removeBtn.setAttribute("aria-label", `Remove ${pc}`);
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => {
+      savePlaces(loadPlaces().filter(saved => saved !== pc));
+      renderPlacesList();
+      renderPlaceMenu();
+    });
+    row.appendChild(removeBtn);
+
+    placesList.appendChild(row);
+  });
+}
+
+if (addCurrentPlaceButton) {
+  addCurrentPlaceButton.addEventListener("click", () => {
+    const places = loadPlaces();
+    if (!places.includes(state.postcode)) {
+      places.push(state.postcode);
+      savePlaces(places);
+      renderPlacesList();
+      renderPlaceMenu();
+    }
+  });
+}
+
+if (placesList) renderPlacesList();
+
+if (rollback) {
+  updateSliderFill(rollback);
+  updateRollbackLabel();
+}
 updateHourLabel();
-renderTable();
-loadLocationData();
+
+// The front page (headlineGrid) and Compare page (table) both need live
+// weather data; Settings doesn't display anything weather-dependent, so
+// it skips the fetch entirely rather than making wasted API calls.
+if (headlineGrid || table) {
+  renderTable();
+  loadLocationData();
+}

@@ -12,52 +12,59 @@
     <header>
       <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
       <h1>Help</h1>
-      <p>What everything on the main page means and does.</p>
+      <p>What everything across Cloude, Compare, and Settings means and does.</p>
     </header>
 
     <section class="controls help-section">
       <h2>The headline figure</h2>
-      <p>The box at the top shows one number per condition — the <strong>median</strong> across every forecaster with genuine real data behind it for that condition (Corrected where available, Raw otherwise), for the most refined forecast available for the target date. When a condition has no real source at all yet (currently Sunshine and UV), it falls back to a best-effort median across every selected forecaster instead of showing nothing. Median rather than an average deliberately: one wildly wrong value among several sensible ones gets outvoted rather than dragging the figure off course, with no threshold to tune. Met Office and ECMWF are real sources for Rain/Cloud/Wind/Temperature, so those already get a genuine multi-source median — it'll keep improving as more real sources are added.</p>
+      <p>The box at the top of the front page shows one number per condition — the <strong>median</strong> across every forecaster with genuine real data behind it for that condition (Corrected where available, Raw otherwise), for the most refined forecast available for the target date. When a condition has no real source at all yet (currently Sunshine and UV), it falls back to a best-effort median across every selected forecaster instead of showing nothing. Median rather than an average deliberately: one wildly wrong value among several sensible ones gets outvoted rather than dragging the figure off course, with no threshold to tune. Met Office and ECMWF are real sources for Rain/Cloud/Wind/Temperature, so those already get a genuine multi-source median — it'll keep improving as more real sources are added.</p>
 
       <h2>Hour slider</h2>
-      <p>A second, smaller slider under the grid shows the next 24 or 48 hours (set on the Forecasters page), always starting from right now — it doesn't move when the main Date slider does; the two are independent. Dragging it temporarily swaps Rain, Temperature, and Wind for that specific hour's figure, using Met Office's live forecast corrected by the same FFV as the rest of the app — Met Office specifically, even though the daily view now draws on more than one real source, since extending hourly to multiple sources is a separate piece of work. Wherever you leave it stays put — no countdown, so there's no rush to read it. It only resets back to "Now" when you touch the Date slider, or when you leave the app and come back. Sunshine doesn't have an hourly reading of its own (a daily total doesn't split into one), so while the hour slider is active it shows real hourly UV instead, as a percentage of that day's peak — a natural way to combine the two into one figure rather than a fifth cell. At night it swaps to a moon phase icon instead, when a UV percentage would otherwise just read as a string of zeros.</p>
+      <p>A second, smaller slider under the grid shows the next 24 or 48 hours (set on the Settings page), always starting from right now — it doesn't move when the main Date slider does; the two are independent. Dragging it temporarily swaps Rain, Temperature, and Wind for that specific hour's figure, using Met Office's live forecast corrected by the same FFV as the rest of the app — Met Office specifically, even though the daily view now draws on more than one real source, since extending hourly to multiple sources is a separate piece of work. Wherever you leave it stays put — no countdown, so there's no rush to read it. It only resets back to "Now" when you touch the Date slider, or when you leave the app and come back. Sunshine doesn't have an hourly reading of its own (a daily total doesn't split into one), so while the hour slider is active it shows real hourly UV instead, as a percentage of that day's peak — a natural way to combine the two into one figure rather than a fifth cell. At night it swaps to a moon phase icon instead, when a UV percentage would otherwise just read as a string of zeros.</p>
 
       <h2>Wind speed &amp; direction</h2>
       <p>The wind figure shown is the <strong>windiest hour of the day</strong>, not a true gust and not a daily average — it sits between the two. Direction (shown as a rotating arrow next to the wind figure, with the compass letters underneath) comes from whichever real source has it available (Met Office, then ECMWF) — direction can't be meaningfully blended across sources the way speed's median can, since it's an angle, not a linear quantity. The arrow points <strong>downwind</strong> — the direction the wind is blowing toward, not the meteorological "coming from" convention — since that's more directly useful for knowing which way it'll push you.</p>
       <p><strong>Coastal caveat:</strong> on light-wind days near the coast, local sea breezes can develop that a 10km-resolution forecast model may miss, mistime, or understate — worth bearing in mind if you're relying on this for a day on the water.</p>
 
       <h2>Target date &amp; rollback</h2>
-      <p>The slider picks a <strong>target date</strong> — anywhere from 7 days ago to 7 days ahead, with today in the middle. On the past side, roll back to see how each forecaster's prediction for that date changed as it approached, checked against what actually happened. On the future side, the app uses everything it's learned (FFV, see below) to turn today's forecasts into its own best prediction — the further ahead you look, the less real data is behind it, since real forecast data can only be as fresh as today's forecast run allows.</p>
+      <p>The Date slider — on both the front page and Compare — picks a <strong>target date</strong>, anywhere from 7 days ago to 7 days ahead, with today in the middle. Each page's slider is independent, so browsing a date on Compare won't change what the front page is showing. On the past side, roll back to see how each forecaster's prediction for that date changed as it approached, checked against what actually happened. On the future side, the app uses everything it's learned (FFV, see below) to turn today's forecasts into its own best prediction — the further ahead you look, the less real data is behind it, since real forecast data can only be as fresh as today's forecast run allows.</p>
+
+      <h2>Compare page</h2>
+      <p>The Condition selector and the full forecaster-by-forecaster table live on the <a href="compare.html">Compare</a> page, along with Accuracy so far and the advanced Backfill action — the front page stays focused on a quick, everyday glance.</p>
 
       <h2>Days out</h2>
-      <p>Rows count down the days out from the target date — "1" is the last forecast issued before it. The date shown next to each row number is when that forecast was made.</p>
+      <p>On Compare, rows count down the days out from the target date — "1" is the last forecast issued before it. The date shown next to each row number is when that forecast was made.</p>
 
       <h2>Corrected vs Raw</h2>
-      <p>Each forecaster shows two columns. <strong>Raw</strong> is the forecast value itself. <strong>Corrected</strong> applies a learned adjustment (FFV, see below) to bring it closer to what usually turns out to be true. The <strong>Actual</strong> row at the bottom is what really happened, sourced live from Open-Meteo — for a future target date, that row just shows how far away the date is, since it hasn't happened yet.</p>
+      <p>Each forecaster on Compare shows two columns. <strong>Raw</strong> is the forecast value itself. <strong>Corrected</strong> applies a learned adjustment (FFV, see below) to bring it closer to what usually turns out to be true. The status line below the table shows what really happened, sourced live from Open-Meteo — for a future target date, it just shows how far away the date is, since it hasn't happened yet.</p>
 
       <h2>FFV</h2>
-      <p>Once a cell has enough history, Corrected shows a value adjusted by FFV — a figure the app builds up over time from comparing forecasts against Actual. It's tracked separately per postcode area, so different locations build their own history, and it never stops learning: every new sample nudges it a little further, for as long as the app keeps collecting data. Temperature is adjusted slightly differently from Rain, Cloud, and Wind under the hood — better suited to a scale that has no true zero — but works the same way from the outside.</p>
+      <p>Once a cell has enough history, Corrected shows a value adjusted by FFV — a figure the app builds up over time from comparing forecasts against what actually happened. It's tracked separately per postcode area, so different locations build their own history, and it never stops learning: every new sample nudges it a little further, for as long as the app keeps collecting data. Temperature is adjusted slightly differently from Rain, Cloud, and Wind under the hood — better suited to a scale that has no true zero — but works the same way from the outside.</p>
+
+      <h2>Saved places</h2>
+      <p>Settings lets you save a handful of postcodes you visit regularly. Switching to a saved place reuses that area's existing FFV history rather than treating it as brand new each time — only a genuinely new postcode triggers a fresh year-long backfill. The chip next to "Cloude" on the front page is a shortcut to switch between saved places without going into Settings.</p>
 
       <h2>Accuracy so far</h2>
-      <p>Shows how far Raw and Corrected typically land from Actual, for whichever condition is selected — averaged across all "days out", weighted by sample count. Two numbers: the average error in real units (e.g. "±1.2mm"), and an approximate 0–100% closeness score (a simple heuristic, not a formal statistic). Corrected accuracy is scored honestly — each sample is checked against whatever FFV existed <em>before</em> that sample was folded in, not the final learned value applied backward, so it reflects how the correction would actually have performed in practice.</p>
+      <p>On Compare, shows how far Raw and Corrected typically land from what actually happened, for whichever condition is selected — averaged across all "days out", weighted by sample count. Two numbers: the average error in real units (e.g. "±1.2mm"), and an approximate 0–100% closeness score (a simple heuristic, not a formal statistic). Corrected accuracy is scored honestly — each sample is checked against whatever FFV existed <em>before</em> that sample was folded in, not the final learned value applied backward, so it reflects how the correction would actually have performed in practice.</p>
 
       <h2>Real forecast data</h2>
       <p>Met Office and ECMWF's Rain, Cloud, Wind, and Temperature figures are real model data (via Open-Meteo's Previous Runs API), not the demo formula the other forecasters currently use. Sunshine and UV aren't in that dataset, so both fall back to the demo formula for those two only. More real sources may be added over time — Open-Meteo covers a dozen or so national weather services' models the same way, so the list here isn't fixed.</p>
 
       <h2>Automatic daily collection</h2>
-      <p>A GitHub Action runs once a day, fetches a rolling window of real Actual and real-source data, and commits it to the repo — no location information is stored in that file, just dates and numbers. The app replays the whole file fresh on every load to rebuild each real source's accuracy figures, so opening the app more or less often doesn't change the result, and a single missed day self-heals on the next run.</p>
+      <p>A GitHub Action runs once a day, fetches a rolling window of real actual-weather and real-source data, and commits it to the repo — no location information is stored in that file, just dates and numbers. The app replays the whole file fresh on every load to rebuild each real source's accuracy figures, so opening the app more or less often doesn't change the result, and a single missed day self-heals on the next run.</p>
 
       <h2>Backfill (advanced)</h2>
-      <p>A one-off action that pulls a full year of real history for every real source straight into the current postcode area's FFV data, rather than waiting for the daily collection to build it up. Useful for filling the gap early on, or reaching further back than the rolling window normally keeps. It's a fairly large request, so it's not something to run often.</p>
+      <p>On Compare, a one-off action that pulls a full year of real history for every real source straight into the current postcode area's FFV data, rather than waiting for the daily collection to build it up. Useful for filling the gap early on, or reaching further back than the rolling window normally keeps. It's a fairly large request, so it's not something to run often — and it only ever runs automatically the first time a genuinely new postcode is used.</p>
 
       <h2>Units</h2>
-      <p>Metric or Imperial can be set on the <a href="settings.html">Forecasters</a> page. Rain converts between mm and inches, Wind between km/h and mph, and Temperature between °C and °F — Cloud, Sunshine, and UV are the same either way. Figures are shown to the nearest whole number throughout, except Rain (which stays at one or two decimal places — most days are well under 1mm/1in, so a whole number would just read as "0") and accuracy scores (which need decimal precision to actually be useful, since good ones are small numbers close to zero).</p>
+      <p>Metric or Imperial can be set on the <a href="settings.html">Settings</a> page. Rain converts between mm and inches, Wind between km/h and mph, and Temperature between °C and °F — Cloud, Sunshine, and UV are the same either way. Figures are shown to the nearest whole number throughout, except Rain (which stays at one or two decimal places — most days are well under 1mm/1in, so a whole number would just read as "0") and accuracy scores (which need decimal precision to actually be useful, since good ones are small numbers close to zero).</p>
     </section>
 
-    <footer>
-      <span>Cloude</span>
-      <span>Help</span>
-    </footer>
+    <nav class="bottom-nav">
+      <a href="index.html">Cloude</a>
+      <a href="compare.html">Compare</a>
+      <a href="settings.html">Settings</a>
+    </nav>
   </main>
 </body>
 </html>

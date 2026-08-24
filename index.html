@@ -10,7 +10,17 @@
 <body>
   <main class="app">
     <header>
-      <h1>Cloude</h1>
+      <div class="title-bar">
+        <h1>Cloude</h1>
+        <button id="placeChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
+          <span id="placeChipLabel">TA6</span>
+          <span class="place-chip-caret" aria-hidden="true">&#9662;</span>
+        </button>
+        <div id="placeMenu" class="place-menu" hidden>
+          <div id="placeMenuList"></div>
+          <a class="place-menu-manage" href="settings.html">Manage places</a>
+        </div>
+      </div>
     </header>
 
     <section class="headline">
@@ -26,18 +36,6 @@
     </section>
 
     <section class="controls">
-      <label class="condition-box">
-        Condition
-        <select id="condition">
-          <option value="rain">Rain</option>
-          <option value="cloud">Cloud</option>
-          <option value="wind">Wind</option>
-          <option value="temperature">Temperature</option>
-          <option value="sunshine">Sunshine</option>
-          <option value="uv">UV</option>
-        </select>
-      </label>
-
       <div class="rollback">
         <div class="rollback-title">
           <strong>Date</strong>
@@ -52,71 +50,11 @@
       </div>
     </section>
 
-    <section class="comparison">
-      <div class="table-title">
-        <h2 id="conditionTitle">Rain</h2>
-        <span id="locationLabel">TA6</span>
-      </div>
-
-      <div class="table-wrap">
-        <table id="forecastTable">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <p id="actualStatus" class="actual-status status-error-only"></p>
-      <p id="metOfficeStatus" class="actual-status status-error-only"></p>
-    </section>
-
-    <section class="controls">
-      <label>
-        Location
-        <div class="location-row">
-          <input id="postcode" value="TA6" maxlength="10" autocomplete="postal-code">
-          <button id="updateLocation">Update</button>
-        </div>
-      </label>
-    </section>
-
-    <section class="comparison">
-      <details class="accuracy" open>
-        <summary>Accuracy so far</summary>
-        <p id="historyStatus" class="actual-status"></p>
-        <label class="accuracy-mode">
-          Show
-          <select id="accuracyMode">
-            <option value="both">Both units and %</option>
-            <option value="units">Units only</option>
-            <option value="percent">Percent only</option>
-          </select>
-        </label>
-        <div class="table-wrap">
-          <table id="accuracyTable">
-            <thead>
-              <tr>
-                <th>Forecaster</th>
-                <th>Samples</th>
-                <th>Raw</th>
-                <th>Corrected</th>
-              </tr>
-            </thead>
-            <tbody id="accuracyBody"></tbody>
-          </table>
-        </div>
-      </details>
-
-      <details class="backfill">
-        <summary>Real forecast history (advanced)</summary>
-        <button id="backfillButton" type="button">Backfill 1 year of real data</button>
-        <p id="backfillStatus" class="actual-status"></p>
-      </details>
-    </section>
-
-    <footer>
-      <span>Cloude</span>
-      <span><a href="help.html">Help</a> · <a href="settings.html">Forecasters</a></span>
-    </footer>
+    <nav class="bottom-nav">
+      <a href="compare.html">Compare</a>
+      <a href="settings.html">Settings</a>
+      <a href="help.html">Help</a>
+    </nav>
   </main>
 
   <script src="app.js"></script>

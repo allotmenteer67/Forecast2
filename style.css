@@ -350,12 +350,39 @@ table {
   border-collapse: collapse;
   table-layout: fixed;
   width: 100%;
-  min-width: 560px;
+  /* Actual min-width is set per-render in app.js, scaled to however many
+     forecaster columns are selected — this is just a sane floor before
+     JS runs. */
+  min-width: 350px;
 }
 
 th.day-head,
 td.day {
   width: 70px;
+  /* Pinned while the rest of the table scrolls sideways, so you never
+     lose track of which row is which on a narrow screen. Needs an
+     opaque background (set per state below) so scrolled-under cells
+     don't show through, and a shadow to mark the scroll edge. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-shadow: 2px 0 4px rgba(31, 42, 36, 0.08);
+}
+
+th.day-head {
+  background: var(--accent-light);
+}
+
+td.day {
+  background: white;
+}
+
+tbody tr:nth-child(even) td.day {
+  background: #fafbf9;
+}
+
+.row-final td.day {
+  background: #f2f7f0;
 }
 
 th.sub-corrected,
@@ -598,10 +625,164 @@ tbody tr:last-child td {
 
 footer {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
+  gap: 18px;
   color: #6b7d70;
   font-size: 12px;
   padding: 5px;
+}
+
+/* ---- Header place chip (front page) ---- */
+
+.title-bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  position: relative;
+}
+
+.title-bar h1 {
+  margin: 0;
+}
+
+.place-chip {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #c3d0c6;
+  font-weight: 700;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.place-chip:hover {
+  background: var(--accent-light);
+}
+
+.place-chip-caret {
+  font-size: 11px;
+  color: #6b7d70;
+}
+
+.place-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  background: white;
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 42, 36, .18);
+  padding: 6px;
+  min-width: 160px;
+}
+
+.place-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  color: #1f2a24;
+  font-weight: 600;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 6px;
+}
+
+.place-menu-item:hover {
+  background: var(--accent-light);
+}
+
+.place-menu-item.is-current {
+  color: var(--accent-dark);
+  background: var(--accent-light);
+}
+
+.place-menu-empty {
+  margin: 4px 10px;
+  color: #6b7d70;
+  font-size: 13px;
+}
+
+.place-menu-manage {
+  display: block;
+  margin-top: 4px;
+  padding: 8px 10px 4px;
+  border-top: 1px solid #eef2ee;
+  font-size: 12px;
+}
+
+/* ---- Saved places list (Settings) ---- */
+
+.places-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.place-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.place-row-switch {
+  flex: 1;
+  text-align: left;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.place-row.is-current .place-row-switch {
+  background: var(--accent);
+  color: white;
+}
+
+.place-row-switch:disabled {
+  cursor: default;
+}
+
+.place-row-remove {
+  width: 44px;
+  padding: 0;
+  background: var(--amber-light);
+  color: var(--amber);
+}
+
+.place-row-remove:hover {
+  background: #f3d9bd;
+}
+
+/* ---- Bottom nav (replaces the old footer links on every page) ---- */
+
+.bottom-nav {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.bottom-nav a {
+  min-height: 44px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: white;
+  border: 1px solid #dfe7e1;
+  color: var(--accent-dark);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.bottom-nav a:hover {
+  background: var(--accent-light);
+  text-decoration: none;
 }
 
 @media (max-width: 600px) {

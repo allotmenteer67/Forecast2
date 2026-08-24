@@ -4,16 +4,35 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
-  <title>Forecasters — Cloude</title>
+  <title>Settings — Cloude</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="app">
     <header>
       <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <h1>Forecasters</h1>
-      <p>Choose which sources appear in the comparison table.</p>
+      <h1>Settings</h1>
+      <p>Location, places, units, and which forecasters appear on Compare.</p>
     </header>
+
+    <section class="controls">
+      <label>
+        Current location
+        <div class="location-row">
+          <input id="postcode" value="TA6" maxlength="10" autocomplete="postal-code">
+          <button id="updateLocation">Update</button>
+        </div>
+      </label>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Saved places</legend>
+        <div id="placesList" class="places-list"></div>
+        <button id="addCurrentPlace" type="button">Save current location</button>
+        <p class="note">Switching to a saved place reuses whatever forecast history it already has, instead of starting fresh.</p>
+      </fieldset>
+    </section>
 
     <section class="controls">
       <fieldset>
@@ -54,12 +73,14 @@
       </fieldset>
     </section>
 
-    <footer>
-      <span>Cloude</span>
-      <span>Settings</span>
-    </footer>
+    <nav class="bottom-nav">
+      <a href="index.html">Cloude</a>
+      <a href="compare.html">Compare</a>
+      <a href="help.html">Help</a>
+    </nav>
   </main>
 
+  <script src="app.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>
