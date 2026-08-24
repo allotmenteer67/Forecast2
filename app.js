@@ -262,6 +262,7 @@ const accuracyBody = document.getElementById("accuracyBody");
 const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
 const headlineDate = document.getElementById("headlineDate");
+const headlineStatus = document.getElementById("headlineStatus");
 const hourSlider = document.getElementById("hourSlider");
 const hourLabel = document.getElementById("hourLabel");
 const placeChip = document.getElementById("placeChip");
@@ -788,16 +789,31 @@ async function loadLocationData() {
       loadCommittedHistory(),
       fetchHourlyForecast(lat, lon)
     ]);
-    updateFFVHistory();
 
-    // First time this postcode area has ever been seen (no real-source
-    // samples at all yet, even after the committed-history replay above):
-    // pull a year of real history automatically for every real source
-    // rather than leaving it to be found via the advanced backfill
-    // button. Only ever fires once per area — after it runs, count > 0
-    // and this is skipped on future loads.
-    if (!anyRealSourceHasHistory()) {
-      await backfillRealSourceHistory();
+    // Everything from here on is bookkeeping (learning FFV, and the
+    // one-off backfill for a genuinely new area) rather than data the
+    // page needs to show. If any of it throws, the fetches above still
+    // succeeded — so the render at the bottom must still run with
+    // whatever real data did load, rather than being skipped entirely.
+    // Previously an error here fell through to the outer catch, which
+    // only shows a status message (and only on pages that have that
+    // element) without ever redrawing the headline/table — leaving the
+    // page stuck showing stale/placeholder figures with no visible sign
+    // anything had gone wrong.
+    try {
+      updateFFVHistory();
+
+      // First time this postcode area has ever been seen (no real-source
+      // samples at all yet, even after the committed-history replay
+      // above): pull a year of real history automatically for every real
+      // source rather than leaving it to be found via the advanced
+      // backfill button. Only ever fires once per area — after it runs,
+      // count > 0 and this is skipped on future loads.
+      if (!anyRealSourceHasHistory()) {
+        await backfillRealSourceHistory();
+      }
+    } catch (bookkeepingErr) {
+      console.error("FFV bookkeeping failed (data itself still loaded fine):", bookkeepingErr);
     }
 
     renderActualStatus();
@@ -807,6 +823,7 @@ async function loadLocationData() {
     state.actual.status = "error";
     state.actual.error = err.message || "Could not resolve location";
     renderActualStatus();
+    renderTable();
   }
 }
 
@@ -938,6 +955,16 @@ function renderRealSourceStatus() {
 }
 
 function renderActualStatus() {
+  if (headlineStatus) {
+    headlineStatus.classList.remove("is-error");
+    if (state.actual.status === "error") {
+      headlineStatus.textContent = `Couldn't load weather: ${state.actual.error}`;
+      headlineStatus.classList.add("is-error");
+    } else {
+      headlineStatus.textContent = "";
+    }
+  }
+
   if (!actualStatus) return;
   actualStatus.classList.remove("is-error");
   const errorOnly = actualStatus.classList.contains("status-error-only");
