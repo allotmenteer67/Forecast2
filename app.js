@@ -567,7 +567,17 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
       };
     }
 
-    slot.dates = data.daily?.time || [];
+    // One date label per day-bucket, taken straight from the hourly
+    // timeline already being fetched — not a separate `daily` field,
+    // which was never requested in the params above and so was always
+    // missing from the response. That left `dates` permanently empty,
+    // which in turn made every live real-source lookup (today's figures,
+    // wind direction, the Compare table's Raw column) fail its bounds
+    // check and silently fall back to the placeholder formula — for
+    // every date, not just today. This is the actual fix for the
+    // frozen/placeholder headline, separate from the render-timing
+    // change made previously.
+    slot.dates = Array.from({ length: dayCount }, (_, i) => isoDate(new Date(hourlyTimes[i * 24])));
     slot.byLeadDay = byLeadDay;
     slot.status = "ready";
   } catch (err) {
