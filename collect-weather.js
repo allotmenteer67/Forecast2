@@ -1,9 +1,17 @@
 // Runs once a day via .github/workflows/collect-weather.yml.
-// Reads FORECAST_LAT / FORECAST_LON from environment (populated from
-// GitHub Actions secrets — never written to disk or committed), fetches
-// a rolling window of real weather data, and merges it into
-// data/history.json. That file deliberately contains NO location info —
-// just dates and weather numbers — so it's safe to commit to a public repo.
+// Reads FORECAST_LAT / FORECAST_LON / FORECAST_AREA_CODE from environment
+// (populated from GitHub Actions secrets — never written to disk or
+// committed), fetches a rolling window of real weather data, and merges
+// it into data/history.json. That file deliberately contains no precise
+// location info — just the postcode AREA (e.g. "TA6", the same
+// coarse level already used everywhere else in the app) plus dates and
+// weather numbers — so it's safe to commit to a public repo.
+//
+// The area code matters: this collection only ever runs for the one
+// location configured in this repo's secrets. If someone else opens the
+// app with a different postcode, the app checks this file's areaCode
+// against theirs and skips applying it if they don't match, rather than
+// silently treating one location's weather history as another's.
 //
 // Window size: 7 days, same as the app's own rolling window. A single
 // missed run (Action failure, outage) self-heals on the next run rather
@@ -155,15 +163,22 @@ async function loadExistingHistory() {
     const raw = await fs.readFile(HISTORY_PATH, "utf-8");
     return JSON.parse(raw);
   } catch {
-    return { updated: null, days: {} };
+    return { updated: null, areaCode: null, days: {} };
   }
 }
 
 async function main() {
   const lat = process.env.FORECAST_LAT;
   const lon = process.env.FORECAST_LON;
+  const areaCode = process.env.FORECAST_AREA_CODE;
   if (!lat || !lon) {
     throw new Error("FORECAST_LAT / FORECAST_LON secrets are not set");
+  }
+  if (!areaCode) {
+    // Not fatal — the collection itself is still useful — but the app
+    // will refuse to apply data with no area code attached, since it has
+    // no way to check it's being used for the right postcode.
+    console.warn("FORECAST_AREA_CODE secret is not set — collected data won't be applied by the app until it is.");
   }
 
   const today = new Date();
@@ -199,10 +214,14 @@ async function main() {
   }
 
   history.updated = isoDate(today);
+  // Written on every run regardless — if this ever changes (repo reused
+  // for a different postcode), the file self-heals to the new area
+  // rather than staying stuck on stale data from before.
+  history.areaCode = areaCode || null;
 
   await fs.mkdir(new URL(".", HISTORY_PATH), { recursive: true });
   await fs.writeFile(HISTORY_PATH, JSON.stringify(history));
-  console.log(`Updated history.json — ${Object.keys(history.days).length} days on file.`);
+  console.log(`Updated history.json — ${Object.keys(history.days).length} days on file for area ${history.areaCode ?? "(not set)"}.`);
 }
 
 main().catch(err => {

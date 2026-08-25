@@ -226,7 +226,8 @@ const state = {
   history: {
     status: "idle", // idle | loading | ready | error
     error: null,
-    dayCount: 0
+    dayCount: 0,
+    areaMismatch: false // true when the collected file exists but is for a different postcode area
   },
   hourly: {
     status: "idle", // idle | loading | ready | error
@@ -237,6 +238,7 @@ const state = {
     windSpeed: [],
     windDirection: [],
     uvIndex: [],
+    cloudCover: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
     sunsetByDate: {},
     uvMaxByDate: {} // "YYYY-MM-DD" -> that day's peak UV index
@@ -265,6 +267,16 @@ const headlineDate = document.getElementById("headlineDate");
 const headlineStatus = document.getElementById("headlineStatus");
 const hourSlider = document.getElementById("hourSlider");
 const hourLabel = document.getElementById("hourLabel");
+const sheetBackdrop = document.getElementById("sheetBackdrop");
+const sheet = document.getElementById("sheet");
+const sheetClose = document.getElementById("sheetClose");
+const sheetTitle = document.getElementById("sheetTitle");
+const sheetRange = document.getElementById("sheetRange");
+const sheetReadout = document.getElementById("sheetReadout");
+const readoutTime = document.getElementById("readoutTime");
+const readoutValue = document.getElementById("readoutValue");
+const sheetBody = document.getElementById("sheetBody");
+const sheetFootnote = document.getElementById("sheetFootnote");
 const placeChip = document.getElementById("placeChip");
 const placeChipLabel = document.getElementById("placeChipLabel");
 const placeMenu = document.getElementById("placeMenu");
@@ -669,7 +681,7 @@ async function fetchHourlyForecast(lat, lon) {
     const params = new URLSearchParams({
       latitude: lat,
       longitude: lon,
-      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,uv_index",
+      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,uv_index,cloud_cover",
       daily: "sunrise,sunset,uv_index_max",
       models: REAL_SOURCES.find(s => s.id === "metoffice").model, // hourly stays Met Office-specific for now — see README
       wind_speed_unit: "mph",
@@ -691,6 +703,7 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.windSpeed = data.hourly.wind_speed_10m.slice(from);
     state.hourly.windDirection = data.hourly.wind_direction_10m.slice(from);
     state.hourly.uvIndex = data.hourly.uv_index.slice(from);
+    state.hourly.cloudCover = data.hourly.cloud_cover.slice(from);
 
     state.hourly.sunriseByDate = {};
     state.hourly.sunsetByDate = {};
@@ -727,9 +740,13 @@ function renderHistoryStatus() {
     historyStatus.textContent = `Collected history unavailable: ${state.history.error}`;
     historyStatus.classList.add("is-error");
   } else if (state.history.status === "ready") {
-    historyStatus.textContent = state.history.dayCount > 0
-      ? `Real-source accuracy is built from ${state.history.dayCount} day${state.history.dayCount === 1 ? "" : "s"} collected automatically once a day.`
-      : "No collected history yet — the daily Action hasn't run yet, or hasn't been set up.";
+    if (state.history.areaMismatch) {
+      historyStatus.textContent = "The daily-collected history is for a different postcode area, so it isn't used here — this area relies on its own one-off backfill instead.";
+    } else {
+      historyStatus.textContent = state.history.dayCount > 0
+        ? `Real-source accuracy is built from ${state.history.dayCount} day${state.history.dayCount === 1 ? "" : "s"} collected automatically once a day.`
+        : "No collected history yet — the daily Action hasn't run yet, or hasn't been set up.";
+    }
   } else {
     historyStatus.textContent = "";
   }
@@ -740,12 +757,31 @@ async function loadCommittedHistory() {
 
   state.history.status = "loading";
   state.history.error = null;
+  state.history.areaMismatch = false;
   renderHistoryStatus();
 
   try {
     const res = await fetch(HISTORY_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("history.json not found");
     const data = await res.json();
+
+    // This file is only ever collected for ONE fixed postcode area (set
+    // once via the GitHub Action's secrets) — it is not per-visitor. If
+    // the current postcode's area doesn't match, applying it anyway
+    // would silently treat one location's real weather history as
+    // another's. Skip it entirely rather than risk that; this area's
+    // real-source accuracy then relies solely on its own one-off
+    // backfill (see anyRealSourceHasHistory / backfillRealSourceHistory)
+    // instead of the shared daily collection.
+    if (!data.areaCode || data.areaCode !== state.areaCode) {
+      state.history.status = "ready";
+      state.history.dayCount = 0;
+      state.history.areaMismatch = true;
+      renderHistoryStatus();
+      renderTable();
+      return;
+    }
+
     const dates = Object.keys(data.days || {});
 
     const store = loadFFVStore(state.areaCode);
@@ -1339,8 +1375,10 @@ function renderHeadline() {
   const night = showHourly && !isDaytime(hourDate);
 
   HEADLINE_CONDITIONS.forEach(conditionName => {
-    const cell = document.createElement("div");
+    const cell = document.createElement("button");
+    cell.type = "button";
     cell.className = "headline-cell";
+    cell.addEventListener("click", () => openHourlySheet(conditionName));
 
     const label = document.createElement("span");
     label.className = "headline-label";
@@ -1428,6 +1466,369 @@ function renderHeadline() {
     headlineGrid.appendChild(cell);
   });
 }
+
+// ---- Hourly graph sheet ----
+// Tapping a headline figure opens this bottom sheet with that condition
+// plotted across the next 24 or 48 hours (per the Settings choice),
+// built from the same live hourly data already fetched for the "Hour"
+// slider — nothing extra to load. Charts are hand-drawn SVG rather than
+// a library, consistent with the rest of this dependency-free app.
+
+const SHEET_SVG_NS = "http://www.w3.org/2000/svg";
+const SHEET_W = 320, SHEET_H = 140, SHEET_PAD_L = 34, SHEET_PAD_B = 18, SHEET_PAD_T = 10;
+
+function sheetSvgEl(tag, attrs) {
+  const el = document.createElementNS(SHEET_SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// Mirrors formatValue()'s rounding rules but skips the unit conversion,
+// since callers here already converted the value via convertForDisplay —
+// running it through formatValue again would convert it twice.
+function formatConverted(displayValue, conditionName) {
+  if (displayValue === null || displayValue === undefined || Number.isNaN(displayValue)) return "–";
+  if (conditionName === "rain") {
+    return state.unitSystem === "imperial" ? displayValue.toFixed(2) : displayValue.toFixed(1);
+  }
+  return Math.round(displayValue).toString();
+}
+
+function sheetClockLabel(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:00`;
+}
+
+function niceStep(rawStep) {
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
+  const norm = rawStep / mag;
+  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return step * mag;
+}
+
+// hourTimes: array of ISO strings, one per point — everything else is
+// derived from its length so 24h vs 48h needs no special-casing.
+function sheetXFor(i, count) {
+  const plotW = SHEET_W - SHEET_PAD_L - 10;
+  return SHEET_PAD_L + (i / Math.max(1, count - 1)) * plotW;
+}
+
+function sheetBaseSvg(hourTimes, extraHeight = 16) {
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap";
+  const svg = sheetSvgEl("svg", { class: "graph-svg", viewBox: `0 0 ${SHEET_W} ${SHEET_H + extraHeight}` });
+  wrap.appendChild(svg);
+  const baseline = SHEET_H - SHEET_PAD_B;
+  const count = hourTimes.length;
+  // A labelled tick every 6 hours, with a short unlabelled tick every
+  // hour in between — a sense of the hour-by-hour grid without 24+
+  // separate text labels crowding the axis.
+  hourTimes.forEach((iso, i) => {
+    const hourOfDay = new Date(iso).getHours();
+    const isMajor = hourOfDay % 6 === 0;
+    const x = sheetXFor(i, count);
+    svg.appendChild(sheetSvgEl("line", {
+      x1: x, x2: x, y1: baseline, y2: baseline + (isMajor ? 5 : 3),
+      class: "graph-tick"
+    }));
+    if (isMajor) {
+      const t = sheetSvgEl("text", { x, y: SHEET_H + 12, class: "graph-axis-label", "text-anchor": "middle" });
+      t.textContent = sheetClockLabel(iso);
+      svg.appendChild(t);
+    }
+  });
+  return { wrap, svg, count };
+}
+
+// Three horizontal gridlines at 0 / mid / max (rounded to a tidy step),
+// each labelled on the left — topPad lets a graph (e.g. wind) reserve
+// extra room above the plot without shifting the plot itself down into
+// the x-axis labels' space.
+function sheetRenderYAxis(svg, minValue, maxValue, decimals, conditionName, topPad = SHEET_PAD_T) {
+  const plotH = SHEET_H - topPad - SHEET_PAD_B;
+  const step = niceStep((maxValue - minValue) / 3) || 1;
+  const topValue = minValue + step * 3;
+  [0, 1, 2, 3].forEach(i => {
+    const value = minValue + step * i;
+    const y = SHEET_H - SHEET_PAD_B - ((value - minValue) / (topValue - minValue)) * plotH;
+    svg.appendChild(sheetSvgEl("line", { x1: SHEET_PAD_L, x2: SHEET_W - 6, y1: y, y2: y, class: "graph-gridline" }));
+    const label = sheetSvgEl("text", { x: SHEET_PAD_L - 6, y: y + 3, class: "graph-axis-value", "text-anchor": "end" });
+    label.textContent = formatConverted(value, conditionName);
+    svg.appendChild(label);
+  });
+  return { topValue, minValue, plotH };
+}
+
+function sheetRenderBar(hourTimes, displayValues, color, conditionName) {
+  const { wrap, svg, count } = sheetBaseSvg(hourTimes);
+  const { topValue, plotH } = sheetRenderYAxis(svg, 0, Math.max(0.001, ...displayValues), true, conditionName);
+  const barW = (SHEET_W - SHEET_PAD_L - 10) / count * 0.62;
+  const pts = displayValues.map((v, i) => {
+    const x = sheetXFor(i, count) - barW / 2;
+    const barH = (v / topValue) * plotH;
+    const y = SHEET_H - SHEET_PAD_B - barH;
+    svg.appendChild(sheetSvgEl("rect", { x, y, width: barW, height: Math.max(1, barH), rx: 2, fill: color, opacity: i === 0 ? 1 : 0.72 }));
+    return [sheetXFor(i, count), y];
+  });
+  return { wrap, svg, pts, extraHeight: 16 };
+}
+
+function sheetRenderLine(hourTimes, displayValues, color, conditionName) {
+  const { wrap, svg, count } = sheetBaseSvg(hourTimes);
+  const dataMin = Math.min(...displayValues);
+  const { topValue, minValue, plotH } = sheetRenderYAxis(svg, dataMin, Math.max(...displayValues), false, conditionName);
+  const range = Math.max(1, topValue - minValue);
+  const pts = displayValues.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - ((v - minValue) / range) * plotH]);
+  const areaPath = `M${pts[0][0]},${SHEET_H - SHEET_PAD_B} ` + pts.map(p => `L${p[0]},${p[1]}`).join(" ") + ` L${pts[pts.length-1][0]},${SHEET_H-SHEET_PAD_B} Z`;
+  svg.appendChild(sheetSvgEl("path", { d: areaPath, fill: color, opacity: 0.12 }));
+  const linePath = "M" + pts.map(p => p.join(",")).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: linePath, fill: "none", stroke: color, "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+  return { wrap, svg, pts, extraHeight: 16 };
+}
+
+function sheetRenderWind(hourTimes, speedsDisplay, dirs) {
+  // Arrow row needs its own clear space above the speed line — reserved
+  // as extra top padding within the normal chart height (same baseline
+  // as every other graph), rather than shifting the plotted line down
+  // into the x-axis labels' space.
+  const WIND_TOP_PAD = 34;
+  const { wrap, svg, count } = sheetBaseSvg(hourTimes);
+  const { topValue, plotH } = sheetRenderYAxis(svg, 0, Math.max(0.001, ...speedsDisplay), false, "wind", WIND_TOP_PAD);
+  const pts = speedsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
+  const linePath = "M" + pts.map(p => p.join(",")).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: linePath, fill: "none", stroke: "#4c6a58", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+
+  // Direction arrows spaced out along the top strip — no connecting
+  // lines down to the axis, just the arrow on a plain halo so the row
+  // reads cleanly at a glance. Roughly every 4 hours for 24h, every 8
+  // for 48h, so the row never gets crowded regardless of range.
+  const step = Math.max(1, Math.round(count / 6));
+  const arrowY = 15;
+  dirs.forEach((deg, i) => {
+    if (i % step !== 0 || deg === null || deg === undefined) return;
+    const x = sheetXFor(i, count);
+    svg.appendChild(sheetSvgEl("circle", { cx: x, cy: arrowY, r: 11, class: "wind-dir-halo" }));
+    const rotation = windArrowRotation(deg);
+    const g = sheetSvgEl("g", { transform: `translate(${x},${arrowY}) rotate(${rotation})` });
+    g.appendChild(sheetSvgEl("path", { d: "M0,-7 L5,6 L0,2.5 L-5,6 Z", fill: "#2f6f4f" }));
+    svg.appendChild(g);
+  });
+
+  return { wrap, svg, pts, extraHeight: 16 };
+}
+
+function sheetCloudIcon(cloudPct, isNight) {
+  const c = document.createElementNS(SHEET_SVG_NS, "svg");
+  c.setAttribute("viewBox", "0 0 32 32");
+  c.classList.add("sun-icon");
+
+  if (isNight) {
+    c.appendChild(sheetSvgEl("path", { d: "M20 6a10 10 0 1 0 8 16 8 8 0 0 1-8-16z", fill: "#3b4a63" }));
+    return c;
+  }
+
+  if (cloudPct < 15) {
+    c.appendChild(sheetSvgEl("circle", { cx: 16, cy: 16, r: 8, fill: "#e8a83c" }));
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const x1 = 16 + Math.cos(a) * 11, y1 = 16 + Math.sin(a) * 11;
+      const x2 = 16 + Math.cos(a) * 14, y2 = 16 + Math.sin(a) * 14;
+      c.appendChild(sheetSvgEl("line", { x1, y1, x2, y2, stroke: "#e8a83c", "stroke-width": 2, "stroke-linecap": "round" }));
+    }
+    return c;
+  }
+
+  // Cloud shading darkens with cover; a peek of sun behind it if partial.
+  // Built from overlapping ellipses rather than a single fiddly path.
+  const shade = 0.35 + (cloudPct / 100) * 0.55;
+  const grey = Math.round(230 - shade * 130);
+  if (cloudPct < 60) {
+    c.appendChild(sheetSvgEl("circle", { cx: 12, cy: 13, r: 6, fill: "#e8a83c", opacity: 0.85 }));
+  }
+  const g = sheetSvgEl("g", {});
+  g.appendChild(sheetSvgEl("ellipse", { cx: 13, cy: 19, rx: 7, ry: 5.5, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+  g.appendChild(sheetSvgEl("ellipse", { cx: 19, cy: 17, rx: 6, ry: 5.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+  g.appendChild(sheetSvgEl("ellipse", { cx: 16, cy: 21.5, rx: 9, ry: 4.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+  c.appendChild(g);
+  return c;
+}
+
+function sheetRenderSunStrip(hourTimes, cloudCover) {
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap";
+  const strip = document.createElement("div");
+  strip.className = "sun-strip";
+  // Every 2 hours keeps a 48h range from feeling cramped; 24h just shows
+  // every other hour too, which is plenty of resolution for cloud cover.
+  hourTimes.forEach((iso, i) => {
+    if (i % 2 !== 0) return;
+    const date = new Date(iso);
+    const isNight = !isDaytime(date);
+    const cell = document.createElement("div");
+    cell.className = "sun-cell";
+    cell.appendChild(sheetCloudIcon(cloudCover[i] ?? 0, isNight));
+    const label = document.createElement("span");
+    label.className = "sun-hour-label";
+    label.textContent = sheetClockLabel(iso);
+    cell.appendChild(label);
+    strip.appendChild(cell);
+  });
+  wrap.appendChild(strip);
+  return wrap;
+}
+
+// Runs a finger along the time axis: a vertical line tracks the nearest
+// hour and a dot marks the exact data point, while the actual time+value
+// readout lives in the fixed bar above the graph rather than under the
+// finger — the one place guaranteed not to get covered by the hand doing
+// the dragging.
+function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultReadout }) {
+  const touchArea = sheetSvgEl("rect", { x: 0, y: 0, width: SHEET_W, height: SHEET_H + extraHeight, class: "graph-touch-area" });
+  svg.appendChild(touchArea);
+
+  const crosshair = sheetSvgEl("line", { x1: 0, x2: 0, y1: 0, y2: SHEET_H + extraHeight, class: "scrub-line" });
+  const dot = sheetSvgEl("circle", { r: 4.5, class: "scrub-dot" });
+  crosshair.style.display = "none";
+  dot.style.display = "none";
+  svg.appendChild(crosshair);
+  svg.appendChild(dot);
+
+  function hourFromClientX(clientX) {
+    const rect = svg.getBoundingClientRect();
+    const localX = ((clientX - rect.left) / rect.width) * SHEET_W;
+    const plotW = SHEET_W - SHEET_PAD_L - 10;
+    const ratio = (localX - SHEET_PAD_L) / plotW;
+    return Math.max(0, Math.min(pts.length - 1, Math.round(ratio * (pts.length - 1))));
+  }
+
+  function showAt(i) {
+    const [x, y] = pts[i];
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    dot.setAttribute("cx", x);
+    dot.setAttribute("cy", y);
+    crosshair.style.display = "";
+    dot.style.display = "";
+    const readout = formatReadout(i);
+    readoutTime.textContent = readout.time;
+    readoutValue.textContent = readout.value;
+  }
+
+  function reset() {
+    crosshair.style.display = "none";
+    dot.style.display = "none";
+    readoutTime.textContent = defaultReadout.time;
+    readoutValue.textContent = defaultReadout.value;
+  }
+
+  let dragging = false;
+  touchArea.addEventListener("pointerdown", e => {
+    dragging = true;
+    touchArea.setPointerCapture(e.pointerId);
+    showAt(hourFromClientX(e.clientX));
+  });
+  touchArea.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    showAt(hourFromClientX(e.clientX));
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(evt => {
+    touchArea.addEventListener(evt, () => {
+      if (!dragging) return;
+      dragging = false;
+      reset();
+    });
+  });
+
+  reset();
+}
+
+function closeHourlySheet() {
+  if (!sheet) return;
+  sheetBackdrop.classList.remove("is-open");
+  sheet.classList.remove("is-open");
+  window.setTimeout(() => { if (!sheet.classList.contains("is-open")) sheet.hidden = true; }, 280);
+}
+
+function openHourlySheet(conditionName) {
+  if (!sheet) return;
+
+  const hourRange = Number(loadHourRange());
+  sheetTitle.textContent = CONFIG.conditions[conditionName].name;
+  sheetRange.textContent = `Next ${hourRange}h`;
+  sheetBody.innerHTML = "";
+  sheetReadout.hidden = conditionName === "sunshine";
+
+  if (state.hourly.status !== "ready") {
+    const empty = document.createElement("p");
+    empty.className = "sheet-empty";
+    empty.textContent = state.hourly.status === "error"
+      ? "Hourly forecast isn't available right now."
+      : "Loading hourly forecast…";
+    sheetBody.appendChild(empty);
+    sheetFootnote.textContent = "";
+  } else {
+    const count = Math.min(hourRange, state.hourly.times.length);
+    const hourTimes = state.hourly.times.slice(0, count);
+
+    if (conditionName === "rain") {
+      const raw = state.hourly.precipitation.slice(0, count);
+      const display = raw.map(v => convertForDisplay(v, "rain"));
+      const g = sheetRenderBar(hourTimes, display, "#2f6f4f", "rain");
+      sheetBody.appendChild(g.wrap);
+      attachSheetScrubber({
+        ...g,
+        formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
+        defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
+      });
+    } else if (conditionName === "temperature") {
+      const raw = state.hourly.temperature.slice(0, count);
+      const display = raw.map(v => convertForDisplay(v, "temperature"));
+      const g = sheetRenderLine(hourTimes, display, "#b5651d", "temperature");
+      sheetBody.appendChild(g.wrap);
+      attachSheetScrubber({
+        ...g,
+        formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "temperature")}${unitLabel("temperature")}` }),
+        defaultReadout: { time: "Now", value: `${formatConverted(display[0], "temperature")}${unitLabel("temperature")}` }
+      });
+    } else if (conditionName === "wind") {
+      const raw = state.hourly.windSpeed.slice(0, count);
+      const display = raw.map(v => convertForDisplay(v, "wind"));
+      const dirs = state.hourly.windDirection.slice(0, count);
+      const g = sheetRenderWind(hourTimes, display, dirs);
+      sheetBody.appendChild(g.wrap);
+      attachSheetScrubber({
+        ...g,
+        formatReadout: i => ({
+          time: sheetClockLabel(hourTimes[i]),
+          value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim()
+        }),
+        defaultReadout: {
+          time: "Now",
+          value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim()
+        }
+      });
+    } else if (conditionName === "sunshine") {
+      sheetBody.appendChild(sheetRenderSunStrip(hourTimes, state.hourly.cloudCover.slice(0, count)));
+    }
+
+    sheetFootnote.textContent = conditionName === "sunshine"
+      ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
+      : "Drag your finger along the graph to read any hour — the reading above stays put so your hand doesn't cover it.";
+  }
+
+  sheet.hidden = false;
+  // Force layout before adding the open class, so the slide-up actually
+  // transitions instead of snapping straight to open (removing [hidden]
+  // and adding a transform in the same tick can get collapsed into one
+  // paint otherwise).
+  requestAnimationFrame(() => {
+    sheetBackdrop.classList.add("is-open");
+    sheet.classList.add("is-open");
+  });
+}
+
+if (sheetClose) sheetClose.addEventListener("click", closeHourlySheet);
+if (sheetBackdrop) sheetBackdrop.addEventListener("click", closeHourlySheet);
 
 function renderAccuracy() {
   if (!accuracyBody) return;
@@ -1892,6 +2293,23 @@ if (hourSlider) {
 // countdown that could interrupt someone still actively looking at it.
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && state.hourlyActive) {
+    resetHourly();
+    renderHeadline();
+  }
+});
+
+// visibilitychange above is the primary signal, but iOS doesn't reliably
+// fire it for a web app added to the home screen — background/resume
+// there can leave the page's JS running untouched with no hide event at
+// all, so hourlyActive could stay stuck true indefinitely across
+// separate "launches" rather than resetting as documented. pageshow
+// fires whenever the page becomes visible again regardless of how it
+// got there (fresh load, back-forward cache restore, or an iOS
+// standalone-app resume), so it catches what visibilitychange misses.
+// Harmless to call unconditionally — resetHourly() is a no-op if hourly
+// mode wasn't active.
+window.addEventListener("pageshow", () => {
+  if (state.hourlyActive) {
     resetHourly();
     renderHeadline();
   }
