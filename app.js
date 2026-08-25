@@ -1767,53 +1767,66 @@ function openHourlySheet(conditionName) {
     sheetBody.appendChild(empty);
     sheetFootnote.textContent = "";
   } else {
-    const count = Math.min(hourRange, state.hourly.times.length);
-    const hourTimes = state.hourly.times.slice(0, count);
+    try {
+      const count = Math.min(hourRange, state.hourly.times.length);
+      const hourTimes = state.hourly.times.slice(0, count);
 
-    if (conditionName === "rain") {
-      const raw = state.hourly.precipitation.slice(0, count);
-      const display = raw.map(v => convertForDisplay(v, "rain"));
-      const g = sheetRenderBar(hourTimes, display, "#2f6f4f", "rain");
-      sheetBody.appendChild(g.wrap);
-      attachSheetScrubber({
-        ...g,
-        formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
-        defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
-      });
-    } else if (conditionName === "temperature") {
-      const raw = state.hourly.temperature.slice(0, count);
-      const display = raw.map(v => convertForDisplay(v, "temperature"));
-      const g = sheetRenderLine(hourTimes, display, "#b5651d", "temperature");
-      sheetBody.appendChild(g.wrap);
-      attachSheetScrubber({
-        ...g,
-        formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "temperature")}${unitLabel("temperature")}` }),
-        defaultReadout: { time: "Now", value: `${formatConverted(display[0], "temperature")}${unitLabel("temperature")}` }
-      });
-    } else if (conditionName === "wind") {
-      const raw = state.hourly.windSpeed.slice(0, count);
-      const display = raw.map(v => convertForDisplay(v, "wind"));
-      const dirs = state.hourly.windDirection.slice(0, count);
-      const g = sheetRenderWind(hourTimes, display, dirs);
-      sheetBody.appendChild(g.wrap);
-      attachSheetScrubber({
-        ...g,
-        formatReadout: i => ({
-          time: sheetClockLabel(hourTimes[i]),
-          value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim()
-        }),
-        defaultReadout: {
-          time: "Now",
-          value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim()
-        }
-      });
-    } else if (conditionName === "sunshine") {
-      sheetBody.appendChild(sheetRenderSunStrip(hourTimes, state.hourly.cloudCover.slice(0, count)));
+      if (conditionName === "rain") {
+        const raw = state.hourly.precipitation.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "rain"));
+        const g = sheetRenderBar(hourTimes, display, "#2f6f4f", "rain");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
+        });
+      } else if (conditionName === "temperature") {
+        const raw = state.hourly.temperature.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "temperature"));
+        const g = sheetRenderLine(hourTimes, display, "#b5651d", "temperature");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "temperature")}${unitLabel("temperature")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "temperature")}${unitLabel("temperature")}` }
+        });
+      } else if (conditionName === "wind") {
+        const raw = state.hourly.windSpeed.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "wind"));
+        const dirs = state.hourly.windDirection.slice(0, count);
+        const g = sheetRenderWind(hourTimes, display, dirs);
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({
+            time: sheetClockLabel(hourTimes[i]),
+            value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim()
+          }),
+          defaultReadout: {
+            time: "Now",
+            value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim()
+          }
+        });
+      } else if (conditionName === "sunshine") {
+        sheetBody.appendChild(sheetRenderSunStrip(hourTimes, state.hourly.cloudCover.slice(0, count)));
+      }
+
+      sheetFootnote.textContent = conditionName === "sunshine"
+        ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
+        : "Drag your finger along the graph to read any hour — the reading above stays put so your hand doesn't cover it.";
+    } catch (err) {
+      // Whatever went wrong building the graph, the sheet still needs to
+      // open and say so — a silent failure here previously meant tapping
+      // a headline figure looked like it did nothing at all.
+      console.error("Hourly graph failed to render:", err);
+      sheetBody.innerHTML = "";
+      const empty = document.createElement("p");
+      empty.className = "sheet-empty";
+      empty.textContent = "Couldn't build this graph right now.";
+      sheetBody.appendChild(empty);
+      sheetFootnote.textContent = "";
     }
-
-    sheetFootnote.textContent = conditionName === "sunshine"
-      ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
-      : "Drag your finger along the graph to read any hour — the reading above stays put so your hand doesn't cover it.";
   }
 
   sheet.hidden = false;

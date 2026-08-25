@@ -65,6 +65,21 @@ header p {
 .headline-cell {
   display: flex;
   flex-direction: column;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  padding: 6px;
+  margin: -6px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.headline-cell:hover,
+.headline-cell:active {
+  background: rgba(255, 255, 255, .5);
 }
 
 .headline-label {
@@ -73,6 +88,19 @@ header p {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.headline-label::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 2px solid #7d9a89;
+  border-bottom: 2px solid #7d9a89;
+  transform: rotate(-45deg);
+  margin-top: -2px;
 }
 
 .headline-value-row {
@@ -811,3 +839,92 @@ footer {
     padding: 14px;
   }
 }
+
+/* ---- Hourly graph sheet ---- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(20, 30, 24, 0.35);
+  opacity: 0; pointer-events: none;
+  transition: opacity .22s ease;
+  z-index: 10;
+}
+.sheet-backdrop.is-open { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  max-width: 1100px; margin: 0 auto;
+  background: #fbfcfa;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -8px 30px rgba(20,30,24,.22);
+  transform: translateY(100%);
+  transition: transform .28s cubic-bezier(.32,.72,0,1);
+  z-index: 11;
+  padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
+  max-height: 78vh;
+  overflow-y: auto;
+}
+.sheet[hidden] { display: block; } /* transform handles hiding, so it can transition; hidden just removes from a11y tree via JS toggle instead */
+.sheet.is-open { transform: translateY(0); }
+
+.sheet-handle {
+  width: 36px; height: 4px;
+  background: #d3ddd6;
+  border-radius: 999px;
+  margin: 4px auto 14px;
+}
+
+.sheet-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sheet-title { font-size: 20px; font-weight: 700; color: var(--accent-dark); margin: 0; }
+.sheet-range { font-size: 13px; color: #6b7d70; }
+
+.sheet-close {
+  position: absolute; top: 14px; right: 16px;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  border: 0; color: var(--accent-dark);
+  font-size: 16px; line-height: 1;
+  cursor: pointer;
+  min-height: 0;
+  padding: 0;
+}
+
+.sheet-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--accent-light);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.sheet-readout[hidden] { display: none; }
+.sheet-readout-time { font-size: 12px; font-weight: 600; color: #4c6a58; }
+.sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
+
+.graph-wrap { margin-top: 18px; }
+.graph-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.graph-axis-label { font-size: 10px; fill: #6b7d70; }
+.graph-value-label { font-size: 10px; fill: var(--accent-dark); font-weight: 700; }
+.graph-gridline { stroke: #e4e9e4; stroke-width: 1; }
+.graph-axis-value { font-size: 10px; fill: #8a988e; }
+.graph-tick { stroke: #c7d2c9; stroke-width: 1; }
+.wind-dir-halo { fill: #fbfcfa; stroke: #d3ddd6; stroke-width: 1; }
+
+.scrub-line { stroke: var(--accent-dark); stroke-width: 1.5; pointer-events: none; }
+.scrub-dot { fill: var(--accent-dark); stroke: white; stroke-width: 1.5; pointer-events: none; }
+.graph-touch-area { fill: transparent; touch-action: pan-y; }
+
+.sun-strip { display: flex; margin-top: 14px; gap: 2px; overflow-x: auto; }
+.sun-cell { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sun-icon { width: 26px; height: 26px; flex-shrink: 0; }
+.sun-hour-label { font-size: 9px; color: #6b7d70; white-space: nowrap; }
+
+.sheet-footnote { margin: 16px 2px 0; font-size: 12px; color: #6b7d70; line-height: 1.5; }
+.sheet-empty { margin: 24px 4px; color: #6b7d70; font-size: 14px; text-align: center; }
