@@ -1767,7 +1767,13 @@ function sheetClockLabel(iso) {
 function niceStep(rawStep) {
   const mag = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
   const norm = rawStep / mag;
-  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  // A finer set of "nice" multipliers than the old 1/2/5/10 — that
+  // coarser set could nearly double the needed range (e.g. a raw step of
+  // 1.1 rounding straight up to 2), leaving a lot of empty headroom above
+  // the actual data. Picking the smallest candidate that still covers the
+  // range keeps the axis snug against the real values.
+  const candidates = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  const step = candidates.find(c => c >= norm) ?? 10;
   return step * mag;
 }
 
