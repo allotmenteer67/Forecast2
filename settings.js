@@ -30,8 +30,8 @@ const hourRange48 = document.getElementById("hourRange48");
 const hourRange24 = document.getElementById("hourRange24");
 const currentHourRange = loadHourRange();
 if (hourRange48 && hourRange24) {
-  hourRange48.checked = currentHourRange === "48";
-  hourRange24.checked = currentHourRange === "24";
+  hourRange48.checked = String(currentHourRange) === "48";
+  hourRange24.checked = String(currentHourRange) === "24";
 
   [hourRange48, hourRange24].forEach(input => {
     input.addEventListener("change", () => {

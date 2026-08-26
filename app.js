@@ -1553,6 +1553,74 @@ function anyRealWindDirection(day, rollbackDays) {
   return null;
 }
 
+// ---- "Today" specifically: live rather than snapshot ----
+// Every other date on the slider (past or future) has to use a fixed
+// forecast snapshot — FFV training needs a stable "this was forecast,
+// this is what happened" pair, and a constantly-shifting live number
+// would make that comparison meaningless. But "Today" doesn't need to be
+// a training sample to be shown — it can use the freshest information
+// available, so it doesn't sit there showing yesterday's now-outdated
+// guess when a newer forecast run already knows better. This only
+// changes what's DISPLAYED for Today; the FFV/accuracy machinery
+// underneath keeps using the day-1 snapshot exactly as before.
+//
+// How many of state.hourly.times (which starts at "now") still fall on
+// today's calendar date — the cutoff for "the rest of today" below.
+function remainingTodayHourCount() {
+  if (!state.hourly.times.length) return 0;
+  const todayKey = isoDate(new Date());
+  let count = 0;
+  for (const iso of state.hourly.times) {
+    if (isoDate(new Date(iso)) !== todayKey) break;
+    count++;
+  }
+  return count;
+}
+
+// Returns null for anything without a live path (currently Sunshine —
+// there's no hourly sunshine feed to build "actual so far + remaining
+// daylight" from) so the caller can fall back to the usual snapshot.
+function liveTodayValueFor(conditionName) {
+  const remaining = remainingTodayHourCount();
+  const actualToday = actualValueFor(conditionName, 0); // running total/max so far today, or null pre-dawn
+
+  switch (conditionName) {
+    case "rain": {
+      const forecastRest = state.hourly.precipitation
+        .slice(0, remaining)
+        .reduce((sum, v) => sum + (v ?? 0), 0);
+      return (actualToday ?? 0) + forecastRest;
+    }
+    case "wind": {
+      // "Windiest hour today" — actual-so-far is already a running max
+      // (same convention as Rain's running total), so the live figure is
+      // whichever is bigger: what's already happened, or what's still
+      // forecast for the rest of today.
+      const forecastRestMax = state.hourly.windSpeed
+        .slice(0, remaining)
+        .reduce((max, v) => (v !== null && v !== undefined ? Math.max(max, v) : max), 0);
+      return Math.max(actualToday ?? 0, forecastRestMax);
+    }
+    case "temperature":
+      return state.hourly.temperature[0] ?? null;
+    case "pressure":
+      return state.hourly.pressure[0] ?? null;
+    default:
+      return null;
+  }
+}
+
+// The single point renderHeadline calls for a non-hourly-slider figure —
+// Today gets the live treatment above where one exists; every other date
+// (and Sunshine, which has none) keeps the existing snapshot.
+function headlineDisplayValueFor(conditionName) {
+  if (state.rollback === 0 && state.hourly.status === "ready") {
+    const live = liveTodayValueFor(conditionName);
+    if (live !== null && live !== undefined) return live;
+  }
+  return headlineValueFor(conditionName);
+}
+
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
@@ -1605,14 +1673,14 @@ function renderHeadline() {
           valueEl.textContent = percent !== null ? String(percent) : "–";
         }
       } else {
-        const value = headlineValueFor(conditionName);
+        const value = headlineDisplayValueFor(conditionName);
         valueEl.textContent = formatValue(value, conditionName);
       }
     } else if (showHourly) {
       const value = hourlyValueFor(conditionName);
       valueEl.textContent = value !== null ? formatValue(value, conditionName) : "–";
     } else {
-      const value = headlineValueFor(conditionName);
+      const value = headlineDisplayValueFor(conditionName);
       valueEl.textContent = formatValue(value, conditionName);
     }
 
@@ -1978,6 +2046,14 @@ function openHourlySheet(conditionName) {
           formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "rain")}${unitLabel("rain")}` }),
           defaultReadout: { time: "Now", value: `${formatConverted(display[0], "rain")}${unitLabel("rain")}` }
         });
+        // Each bar is that ONE hour's rainfall, not a running total — on
+        // its own that reads oddly next to the headline's whole-day
+        // figure (e.g. a 5.7mm day made of many small hourly amounts, no
+        // single bar anywhere near 5.7). Spelling out the sum across the
+        // visible window closes that gap without needing a second chart.
+        const total = display.reduce((a, b) => a + (b ?? 0), 0);
+        sheetFootnote.textContent =
+          `Total across shown ${count}h: ${formatConverted(total, "rain")}${unitLabel("rain")} · Drag your finger along the graph to read any hour.`;
       } else if (conditionName === "temperature") {
         const raw = state.hourly.temperature.slice(0, count);
         const display = raw.map(v => convertForDisplay(v, "temperature"));
@@ -2021,6 +2097,8 @@ function openHourlySheet(conditionName) {
 
       sheetFootnote.textContent = conditionName === "sunshine"
         ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
+        : conditionName === "rain"
+        ? sheetFootnote.textContent // already set above with the running total
         : "Drag your finger along the graph to read any hour — the reading above stays put so your hand doesn't cover it.";
     } catch (err) {
       // Whatever went wrong building the graph, the sheet still needs to
@@ -2115,13 +2193,48 @@ if (accuracyMode) {
 // eligibility gate (that's a separate, stricter "is this still noisy"
 // check — see isForecasterEligible), so no extra plumbing is needed to
 // make this a genuine hindsight comparison rather than a live decision.
+//
+// ONE selection, shared across every condition and persisted — picking
+// which forecasters to compare is a single ongoing choice, not something
+// to redo every time you switch from Rain to Wind. Only the very first
+// time this is ever opened does it default itself (to whichever selected
+// sources are eligible for the condition on screen at that moment); every
+// choice after that is exactly what was left checked, everywhere.
+const WHAT_IF_KEY = "forecast-compare:whatIf";
+
+function loadWhatIf() {
+  try {
+    const raw = localStorage.getItem(WHAT_IF_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {
+    // fall through — treat as "never set" so the caller can default it
+  }
+  return null;
+}
+
+function saveWhatIf(set) {
+  try {
+    localStorage.setItem(WHAT_IF_KEY, JSON.stringify([...set]));
+  } catch {
+    // Storage unavailable — selection just won't persist between visits.
+  }
+}
+
 function initWhatIfIfNeeded() {
   if (!whatIfChecks) return;
   if (state.whatIf) return;
+
+  const stored = loadWhatIf();
+  if (stored) {
+    state.whatIf = stored;
+    return;
+  }
+
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
   state.whatIf = new Set(
     selectedSources.filter(source => isForecasterEligible(source, state.condition)).map(source => source.id)
   );
+  saveWhatIf(state.whatIf);
 }
 
 function whatIfMergedValue() {
@@ -2164,6 +2277,7 @@ function renderWhatIf() {
     input.addEventListener("change", () => {
       if (input.checked) state.whatIf.add(source.id);
       else state.whatIf.delete(source.id);
+      saveWhatIf(state.whatIf);
       renderWhatIfResult();
     });
 
@@ -2267,7 +2381,7 @@ function renderTable() {
   const actual = actualValueFor(state.condition, rollbackDays);
   const actualKnown = state.actual.status === "ready" && rollbackDays > 0 && actual !== null;
 
-  [7, 6, 5, 4, 3, 2, 1].forEach(day => {
+  [1, 2, 3, 4, 5, 6, 7].forEach(day => {
     const row = document.createElement("tr");
     if (day === freshestDay) row.classList.add("row-final");
 
@@ -2545,7 +2659,6 @@ function updateRollbackLabel() {
 if (condition) {
   condition.addEventListener("change", () => {
     state.condition = condition.value;
-    state.whatIf = null; // re-default to this condition's own eligible sources
     renderTable();
   });
 }
