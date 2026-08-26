@@ -678,40 +678,86 @@ async function fetchHourlyForecast(lat, lon) {
   state.hourly.error = null;
 
   try {
-    const params = new URLSearchParams({
-      latitude: lat,
-      longitude: lon,
-      hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,uv_index,cloud_cover",
-      daily: "sunrise,sunset,uv_index_max",
-      models: REAL_SOURCES.find(s => s.id === "metoffice").model, // hourly stays Met Office-specific for now — see README
-      wind_speed_unit: "mph",
-      forecast_days: 3,
-      timezone: "auto"
-    });
+    const perSource = {};
+    let from = 0;
+    let sharedTimes = [];
 
-    const res = await fetch(`${WEATHER_URL}?${params.toString()}`);
-    if (!res.ok) throw new Error("Hourly forecast lookup failed");
-    const data = await res.json();
+    for (const { id, model } of REAL_SOURCES) {
+      const params = new URLSearchParams({
+        latitude: lat,
+        longitude: lon,
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
+        models: model,
+        wind_speed_unit: "mph",
+        forecast_days: 3,
+        timezone: "auto",
+        ...(id === "metoffice" ? { daily: "sunrise,sunset,uv_index_max" } : {})
+      });
 
-    const now = new Date();
-    const startIdx = data.hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
-    const from = startIdx >= 0 ? startIdx : 0;
+      const res = await fetch(`${WEATHER_URL}?${params.toString()}`);
+      if (!res.ok) throw new Error(`Hourly forecast lookup failed for ${id}`);
+      const data = await res.json();
 
-    state.hourly.times = data.hourly.time.slice(from);
-    state.hourly.temperature = data.hourly.temperature_2m.slice(from);
-    state.hourly.precipitation = data.hourly.precipitation.slice(from);
-    state.hourly.windSpeed = data.hourly.wind_speed_10m.slice(from);
-    state.hourly.windDirection = data.hourly.wind_direction_10m.slice(from);
-    state.hourly.uvIndex = data.hourly.uv_index.slice(from);
-    state.hourly.cloudCover = data.hourly.cloud_cover.slice(from);
+      if (id === "metoffice") {
+        const now = new Date();
+        const startIdx = data.hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
+        from = startIdx >= 0 ? startIdx : 0;
+        sharedTimes = data.hourly.time.slice(from);
 
-    state.hourly.sunriseByDate = {};
-    state.hourly.sunsetByDate = {};
-    state.hourly.uvMaxByDate = {};
-    data.daily.time.forEach((date, i) => {
-      state.hourly.sunriseByDate[date] = data.daily.sunrise[i];
-      state.hourly.sunsetByDate[date] = data.daily.sunset[i];
-      state.hourly.uvMaxByDate[date] = data.daily.uv_index_max[i];
+        state.hourly.uvIndex = data.hourly.uv_index.slice(from);
+        state.hourly.cloudCover = data.hourly.cloud_cover.slice(from);
+        state.hourly.sunriseByDate = {};
+        state.hourly.sunsetByDate = {};
+        state.hourly.uvMaxByDate = {};
+        data.daily.time.forEach((date, i) => {
+          state.hourly.sunriseByDate[date] = data.daily.sunrise[i];
+          state.hourly.sunsetByDate[date] = data.daily.sunset[i];
+          state.hourly.uvMaxByDate[date] = data.daily.uv_index_max[i];
+        });
+      }
+
+      perSource[id] = {
+        temperature: data.hourly.temperature_2m.slice(from, from + sharedTimes.length || undefined),
+        precipitation: data.hourly.precipitation.slice(from, from + sharedTimes.length || undefined),
+        windSpeed: data.hourly.wind_speed_10m.slice(from, from + sharedTimes.length || undefined),
+        windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined)
+      };
+    }
+
+    state.hourly.times = sharedTimes;
+    const count = sharedTimes.length;
+
+    // Each real source's own FFV correction is applied per hour first
+    // (same day-bucket convention used throughout the hourly view — an
+    // hour before midnight tonight is "day 1", the next day is "day 2"),
+    // then the corrected values are medianed together across sources —
+    // mirroring exactly how the daily table blends Met Office and ECMWF.
+    function blend(field, conditionName) {
+      return Array.from({ length: count }, (_, i) => {
+        const day = i < 24 ? 1 : 2;
+        const values = REAL_SOURCES.map(({ id }) => {
+          const raw = perSource[id]?.[field]?.[i];
+          if (raw === null || raw === undefined) return null;
+          const source = CONFIG.forecasters.find(s => s.id === id);
+          const ffv = ffvFor(source, conditionName, day);
+          return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
+        }).filter(v => v !== null && v !== undefined);
+        return values.length ? median(values) : null;
+      });
+    }
+
+    state.hourly.temperature = blend("temperature", "temperature");
+    state.hourly.precipitation = blend("precipitation", "rain");
+    state.hourly.windSpeed = blend("windSpeed", "wind");
+    // Direction can't be medianed the way speed can (it's angular, not
+    // linear) — first real source with a reading for that hour, same
+    // convention as anyRealWindDirection() uses for the daily table.
+    state.hourly.windDirection = Array.from({ length: count }, (_, i) => {
+      for (const { id } of REAL_SOURCES) {
+        const d = perSource[id]?.windDirection?.[i];
+        if (d !== null && d !== undefined) return d;
+      }
+      return null;
     });
 
     state.hourly.status = "ready";
@@ -1333,19 +1379,17 @@ function hourlyValueFor(conditionName) {
   const idx = state.hourIndex;
   if (idx === null || idx === undefined) return null;
 
-  let raw;
+  // state.hourly.{precipitation,temperature,windSpeed} are already a
+  // median across every real source, each corrected by its own FFV —
+  // built once in fetchHourlyForecast so every consumer (this readout,
+  // the graphs, wind direction) shares the same figures rather than
+  // each applying correction separately.
   switch (conditionName) {
-    case "rain": raw = state.hourly.precipitation[idx]; break;
-    case "wind": raw = state.hourly.windSpeed[idx]; break;
-    case "temperature": raw = state.hourly.temperature[idx]; break;
+    case "rain": return state.hourly.precipitation[idx] ?? null;
+    case "wind": return state.hourly.windSpeed[idx] ?? null;
+    case "temperature": return state.hourly.temperature[idx] ?? null;
     default: return null; // Sunshine has no hourly reading — see renderHeadline
   }
-  if (raw === null || raw === undefined) return null;
-
-  const metOffice = CONFIG.forecasters.find(source => source.id === "metoffice");
-  const day = idx < 24 ? 1 : 2;
-  const ffv = ffvFor(metOffice, conditionName, day);
-  return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
 }
 
 // Direction can't be medianed across sources the way speed can (it's
@@ -2294,7 +2338,12 @@ if (hourSlider) {
 
   hourSlider.addEventListener("input", () => {
     state.hourIndex = Number(hourSlider.value);
-    state.hourlyActive = true;
+    // Only a genuinely different hour switches to the hourly reading —
+    // landing back on "Now" (0) behaves as if the slider was never
+    // touched, so it matches what's shown on launch instead of jumping
+    // to a different, single-source calculation that looks the same
+    // ("Now") but isn't.
+    state.hourlyActive = state.hourIndex !== 0;
     updateSliderFill(hourSlider);
     updateHourLabel();
     renderHeadline();
