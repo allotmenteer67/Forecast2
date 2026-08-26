@@ -19,56 +19,93 @@ const CONFIG = {
     cloud: { name: "Cloud", unit: "%" },
     wind: { name: "Wind", unit: "mph" },
     temperature: { name: "Temperature", unit: "°C" },
+    pressure: { name: "Pressure", unit: "hPa" },
     sunshine: { name: "Sunshine", unit: "hrs" },
     uv: { name: "UV", unit: "index" }
   }
 };
 
 // Everything is stored and computed internally in these native units —
-// rain in mm, wind in mph, temperature in °C — regardless of the display
-// toggle below. Only formatValue() and unit labels convert for display;
-// FFV, accuracy, and all other math always operate on native values, so
-// the toggle can never skew the numbers themselves, only how they're shown.
-const UNIT_SYSTEM_KEY = "forecast-compare:unitSystem";
+// rain in mm, wind in mph, temperature in °C, pressure in hPa — regardless
+// of the display choice below. Only formatValue() and unit labels convert
+// for display; FFV, accuracy, and all other math always operate on native
+// values, so the display choice can never skew the numbers themselves,
+// only how they're shown.
+//
+// Units are chosen PER CONDITION rather than one global Metric/Imperial
+// toggle — someone can genuinely want mm for Rain, °C for Temperature, and
+// mph for Wind all at once, which a single switch could never express.
+// CONDITION_UNIT_TOGGLES lists which conditions actually have a choice
+// (Cloud/Sunshine/UV are unitless/universal either way, so they're left
+// out rather than offering a toggle that does nothing).
+const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
+const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
+const DEFAULT_CONDITION_UNITS = {
+  rain: "metric", // mm
+  temperature: "metric", // °C
+  wind: "imperial", // mph
+  pressure: "metric" // hPa
+};
 const CONDITION_UNIT_LABELS = {
   rain: { metric: "mm", imperial: "in" },
   cloud: { metric: "%", imperial: "%" },
   wind: { metric: "km/h", imperial: "mph" },
   temperature: { metric: "°C", imperial: "°F" },
+  pressure: { metric: "hPa", imperial: "inHg" },
   sunshine: { metric: "hrs", imperial: "hrs" },
   uv: { metric: "index", imperial: "index" }
 };
 
-function loadUnitSystem() {
+function loadConditionUnits() {
+  let stored = {};
   try {
-    const raw = localStorage.getItem(UNIT_SYSTEM_KEY);
-    if (raw === "metric" || raw === "imperial") return raw;
+    const raw = localStorage.getItem(CONDITION_UNITS_KEY);
+    if (raw) stored = JSON.parse(raw);
   } catch {
-    // fall through to default
+    // fall through to defaults
   }
-  return "metric";
+  return { ...DEFAULT_CONDITION_UNITS, ...stored };
+}
+
+function saveConditionUnit(conditionName, system) {
+  const units = loadConditionUnits();
+  units[conditionName] = system;
+  try {
+    localStorage.setItem(CONDITION_UNITS_KEY, JSON.stringify(units));
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+  state.conditionUnits = units;
+}
+
+// The unit system ("metric" | "imperial") in effect for one condition —
+// conditions without a toggle (Cloud, Sunshine, UV) always read as metric,
+// which is harmless since their labels are identical either way.
+function conditionUnit(conditionName) {
+  return state.conditionUnits[conditionName] ?? "metric";
 }
 
 function unitLabel(conditionName) {
-  return CONDITION_UNIT_LABELS[conditionName]?.[state.unitSystem] ?? CONFIG.conditions[conditionName].unit;
+  return CONDITION_UNIT_LABELS[conditionName]?.[conditionUnit(conditionName)] ?? CONFIG.conditions[conditionName].unit;
 }
 
-// Converts a native-unit value (mm / mph / °C) to whichever system the
-// toggle is set to. Cloud, Sunshine, and UV are unitless/universal and
-// pass through unchanged either way. isDelta matters only for
+// Converts a native-unit value (mm / mph / °C / hPa) to whichever system
+// this condition's own toggle is set to. isDelta matters only for
 // temperature: a DIFFERENCE (badge deltas, accuracy error magnitudes)
 // scales by 9/5 with no +32 offset — converting a 2°C gap should give a
 // 3.6°F gap, not 2×9/5+32.
 function convertForDisplay(value, conditionName, isDelta = false) {
   if (value === null || value === undefined) return value;
-  if (state.unitSystem === "imperial") {
+  const system = conditionUnit(conditionName);
+  if (system === "imperial") {
     if (conditionName === "rain") return value / 25.4; // mm -> in
     if (conditionName === "temperature") return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
+    if (conditionName === "pressure") return value / 33.8639; // hPa -> inHg
     return value; // wind is already mph natively
   }
   // metric
   if (conditionName === "wind") return value * 1.60934; // mph -> km/h
-  return value; // rain (mm) and temperature (°C) are already metric natively
+  return value; // rain (mm), temperature (°C) and pressure (hPa) are already metric natively
 }
 
 // ---- Actual weather (Open-Meteo, no API key) ----
@@ -85,7 +122,7 @@ const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live 
 // Real data (Open-Meteo's Previous Runs API) only covers these four
 // conditions for any source — Sunshine and UV aren't in that dataset, so
 // real sources fall back to the demo formula for those two.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature"]);
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -176,7 +213,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windDirection: [], cloud: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windDirection: [], cloud: [], pressure: [] };
   }
   return byLeadDay;
 }
@@ -199,7 +236,7 @@ const state = {
   rollback: 0,
   postcode: loadCurrentPostcode(),
   selected: loadSelectedForecasters(),
-  unitSystem: loadUnitSystem(),
+  conditionUnits: loadConditionUnits(),
   areaCode: "",
   lat: null,
   lon: null,
@@ -215,7 +252,8 @@ const state = {
     windspeed_10m_max: [],
     sunshine_duration: [],
     uv_index_max: [],
-    cloud_mean: []
+    cloud_mean: [],
+    pressure_mean: []
   },
   realSources: emptyRealSourcesState(),
   backfill: {
@@ -237,6 +275,7 @@ const state = {
     precipitation: [],
     windSpeed: [],
     windDirection: [],
+    pressure: [],
     uvIndex: [],
     cloudCover: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
@@ -244,7 +283,8 @@ const state = {
     uvMaxByDate: {} // "YYYY-MM-DD" -> that day's peak UV index
   },
   hourIndex: 0, // 0 = now; the hour slider's current position
-  hourlyActive: false // true while the hour slider is showing a specific hour rather than "Now"
+  hourlyActive: false, // true while the hour slider is showing a specific hour rather than "Now"
+  whatIf: null // Set of source ids for the Compare page's what-if merge; null until first initialised for the current condition
 };
 
 const postcode = document.getElementById("postcode");
@@ -285,6 +325,8 @@ const placesList = document.getElementById("placesList");
 const addCurrentPlaceButton = document.getElementById("addCurrentPlace");
 const useMyLocationButton = document.getElementById("useMyLocation");
 const geoStatus = document.getElementById("geoStatus");
+const whatIfChecks = document.getElementById("whatIfSources");
+const whatIfResult = document.getElementById("whatIfResult");
 
 if (postcode) postcode.value = state.postcode;
 
@@ -320,6 +362,9 @@ function demoValue(day, source, conditionName) {
     case "temperature":
       value = 17.5 - day * 0.3 + sourceOffset * 0.4;
       break;
+    case "pressure":
+      value = 1013 - day * 0.3 + sourceOffset * 2;
+      break;
     case "sunshine":
       value = Math.max(0, 5.2 - day * 0.3 - sourceOffset * 0.2);
       break;
@@ -340,7 +385,12 @@ function formatValue(rawValue, conditionName, isDelta = false) {
     // Rain values are typically well under 1 unit — whole numbers would
     // read as "0" on most days, so this keeps decimal precision even
     // though everything else has been simplified to whole numbers.
-    return state.unitSystem === "imperial" ? value.toFixed(2) : value.toFixed(1);
+    return conditionUnit("rain") === "imperial" ? value.toFixed(2) : value.toFixed(1);
+  }
+  if (conditionName === "pressure" && !isDelta) {
+    // inHg values sit around 29.9 — rounding to a whole number would
+    // erase basically all of the useful precision.
+    return conditionUnit("pressure") === "imperial" ? value.toFixed(2) : Math.round(value).toString();
   }
   if (isDelta) {
     // Deltas and accuracy errors are often small numbers near zero —
@@ -505,7 +555,7 @@ async function fetchActualWeather(lat, lon) {
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
-      hourly: "cloudcover",
+      hourly: "cloudcover,pressure_msl",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       wind_speed_unit: "mph",
@@ -529,6 +579,12 @@ async function fetchActualWeather(lat, lon) {
       data.hourly.time,
       data.hourly.cloudcover,
       dayCount
+    );
+    state.actual.pressure_mean = aggregateHourlyByDay(
+      data.hourly.time,
+      data.hourly.pressure_msl,
+      dayCount,
+      "mean"
     );
     state.actual.status = "ready";
   } catch (err) {
@@ -559,7 +615,8 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `precipitation_previous_day${d}`,
         `wind_speed_10m_previous_day${d}`,
         `wind_direction_10m_previous_day${d}`,
-        `cloud_cover_previous_day${d}`
+        `cloud_cover_previous_day${d}`,
+        `pressure_msl_previous_day${d}`
       );
     }
 
@@ -593,7 +650,8 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
         wind: aggregateHourlyByDay(hourlyTimes, windSpeedHourly, dayCount, "max"),
         windDirection: directionAtPeakHour(hourlyTimes, windSpeedHourly, data.hourly[`wind_direction_10m_previous_day${d}`], dayCount),
-        cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean")
+        cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
+        pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
       };
     }
 
@@ -686,7 +744,7 @@ async function fetchHourlyForecast(lat, lon) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,pressure_msl" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -720,7 +778,8 @@ async function fetchHourlyForecast(lat, lon) {
         temperature: data.hourly.temperature_2m.slice(from, from + sharedTimes.length || undefined),
         precipitation: data.hourly.precipitation.slice(from, from + sharedTimes.length || undefined),
         windSpeed: data.hourly.wind_speed_10m.slice(from, from + sharedTimes.length || undefined),
-        windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined)
+        windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
+        pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined)
       };
     }
 
@@ -749,6 +808,7 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.temperature = blend("temperature", "temperature");
     state.hourly.precipitation = blend("precipitation", "rain");
     state.hourly.windSpeed = blend("windSpeed", "wind");
+    state.hourly.pressure = blend("pressure", "pressure");
     // Direction can't be medianed the way speed can (it's angular, not
     // linear) — first real source with a reading for that hour, same
     // convention as anyRealWindDirection() uses for the daily table.
@@ -831,12 +891,14 @@ async function loadCommittedHistory() {
     const dates = Object.keys(data.days || {});
 
     const store = loadFFVStore(state.areaCode);
+    const eligStore = loadEligibilityStore(state.areaCode);
     // Rebuild every real source's entries from scratch — this file is the
     // single source of truth for them, so a partial/incremental merge
     // would risk exactly the double-counting this mechanism exists to avoid.
     Object.keys(CONFIG.conditions).forEach(conditionName => {
       realSourceIds().forEach(sourceId => {
         if (store[conditionName]) delete store[conditionName][sourceId];
+        if (eligStore[conditionName]) delete eligStore[conditionName][sourceId];
       });
     });
 
@@ -854,13 +916,14 @@ async function loadCommittedHistory() {
           for (let day = 1; day <= 7; day++) {
             const mean = meanFromHistoryDay(dayEntry, sourceId, day, conditionName);
             if (!mean) continue;
-            recordFFVSample(store, conditionName, sourceId, day, mean, actual);
+            recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, date);
           }
         });
       });
     });
 
     saveFFVStore(state.areaCode, store);
+    saveEligibilityStore(state.areaCode, eligStore);
     state.history.status = "ready";
     state.history.dayCount = dates.length;
   } catch (err) {
@@ -968,6 +1031,8 @@ function actualValueFor(conditionName, rollbackDays) {
     }
     case "uv":
       return state.actual.uv_index_max[idx];
+    case "pressure":
+      return state.actual.pressure_mean[idx];
     default:
       return null;
   }
@@ -999,6 +1064,7 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
     case "wind": return byDay.wind[idx] ?? null;
     case "cloud": return byDay.cloud[idx] ?? null;
     case "temperature": return byDay.tempAvg[idx] ?? null;
+    case "pressure": return byDay.pressure[idx] ?? null;
     default: return null;
   }
 }
@@ -1104,7 +1170,7 @@ function renderActualStatus() {
 
 const FFV_MIN_SAMPLES = 3;
 const FFV_RATIO_CLAMP = [0.1, 5]; // guards against near-zero means blowing up the ratio
-const FFV_OFFSET_CLAMP = [-15, 15]; // °C — generous but rules out a single wild sample skewing things
+const FFV_OFFSET_CLAMP = [-15, 15]; // °C or hPa — generous but rules out a single wild sample skewing things
 
 // Rain/Cloud/Wind are ratio quantities ("20% too high" is meaningful) so
 // a multiplicative correction (mean × FFV) is right for them. Temperature
@@ -1113,7 +1179,12 @@ const FFV_OFFSET_CLAMP = [-15, 15]; // °C — generous but rules out a single w
 // additive correction instead (mean + FFV), tracked as a separate running
 // average alongside the ratio one, rather than reinterpreting.
 function isRatioCondition(conditionName) {
-  return conditionName !== "temperature";
+  // Temperature (°C) and Pressure (hPa) both sit on scales without a
+  // practically-meaningful zero for this purpose — pressure varies in a
+  // narrow band around ~1013hPa, so "actual ÷ mean" would barely move
+  // and isn't a meaningful "X% too high" the way it is for Rain/Wind.
+  // Both get an additive correction instead.
+  return conditionName !== "temperature" && conditionName !== "pressure";
 }
 
 function applyCorrection(mean, ffv, conditionName) {
@@ -1139,6 +1210,71 @@ function saveFFVStore(areaCode, store) {
   } catch {
     // Storage unavailable (e.g. private browsing) — FFV just won't persist.
   }
+}
+
+// ---- Eligibility: how many distinct CALENDAR DATES a source/condition
+// pair has actually been compared against Actual for — kept as its own
+// small store (separate from the FFV averages above) purely to avoid
+// disturbing the existing day-keyed (1-7) shape those already use.
+// This is deliberately dates, not sample count: updateFFVHistory can
+// process the same rollback window more than once (e.g. reopening the
+// app the same day), and a demo source has no backfill, so real time has
+// to pass for this to grow — which is exactly what "2 weeks of data"
+// should mean. Real sources cross the threshold immediately after their
+// one-off backfill, since that already covers a year of distinct dates.
+const ELIGIBILITY_MIN_DAYS = 14;
+
+function eligibilityStorageKey(areaCode) {
+  return `forecast-compare:eligibility:${areaCode}`;
+}
+
+function loadEligibilityStore(areaCode) {
+  try {
+    const raw = localStorage.getItem(eligibilityStorageKey(areaCode));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveEligibilityStore(areaCode, store) {
+  try {
+    localStorage.setItem(eligibilityStorageKey(areaCode), JSON.stringify(store));
+  } catch {
+    // Storage unavailable — eligibility just won't persist between visits.
+  }
+}
+
+function markDateSeen(eligStore, conditionName, sourceId, dateKey) {
+  if (!dateKey) return;
+  eligStore[conditionName] ??= {};
+  eligStore[conditionName][sourceId] ??= {};
+  eligStore[conditionName][sourceId][dateKey] = true;
+  // Cap so a long-running real source's entry can't grow forever —
+  // nothing beyond ELIGIBILITY_MIN_DAYS is ever needed for the threshold
+  // check, so trimming the oldest dates loses nothing meaningful.
+  const keys = Object.keys(eligStore[conditionName][sourceId]);
+  if (keys.length > 400) {
+    keys.sort().slice(0, keys.length - 400).forEach(k => delete eligStore[conditionName][sourceId][k]);
+  }
+}
+
+function daysSeenCount(eligStore, conditionName, sourceId) {
+  return Object.keys(eligStore[conditionName]?.[sourceId] ?? {}).length;
+}
+
+function daysSeenFor(source, conditionName) {
+  if (!state.areaCode) return 0;
+  return daysSeenCount(loadEligibilityStore(state.areaCode), conditionName, source.id);
+}
+
+// Whether this source has earned a place in the live merge/Compare view
+// for this condition yet — see ELIGIBILITY_MIN_DAYS above. Deliberately
+// separate from ffvFor's own FFV_MIN_SAMPLES gate (which only asks "is
+// there enough to compute a correction at all") — this is the stricter,
+// user-facing "has this been watched for two weeks" bar.
+function isForecasterEligible(source, conditionName) {
+  return daysSeenFor(source, conditionName) >= ELIGIBILITY_MIN_DAYS;
 }
 
 // 3-day mean for a given day-out row, at whatever target date the current
@@ -1172,8 +1308,9 @@ function clampOffset(offset) {
 // correction have done on this one" rather than retroactively applying
 // the final FFV to old data. Scoring only starts once FFV_MIN_SAMPLES is
 // already met, since there's no meaningful correction before that.
-function recordFFVSample(store, conditionName, sourceId, day, mean, actual) {
+function recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey) {
   if (!mean) return; // guards against divide-by-zero ratios
+  if (eligStore) markDateSeen(eligStore, conditionName, sourceId, dateKey);
 
   store[conditionName] ??= {};
   store[conditionName][sourceId] ??= {};
@@ -1213,9 +1350,11 @@ function updateFFVHistory() {
   if (!state.areaCode || state.actual.status !== "ready") return;
 
   const store = loadFFVStore(state.areaCode);
+  const eligStore = loadEligibilityStore(state.areaCode);
   const realIds = realSourceIds();
 
   for (let rollbackDays = 1; rollbackDays <= MAX_ROLLBACK; rollbackDays++) {
+    const dateKey = isoDate(targetDateForRollback(rollbackDays));
     Object.keys(CONFIG.conditions).forEach(conditionName => {
       const actual = actualValueFor(conditionName, rollbackDays);
       if (actual === null || actual === undefined) return;
@@ -1226,13 +1365,14 @@ function updateFFVHistory() {
           for (let day = 1; day <= 7; day++) {
             const mean = threeDayMean(day, source, conditionName, rollbackDays);
             if (!mean) continue; // skip zero/near-zero means, avoids ratio blow-ups
-            recordFFVSample(store, conditionName, source.id, day, mean, actual);
+            recordFFVSample(store, conditionName, source.id, day, mean, actual, eligStore, dateKey);
           }
         });
     });
   }
 
   saveFFVStore(state.areaCode, store);
+  saveEligibilityStore(state.areaCode, eligStore);
 }
 
 // Returns the learned FFV for this source/condition/day, or null if there
@@ -1266,7 +1406,7 @@ function ffvSampleTotal(conditionName) {
 // Approximate 0-100 closeness scale per condition — the error (in real
 // units) at which the score bottoms out at 0. Deliberately simple, not a
 // formal statistic; the average-error-in-units figure is the primary one.
-const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, sunshine: 4, uv: 3 };
+const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3 };
 
 function accuracyPercent(avgError, conditionName) {
   if (avgError === null) return null;
@@ -1327,7 +1467,7 @@ function median(values) {
 // rather than mean deliberately — a single wildly-off value (e.g. a stray
 // 45°C in November) gets outvoted rather than dragging an average off
 // course, with no arbitrary rejection threshold needed.
-const HEADLINE_CONDITIONS = ["rain", "temperature", "wind", "sunshine"];
+const HEADLINE_CONDITIONS = ["rain", "temperature", "wind", "pressure", "sunshine"];
 
 // The freshest available real forecast for the current target date. For
 // past/today (rollback >= 0) that's always day 1 — the closest forecast
@@ -1344,13 +1484,22 @@ function freshestDayFor(rollbackDays) {
 function headlineValueFor(conditionName) {
   const day = freshestDayFor(state.rollback);
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
-  const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
-  // Draw only from sources with genuine data behind them, so 11 demo
-  // forecasters can never outvote the one real signal. Falls back to the
-  // full selection only when no real source exists for this condition at
-  // all yet (currently Sunshine and UV) — otherwise the headline would
-  // just go blank rather than show a best-effort estimate.
-  const sourcesToUse = realSources.length > 0 ? realSources : selectedSources;
+
+  // Core ethos: merge every user-selected forecaster that's earned a
+  // place (ELIGIBILITY_MIN_DAYS of its own forecast-vs-actual history),
+  // not just the "official" real sources — the more corrected voices in
+  // the median, the more accurate the blend, and eligibility is what
+  // keeps a brand-new source's noise from joining before it's proven
+  // itself. Falls back to the old real-sources-first / full-selection
+  // behaviour only while NOTHING has reached eligibility yet (e.g. right
+  // after first setting up a new postcode, before backfill/collection
+  // has had a chance to run) — otherwise the headline would go blank.
+  const eligibleSources = selectedSources.filter(source => isForecasterEligible(source, conditionName));
+  let sourcesToUse = eligibleSources;
+  if (sourcesToUse.length === 0) {
+    const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
+    sourcesToUse = realSources.length > 0 ? realSources : selectedSources;
+  }
 
   const values = sourcesToUse
     .map(source => {
@@ -1388,6 +1537,7 @@ function hourlyValueFor(conditionName) {
     case "rain": return state.hourly.precipitation[idx] ?? null;
     case "wind": return state.hourly.windSpeed[idx] ?? null;
     case "temperature": return state.hourly.temperature[idx] ?? null;
+    case "pressure": return state.hourly.pressure[idx] ?? null;
     default: return null; // Sunshine has no hourly reading — see renderHeadline
   }
 }
@@ -1533,7 +1683,10 @@ function sheetSvgEl(tag, attrs) {
 function formatConverted(displayValue, conditionName) {
   if (displayValue === null || displayValue === undefined || Number.isNaN(displayValue)) return "–";
   if (conditionName === "rain") {
-    return state.unitSystem === "imperial" ? displayValue.toFixed(2) : displayValue.toFixed(1);
+    return conditionUnit("rain") === "imperial" ? displayValue.toFixed(2) : displayValue.toFixed(1);
+  }
+  if (conditionName === "pressure") {
+    return conditionUnit("pressure") === "imperial" ? displayValue.toFixed(2) : Math.round(displayValue).toString();
   }
   return Math.round(displayValue).toString();
 }
@@ -1854,6 +2007,16 @@ function openHourlySheet(conditionName) {
         });
       } else if (conditionName === "sunshine") {
         sheetBody.appendChild(sheetRenderSunStrip(hourTimes, state.hourly.cloudCover.slice(0, count)));
+      } else if (conditionName === "pressure") {
+        const raw = state.hourly.pressure.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "pressure"));
+        const g = sheetRenderLine(hourTimes, display, "#5b6b7a", "pressure");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "pressure")}${unitLabel("pressure")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "pressure")}${unitLabel("pressure")}` }
+        });
       }
 
       sheetFootnote.textContent = conditionName === "sunshine"
@@ -1902,6 +2065,21 @@ function renderAccuracy() {
     nameCell.textContent = source.name;
     row.appendChild(nameCell);
 
+    if (!isForecasterEligible(source, state.condition)) {
+      // Under ELIGIBILITY_MIN_DAYS: an accuracy score from a handful of
+      // samples is mostly noise — showing it (good or bad) before it
+      // means anything would be misleading either way. "Collecting
+      // data" replaces the whole stats block until it's earned trust.
+      const seen = daysSeenFor(source, state.condition);
+      const collectingCell = document.createElement("td");
+      collectingCell.colSpan = 3;
+      collectingCell.className = "col-collecting";
+      collectingCell.textContent = `Collecting data (${seen}/${ELIGIBILITY_MIN_DAYS} days)`;
+      row.appendChild(collectingCell);
+      accuracyBody.appendChild(row);
+      return;
+    }
+
     const samplesCell = document.createElement("td");
     samplesCell.textContent = stats ? stats.count : "0";
     row.appendChild(samplesCell);
@@ -1928,6 +2106,76 @@ if (accuracyMode) {
     }
     renderAccuracy();
   });
+}
+
+// ---- What-if merge (Compare page) ----
+// Recomputes the merged figure with specific forecasters ticked in/out,
+// using each forecaster's full learned FFV history via ffvFor/threeDayMean
+// exactly as the live headline does — those already ignore the 14-day
+// eligibility gate (that's a separate, stricter "is this still noisy"
+// check — see isForecasterEligible), so no extra plumbing is needed to
+// make this a genuine hindsight comparison rather than a live decision.
+function initWhatIfIfNeeded() {
+  if (!whatIfChecks) return;
+  if (state.whatIf) return;
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  state.whatIf = new Set(
+    selectedSources.filter(source => isForecasterEligible(source, state.condition)).map(source => source.id)
+  );
+}
+
+function whatIfMergedValue() {
+  const day = freshestDayFor(state.rollback);
+  const chosen = CONFIG.forecasters.filter(source => state.whatIf?.has(source.id));
+  const values = chosen
+    .map(source => {
+      const ffv = ffvFor(source, state.condition, day);
+      if (ffv !== null) {
+        const mean = threeDayMean(day, source, state.condition, state.rollback);
+        if (mean !== null) return applyCorrection(mean, ffv, state.condition);
+      }
+      return forecastValueFor(day, source, state.condition, state.rollback);
+    })
+    .filter(v => v !== null && v !== undefined);
+  return median(values);
+}
+
+function renderWhatIfResult() {
+  if (!whatIfResult) return;
+  const value = whatIfMergedValue();
+  whatIfResult.textContent = value !== null
+    ? `Merged figure with this selection: ${formatValue(value, state.condition)} ${unitLabel(state.condition)}`
+    : "Merged figure with this selection: – (nothing selected, or no data yet)";
+}
+
+function renderWhatIf() {
+  if (!whatIfChecks) return;
+  initWhatIfIfNeeded();
+  whatIfChecks.innerHTML = "";
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+
+  selectedSources.forEach(source => {
+    const label = document.createElement("label");
+    label.className = "check";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = state.whatIf.has(source.id);
+    input.addEventListener("change", () => {
+      if (input.checked) state.whatIf.add(source.id);
+      else state.whatIf.delete(source.id);
+      renderWhatIfResult();
+    });
+
+    const text = document.createElement("span");
+    const eligible = isForecasterEligible(source, state.condition);
+    text.textContent = source.name + (eligible ? "" : ` (under ${ELIGIBILITY_MIN_DAYS} days)`);
+
+    label.append(input, text);
+    whatIfChecks.appendChild(label);
+  });
+
+  renderWhatIfResult();
 }
 
 function renderTable() {
@@ -2039,6 +2287,21 @@ function renderTable() {
 
     selectedSources.forEach((source, index) => {
       const tintClass = index % 2 === 1 ? " forecaster-tint" : "";
+
+      if (!isForecasterEligible(source, state.condition)) {
+        // Under ELIGIBILITY_MIN_DAYS of its own history, this forecaster's
+        // Raw/Corrected figures are placeholders that would just read as
+        // "false diversity" — a single merged cell says so plainly
+        // instead of showing numbers that don't mean anything yet.
+        const seen = daysSeenFor(source, state.condition);
+        const collectingCell = document.createElement("td");
+        collectingCell.className = "col-collecting" + tintClass;
+        collectingCell.colSpan = 2;
+        collectingCell.textContent = `Collecting data (${seen}/${ELIGIBILITY_MIN_DAYS})`;
+        row.appendChild(collectingCell);
+        return;
+      }
+
       const value = forecastValueFor(day, source, state.condition, rollbackDays);
       const ffv = ffvFor(source, state.condition, day);
 
@@ -2105,6 +2368,7 @@ function renderTable() {
   }
 
   renderAccuracy();
+  renderWhatIf();
   renderHeadline();
 }
 
@@ -2119,7 +2383,8 @@ const BACKFILL_FIELD_FOR_CONDITION = {
   rain: "precip",
   wind: "wind",
   cloud: "cloud",
-  temperature: "tempAvg"
+  temperature: "tempAvg",
+  pressure: "pressure"
 };
 
 function renderBackfillStatus() {
@@ -2146,7 +2411,8 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `temperature_2m_previous_day${d}`,
       `precipitation_previous_day${d}`,
       `wind_speed_10m_previous_day${d}`,
-      `cloud_cover_previous_day${d}`
+      `cloud_cover_previous_day${d}`,
+      `pressure_msl_previous_day${d}`
     );
   }
   const params = new URLSearchParams({
@@ -2172,7 +2438,8 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
       precip: aggregateHourlyByDay(hourlyTime, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
       wind: aggregateHourlyByDay(hourlyTime, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
-      cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean")
+      cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
+      pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
     };
   }
   return byLeadDay;
@@ -2199,7 +2466,7 @@ async function backfillRealSourceHistory() {
       latitude: state.lat,
       longitude: state.lon,
       daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
-      hourly: "cloudcover",
+      hourly: "cloudcover,pressure_msl",
       start_date: isoDate(start),
       end_date: isoDate(end),
       wind_speed_unit: "mph",
@@ -2214,6 +2481,7 @@ async function backfillRealSourceHistory() {
       precip: actualData.daily.precipitation_sum,
       wind: actualData.daily.windspeed_10m_max,
       cloud: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover, dayCount, "mean"),
+      pressure: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.pressure_msl, dayCount, "mean"),
       tempAvg: actualData.daily.temperature_2m_max.map((max, i) => {
         const min = actualData.daily.temperature_2m_min[i];
         return (max !== null && min !== null) ? (max + min) / 2 : null;
@@ -2229,9 +2497,11 @@ async function backfillRealSourceHistory() {
     // Fold every (mean, actual) pair straight into the same FFV store the
     // day-to-day app reads from.
     const store = loadFFVStore(state.areaCode);
+    const eligStore = loadEligibilityStore(state.areaCode);
     let samplesAdded = 0;
 
     for (let i = 0; i < dayCount; i++) {
+      const dateKey = isoDate(addDays(start, i));
       REAL_DATA_CONDITIONS.forEach(conditionName => {
         const actual = yearActual[BACKFILL_FIELD_FOR_CONDITION[conditionName]][i];
         if (actual === null || actual === undefined) return;
@@ -2248,7 +2518,7 @@ async function backfillRealSourceHistory() {
             const mean = values.reduce((a, b) => a + b, 0) / values.length;
             if (!mean) return;
 
-            recordFFVSample(store, conditionName, sourceId, day, mean, actual);
+            recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey);
             samplesAdded += 1;
           }
         });
@@ -2256,6 +2526,7 @@ async function backfillRealSourceHistory() {
     }
 
     saveFFVStore(state.areaCode, store);
+    saveEligibilityStore(state.areaCode, eligStore);
     state.backfill = { status: "done", error: null, samplesAdded };
   } catch (err) {
     state.backfill = { status: "error", error: err.message || "Backfill failed", samplesAdded: 0 };
@@ -2274,6 +2545,7 @@ function updateRollbackLabel() {
 if (condition) {
   condition.addEventListener("change", () => {
     state.condition = condition.value;
+    state.whatIf = null; // re-default to this condition's own eligible sources
     renderTable();
   });
 }

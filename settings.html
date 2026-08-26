@@ -37,19 +37,9 @@
     </section>
 
     <section class="controls">
-      <fieldset>
-        <legend>Units</legend>
-        <div class="checks">
-          <label class="check">
-            <input type="radio" name="unitSystem" id="unitMetric" value="metric">
-            <span>Metric (mm, km/h, °C)</span>
-          </label>
-          <label class="check">
-            <input type="radio" name="unitSystem" id="unitImperial" value="imperial">
-            <span>Imperial (in, mph, °F)</span>
-          </label>
-        </div>
-      </fieldset>
+      <legend class="section-legend">Units</legend>
+      <p class="note">Each condition can use metric or imperial independently — e.g. mm for Rain alongside mph for Wind.</p>
+      <div id="conditionUnits"></div>
     </section>
 
     <section class="controls">

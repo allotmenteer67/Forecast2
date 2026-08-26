@@ -1,6 +1,6 @@
 {
   "name": "Cloude",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "platform": "GitHub Pages",
   "technology": [
     "HTML",
@@ -12,6 +12,7 @@
     { "id": "cloud", "name": "Cloud", "unit": "%" },
     { "id": "wind", "name": "Wind", "unit": "mph" },
     { "id": "temperature", "name": "Temperature", "unit": "\u00b0C" },
+    { "id": "pressure", "name": "Pressure", "unit": "hPa" },
     { "id": "sunshine", "name": "Sunshine", "unit": "hrs" },
     { "id": "uv", "name": "UV", "unit": "index" }
   ],
@@ -19,6 +20,7 @@
   "rain_probability": false,
   "forecasters": [
     { "id": "metoffice", "name": "Met Office", "enabled": true },
+    { "id": "ecmwf", "name": "ECMWF", "enabled": true },
     { "id": "bbc", "name": "BBC", "enabled": true },
     { "id": "meteo", "name": "Meteoblue", "enabled": true },
     { "id": "yr", "name": "YR", "enabled": true },
@@ -32,11 +34,12 @@
     { "id": "tomorrow", "name": "Tomorrow.io", "enabled": false }
   ],
   "rollback_days": 6,
-  "forecaster_data": "demo",
+  "eligibility_min_days": 14,
+  "forecaster_data": "demo, except Met Office and ECMWF which use real Open-Meteo model data",
   "actual_data": {
     "source": "Open-Meteo",
     "geocoding": "postcodes.io outcodes (first 3 characters of postcode)",
     "live": true,
-    "note": "Actual weather is fetched live for the selected target date. Forecaster predictions remain demo data until real forecast APIs are wired in per source."
+    "note": "Actual weather is fetched live for the selected target date. A forecaster's Raw/Corrected figures and its Accuracy row stay hidden behind a 'Collecting data' placeholder until it has 14 distinct days of its own forecast-vs-actual history."
   }
 }

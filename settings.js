@@ -17,12 +17,14 @@ const FORECASTERS = [
   { id: "tomorrow", name: "Tomorrow.io", enabled: false }
 ];
 
-// UNIT_SYSTEM_KEY, HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, loadUnitSystem(),
-// and loadHourRange() all now come from app.js, which this page loads first —
-// settings.html includes both scripts in the same global scope, so
-// redeclaring the same names here would be a duplicate-const syntax error
-// that silently breaks this entire file (which is exactly what was
-// happening: nothing on this page was saving because the file never ran).
+// HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, CONDITION_UNIT_TOGGLES,
+// CONDITION_UNIT_LABELS, DEFAULT_CONDITION_UNITS, loadConditionUnits(),
+// saveConditionUnit(), and loadHourRange() all now come from app.js, which
+// this page loads first — settings.html includes both scripts in the same
+// global scope, so redeclaring the same names here would be a
+// duplicate-const syntax error that silently breaks this entire file
+// (which is exactly what was happening: nothing on this page was saving
+// because the file never ran).
 
 const hourRange48 = document.getElementById("hourRange48");
 const hourRange24 = document.getElementById("hourRange24");
@@ -41,21 +43,50 @@ if (hourRange48 && hourRange24) {
     });
   });
 }
-const unitMetric = document.getElementById("unitMetric");
-const unitImperial = document.getElementById("unitImperial");
-const currentUnitSystem = loadUnitSystem();
-if (unitMetric && unitImperial) {
-  unitMetric.checked = currentUnitSystem === "metric";
-  unitImperial.checked = currentUnitSystem === "imperial";
 
-  [unitMetric, unitImperial].forEach(input => {
-    input.addEventListener("change", () => {
-      try {
-        localStorage.setItem(UNIT_SYSTEM_KEY, input.value);
-      } catch {
-        // display-only preference, fine if it doesn't persist
-      }
+// ---- Per-condition units ----
+// Each condition with a real unit gets its own Metric/Imperial radio pair
+// (see CONDITION_UNIT_TOGGLES in app.js for which conditions have one) —
+// replaces the old single global Metric/Imperial toggle, so Rain can stay
+// in mm while Wind stays in mph, matching how people actually mix units
+// day to day.
+const unitFieldsets = document.getElementById("conditionUnits");
+if (unitFieldsets) {
+  const units = loadConditionUnits();
+  CONDITION_UNIT_TOGGLES.forEach(conditionName => {
+    const conditionData = CONFIG.conditions[conditionName];
+    const current = units[conditionName] || DEFAULT_CONDITION_UNITS[conditionName];
+
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = conditionData.name;
+    fieldset.appendChild(legend);
+
+    const row = document.createElement("div");
+    row.className = "checks";
+
+    [
+      { value: "metric", text: CONDITION_UNIT_LABELS[conditionName].metric },
+      { value: "imperial", text: CONDITION_UNIT_LABELS[conditionName].imperial }
+    ].forEach(opt => {
+      const label = document.createElement("label");
+      label.className = "check";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `unit-${conditionName}`;
+      input.value = opt.value;
+      input.checked = current === opt.value;
+      input.addEventListener("change", () => {
+        saveConditionUnit(conditionName, opt.value);
+      });
+      const text = document.createElement("span");
+      text.textContent = opt.text;
+      label.append(input, text);
+      row.appendChild(label);
     });
+
+    fieldset.appendChild(row);
+    unitFieldsets.appendChild(fieldset);
   });
 }
 

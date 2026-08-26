@@ -502,6 +502,35 @@ td.col-raw {
   color: #445048;
 }
 
+/* Shown in place of Raw/Corrected for a forecaster still under
+   ELIGIBILITY_MIN_DAYS of its own history — spans both sub-columns
+   (colSpan 2) since there's nothing meaningful to split between them
+   yet. Deliberately muted and centered so it reads as a status message,
+   not a missing/broken value. */
+td.col-collecting {
+  text-align: center;
+  font-size: 12px;
+  font-style: italic;
+  color: #8a9b8f;
+  background: #f4f7f3;
+  box-shadow: inset 1px 0 0 #8fb59d, inset -1px 0 0 #8fb59d;
+}
+
+.forecaster-tint td.col-collecting {
+  background: #eef2ec;
+}
+
+#accuracyBody td.col-collecting {
+  text-align: left;
+  font-style: italic;
+  color: #8a9b8f;
+}
+
+.whatif .checks,
+.whatif .note {
+  margin-bottom: 10px;
+}
+
 footer a,
 .back-link a {
   color: var(--accent-dark);
