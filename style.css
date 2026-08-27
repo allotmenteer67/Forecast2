@@ -863,9 +863,41 @@ footer {
   gap: 8px;
 }
 
-.place-row-switch {
+.place-row-info {
   flex: 1;
-  text-align: left;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.place-row-label {
+  width: 100%;
+  min-height: auto;
+  border: 1px solid #dfe7e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.place-row.is-current .place-row-label {
+  border-color: var(--accent);
+}
+
+.place-row-postcode {
+  padding-left: 2px;
+  color: #6b7d70;
+  font-size: 11px;
+}
+
+.place-row-switch {
+  flex: 0 0 auto;
+  width: 76px;
+  text-align: center;
+  font-size: 13px;
+  padding: 0 6px;
   background: var(--accent-light);
   color: var(--accent-dark);
 }

@@ -185,7 +185,18 @@ function saveCurrentPostcode(pc) {
 function loadPlaces() {
   try {
     const raw = localStorage.getItem(PLACES_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Migrate the old format (a saved place used to be just a plain
+      // postcode string) transparently — now it's {postcode, label} so
+      // it can be renamed to something memorable (Home, Work, the
+      // allotment, etc). savePlaces always writes the new shape, so
+      // this only ever needs to convert once, on the first read after
+      // an update.
+      return parsed.map(entry =>
+        typeof entry === "string" ? { postcode: entry, label: entry } : entry
+      );
+    }
   } catch {
     // fall through to default
   }
@@ -3045,6 +3056,20 @@ window.addEventListener("pageshow", () => {
   }
 });
 
+// The Retry button (see renderActualStatus) only ever fires on a tap —
+// nothing previously noticed if connectivity came back on its own while
+// the app stayed open, so the "couldn't load weather" block could sit
+// there indefinitely even once the network was genuinely fine again.
+// The browser's own "online" event catches exactly that case. Guarded to
+// only re-fetch when there's an actual error showing, so a spurious or
+// redundant "online" firing (some browsers fire it more than strictly
+// necessary) doesn't trigger pointless extra network requests.
+window.addEventListener("online", () => {
+  if (state.actual.status === "error") {
+    loadLocationData();
+  }
+});
+
 const updateLocationButton = document.getElementById("updateLocation");
 if (updateLocationButton) {
   updateLocationButton.addEventListener("click", () => {
@@ -3078,7 +3103,8 @@ function switchToPostcode(pc) {
 
 function renderPlaceChip() {
   if (!placeChipLabel) return;
-  placeChipLabel.textContent = state.postcode || "Set location";
+  const match = loadPlaces().find(place => place.postcode === state.postcode);
+  placeChipLabel.textContent = match ? match.label : (state.postcode || "Set location");
 }
 
 function closePlaceMenu() {
@@ -3098,14 +3124,14 @@ function renderPlaceMenu() {
     placeMenuList.appendChild(hint);
     return;
   }
-  places.forEach(pc => {
+  places.forEach(place => {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "place-menu-item" + (pc === state.postcode ? " is-current" : "");
-    item.textContent = pc;
+    item.className = "place-menu-item" + (place.postcode === state.postcode ? " is-current" : "");
+    item.textContent = place.label;
     item.addEventListener("click", () => {
       closePlaceMenu();
-      switchToPostcode(pc);
+      switchToPostcode(place.postcode);
     });
     placeMenuList.appendChild(item);
   });
@@ -3142,25 +3168,53 @@ function renderPlacesList() {
     placesList.appendChild(empty);
   }
 
-  places.forEach(pc => {
+  places.forEach(place => {
     const row = document.createElement("div");
-    row.className = "place-row" + (pc === state.postcode ? " is-current" : "");
+    row.className = "place-row" + (place.postcode === state.postcode ? " is-current" : "");
+
+    const info = document.createElement("div");
+    info.className = "place-row-info";
+
+    // Editable inline rather than a separate rename mode — defaults to
+    // the postcode itself until changed, so a saved place is always
+    // usable straight away and renaming is purely optional.
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.className = "place-row-label";
+    labelInput.value = place.label;
+    labelInput.maxLength = 24;
+    labelInput.setAttribute("aria-label", `Name for ${place.postcode}`);
+    labelInput.addEventListener("change", () => {
+      place.label = labelInput.value.trim() || place.postcode;
+      labelInput.value = place.label;
+      savePlaces(places);
+      renderPlaceMenu();
+      renderPlaceChip();
+    });
+    info.appendChild(labelInput);
+
+    const postcodeSub = document.createElement("small");
+    postcodeSub.className = "place-row-postcode";
+    postcodeSub.textContent = place.postcode;
+    info.appendChild(postcodeSub);
+
+    row.appendChild(info);
 
     const switchBtn = document.createElement("button");
     switchBtn.type = "button";
     switchBtn.className = "place-row-switch";
-    switchBtn.textContent = pc === state.postcode ? `${pc} (current)` : pc;
-    switchBtn.disabled = pc === state.postcode;
-    switchBtn.addEventListener("click", () => switchToPostcode(pc));
+    switchBtn.textContent = place.postcode === state.postcode ? "Current" : "Switch";
+    switchBtn.disabled = place.postcode === state.postcode;
+    switchBtn.addEventListener("click", () => switchToPostcode(place.postcode));
     row.appendChild(switchBtn);
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "place-row-remove";
-    removeBtn.setAttribute("aria-label", `Remove ${pc}`);
+    removeBtn.setAttribute("aria-label", `Remove ${place.label}`);
     removeBtn.textContent = "✕";
     removeBtn.addEventListener("click", () => {
-      savePlaces(loadPlaces().filter(saved => saved !== pc));
+      savePlaces(loadPlaces().filter(saved => saved.postcode !== place.postcode));
       renderPlacesList();
       renderPlaceMenu();
     });
@@ -3173,8 +3227,8 @@ function renderPlacesList() {
 if (addCurrentPlaceButton) {
   addCurrentPlaceButton.addEventListener("click", () => {
     const places = loadPlaces();
-    if (!places.includes(state.postcode)) {
-      places.push(state.postcode);
+    if (!places.some(place => place.postcode === state.postcode)) {
+      places.push({ postcode: state.postcode, label: state.postcode });
       savePlaces(places);
       renderPlacesList();
       renderPlaceMenu();
