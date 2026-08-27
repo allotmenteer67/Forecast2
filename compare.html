@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
   <title>Compare — Cloude</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -28,19 +33,6 @@
           <option value="uv">UV</option>
         </select>
       </label>
-
-      <div class="rollback">
-        <div class="rollback-title">
-          <strong>Date</strong>
-          <span id="rollbackLabel">Today</span>
-        </div>
-        <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
-        <div class="range-labels">
-          <span>7 days ago</span>
-          <span>Today</span>
-          <span>7 days ahead</span>
-        </div>
-      </div>
     </section>
 
     <section class="comparison">
@@ -58,6 +50,19 @@
 
       <p id="actualStatus" class="actual-status status-error-only"></p>
       <p id="metOfficeStatus" class="actual-status status-error-only"></p>
+
+      <div class="rollback">
+        <div class="rollback-title">
+          <strong>Date</strong>
+          <span id="rollbackLabel">Today</span>
+        </div>
+        <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
+        <div class="range-labels">
+          <span>7 days ago</span>
+          <span>Today</span>
+          <span>7 days ahead</span>
+        </div>
+      </div>
     </section>
 
     <section class="comparison">
@@ -111,5 +116,10 @@
   </main>
 
   <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
 </body>
 </html>

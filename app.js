@@ -213,7 +213,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windDirection: [], cloud: [], pressure: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [] };
   }
   return byLeadDay;
 }
@@ -250,10 +250,17 @@ const state = {
     temperature_2m_min: [],
     precipitation_sum: [],
     windspeed_10m_max: [],
+    windgusts_10m_max: [],
     sunshine_duration: [],
     uv_index_max: [],
     cloud_mean: [],
-    pressure_mean: []
+    pressure_mean: [],
+    // Raw hourly pressure (not day-aggregated) covering the past window
+    // through "now" — kept only to compute the pressure trend arrow
+    // (see pressureTrend()), which needs a real few-hours-ago comparison
+    // point that a daily mean can't give.
+    pressure_hourly_times: [],
+    pressure_hourly_values: []
   },
   realSources: emptyRealSourcesState(),
   backfill: {
@@ -274,6 +281,7 @@ const state = {
     temperature: [],
     precipitation: [],
     windSpeed: [],
+    windGust: [],
     windDirection: [],
     pressure: [],
     uvIndex: [],
@@ -552,6 +560,7 @@ async function fetchActualWeather(lat, lon) {
         "temperature_2m_min",
         "precipitation_sum",
         "windspeed_10m_max",
+        "windgusts_10m_max",
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
@@ -573,8 +582,11 @@ async function fetchActualWeather(lat, lon) {
     state.actual.temperature_2m_min = data.daily.temperature_2m_min;
     state.actual.precipitation_sum = data.daily.precipitation_sum;
     state.actual.windspeed_10m_max = data.daily.windspeed_10m_max;
+    state.actual.windgusts_10m_max = data.daily.windgusts_10m_max;
     state.actual.sunshine_duration = data.daily.sunshine_duration;
     state.actual.uv_index_max = data.daily.uv_index_max;
+    state.actual.pressure_hourly_times = data.hourly.time;
+    state.actual.pressure_hourly_values = data.hourly.pressure_msl;
     state.actual.cloud_mean = averageCloudByDay(
       data.hourly.time,
       data.hourly.cloudcover,
@@ -615,6 +627,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `precipitation_previous_day${d}`,
         `wind_speed_10m_previous_day${d}`,
         `wind_direction_10m_previous_day${d}`,
+        `wind_gusts_10m_previous_day${d}`,
         `cloud_cover_previous_day${d}`,
         `pressure_msl_previous_day${d}`
       );
@@ -649,6 +662,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
         precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
         wind: aggregateHourlyByDay(hourlyTimes, windSpeedHourly, dayCount, "max"),
+        windGust: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_gusts_10m_previous_day${d}`], dayCount, "max"),
         windDirection: directionAtPeakHour(hourlyTimes, windSpeedHourly, data.hourly[`wind_direction_10m_previous_day${d}`], dayCount),
         cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
         pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
@@ -691,15 +705,44 @@ const HISTORY_URL = "./data/history.json";
 // Standard synodic-month approximation: days since a known new moon,
 // mod the ~29.53-day cycle. Accurate to within about a day, plenty for
 // a decorative icon rather than a navigation instrument.
-const MOON_PHASE_EMOJI = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
 const KNOWN_NEW_MOON = Date.UTC(2000, 0, 6, 18, 14); // 2000-01-06 18:14 UTC
 const SYNODIC_MONTH_MS = 29.530588 * 24 * 60 * 60 * 1000;
 
-function moonPhaseEmoji(date) {
+// Returns 0–1: 0/1 = new moon, 0.5 = full moon, 0.25 = first quarter, etc.
+function moonPhaseFraction(date) {
   const age = ((date.getTime() - KNOWN_NEW_MOON) % SYNODIC_MONTH_MS + SYNODIC_MONTH_MS) % SYNODIC_MONTH_MS;
-  const fraction = age / SYNODIC_MONTH_MS; // 0 = new, 0.5 = full
-  const index = Math.round(fraction * 8) % 8;
-  return MOON_PHASE_EMOJI[index];
+  return age / SYNODIC_MONTH_MS;
+}
+
+// A real SVG rather than an emoji — the 🌕 Full Moon emoji renders as a
+// plain pale disc on most platforms, easy to mistake for the Sun icon at
+// a glance (which is exactly the "looks like false data" problem this
+// replaces). This draws the ACTUAL current phase via a dark shadow
+// circle offset and clipped over a light disc, so it's always
+// recognisably "moon" — even at full, a sliver of the shadow's edge
+// still shows — and it's genuinely informative rather than decorative.
+function moonPhaseSvg(date) {
+  const fraction = moonPhaseFraction(date);
+  // Waxing (0 → 0.5): shadow retreats off the LEFT edge as it fills.
+  // Waning (0.5 → 1): shadow advances back over from the LEFT edge.
+  // Offset of the shadow circle's center from the moon's center, as a
+  // multiple of the radius: +2r (shadow fully clear, moon fully lit) at
+  // fraction 0.5, down to 0 (shadow dead-center, moon fully dark) at
+  // fraction 0 or 1.
+  const litAmount = 1 - Math.abs(fraction - 0.5) * 2; // 0 at new, 1 at full
+  const waxing = fraction < 0.5;
+  const shadowOffset = litAmount * 2 * (waxing ? 1 : -1) * -1; // sign flips which side the lit crescent is on
+  const r = 9;
+  const cx = 12;
+  const cy = 12;
+  const shadowCx = cx + shadowOffset * r;
+  return (
+    `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">` +
+    `<defs><clipPath id="moonclip-${Math.round(fraction * 1000)}"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath></defs>` +
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#cfd8e3"/>` +
+    `<circle cx="${shadowCx}" cy="${cy}" r="${r * 0.97}" fill="#1b2430" clip-path="url(#moonclip-${Math.round(fraction * 1000)})"/>` +
+    `</svg>`
+  );
 }
 
 function isDaytime(date) {
@@ -744,7 +787,7 @@ async function fetchHourlyForecast(lat, lon) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,pressure_msl" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -778,6 +821,7 @@ async function fetchHourlyForecast(lat, lon) {
         temperature: data.hourly.temperature_2m.slice(from, from + sharedTimes.length || undefined),
         precipitation: data.hourly.precipitation.slice(from, from + sharedTimes.length || undefined),
         windSpeed: data.hourly.wind_speed_10m.slice(from, from + sharedTimes.length || undefined),
+        windGust: data.hourly.wind_gusts_10m.slice(from, from + sharedTimes.length || undefined),
         windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
         pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined)
       };
@@ -808,6 +852,11 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.temperature = blend("temperature", "temperature");
     state.hourly.precipitation = blend("precipitation", "rain");
     state.hourly.windSpeed = blend("windSpeed", "wind");
+    // Gust has no FFV history of its own — there's no dedicated Gust
+    // condition to compare against Actual the way Wind/Rain/etc. do, so
+    // this reuses Wind's own learned ratio as the closest available
+    // correction rather than showing the raw model figure uncorrected.
+    state.hourly.windGust = blend("windGust", "wind");
     state.hourly.pressure = blend("pressure", "pressure");
     // Direction can't be medianed the way speed can (it's angular, not
     // linear) — first real source with a reading for that hour, same
@@ -1610,7 +1659,189 @@ function liveTodayValueFor(conditionName) {
   }
 }
 
-// The single point renderHeadline calls for a non-hourly-slider figure —
+// Shared by the new range/pair helpers below — same "prefer sources
+// that have earned their place, fall back to real-or-everything while
+// nothing has yet" logic headlineValueFor already uses for the plain
+// figure, factored out so Temp/Wind/Pressure's richer versions don't
+// each duplicate it.
+function eligibleOrFallbackSources(conditionName) {
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  const eligibleSources = selectedSources.filter(source => isForecasterEligible(source, conditionName));
+  if (eligibleSources.length > 0) return eligibleSources;
+  const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
+  return realSources.length > 0 ? realSources : selectedSources;
+}
+
+// ---- Temperature high/low ----
+// rollbackDays follows the same convention as the rest of the app:
+// positive = N days ago (genuine actual), 0 = today, negative = N days
+// ahead (forecast only).
+function temperatureRangeFor(rollbackDays) {
+  if (rollbackDays > 0) {
+    const idx = actualIndexForRollback(rollbackDays);
+    const max = idx !== null ? state.actual.temperature_2m_max[idx] : null;
+    const min = idx !== null ? state.actual.temperature_2m_min[idx] : null;
+    if (max === null || max === undefined || min === null || min === undefined) return null;
+    return { low: min, high: max };
+  }
+
+  if (rollbackDays === 0 && state.hourly.status === "ready") {
+    const remaining = remainingTodayHourCount();
+    const idx = actualIndexForRollback(0);
+    const actualMax = idx !== null ? state.actual.temperature_2m_max[idx] : null;
+    const actualMin = idx !== null ? state.actual.temperature_2m_min[idx] : null;
+    const restTemps = state.hourly.temperature.slice(0, remaining).filter(v => v !== null && v !== undefined);
+    const highs = [actualMax, restTemps.length ? Math.max(...restTemps) : null].filter(v => v !== null && v !== undefined);
+    const lows = [actualMin, restTemps.length ? Math.min(...restTemps) : null].filter(v => v !== null && v !== undefined);
+    if (highs.length && lows.length) return { low: Math.min(...lows), high: Math.max(...highs) };
+  }
+
+  // Future (or today with hourly not ready yet): merge every eligible
+  // source's own forecast high/low, each corrected by Temperature's own
+  // learned offset — there's no separate FFV history for the spread
+  // itself, so the mean's own correction is the closest available.
+  const day = freshestDayFor(rollbackDays);
+  const highs = [];
+  const lows = [];
+  eligibleOrFallbackSources("temperature").forEach(source => {
+    const ffv = ffvFor(source, "temperature", day);
+    if (isRealSource(source, "temperature") && day <= 7) {
+      const slot = state.realSources[source.id];
+      const idx = realSourceIndexForRollback(source.id, rollbackDays);
+      const byDay = slot?.byLeadDay?.[day];
+      if (slot?.status === "ready" && idx !== null && byDay) {
+        const max = byDay.tempMax[idx];
+        const min = byDay.tempMin[idx];
+        if (max !== null && max !== undefined) highs.push(ffv !== null ? applyCorrection(max, ffv, "temperature") : max);
+        if (min !== null && min !== undefined) lows.push(ffv !== null ? applyCorrection(min, ffv, "temperature") : min);
+        return;
+      }
+    }
+    // Demo sources have no real max/min concept — approximate a diurnal
+    // spread around the single demo figure rather than showing nothing.
+    const mean = demoValue(day, source, "temperature");
+    if (mean !== null && mean !== undefined) {
+      const corrected = ffv !== null ? applyCorrection(mean, ffv, "temperature") : mean;
+      highs.push(corrected + 2.5);
+      lows.push(corrected - 2.5);
+    }
+  });
+  if (!highs.length || !lows.length) return null;
+  return { low: median(lows), high: median(highs) };
+}
+
+// ---- Wind speed / gust pairing ----
+function windGustValueFor(day, source, rollbackDays) {
+  if (isRealSource(source, "wind") && day <= 7) {
+    const slot = state.realSources[source.id];
+    const idx = realSourceIndexForRollback(source.id, rollbackDays);
+    const byDay = slot?.byLeadDay?.[day];
+    if (slot?.status === "ready" && idx !== null && byDay) {
+      const gust = byDay.windGust[idx];
+      if (gust !== null && gust !== undefined) {
+        const ffv = ffvFor(source, "wind", day); // Gust has no FFV history of its own — Wind's ratio is the nearest available correction.
+        return ffv !== null ? applyCorrection(gust, ffv, "wind") : gust;
+      }
+    }
+  }
+  const demoWind = demoValue(day, source, "wind");
+  return demoWind !== null && demoWind !== undefined ? demoWind * 1.4 : null; // ~1.4x sustained is a conventional gust-factor approximation
+}
+
+function windSpeedGustFor(rollbackDays) {
+  if (rollbackDays > 0) {
+    const idx = actualIndexForRollback(rollbackDays);
+    const speed = idx !== null ? state.actual.windspeed_10m_max[idx] : null;
+    const gust = idx !== null ? state.actual.windgusts_10m_max[idx] : null;
+    if (speed === null || speed === undefined) return null;
+    return { speed, gust: gust ?? null };
+  }
+
+  if (rollbackDays === 0 && state.hourly.status === "ready") {
+    const remaining = remainingTodayHourCount();
+    const idx = actualIndexForRollback(0);
+    const actualSpeed = idx !== null ? state.actual.windspeed_10m_max[idx] : null;
+    const actualGust = idx !== null ? state.actual.windgusts_10m_max[idx] : null;
+    const restSpeeds = state.hourly.windSpeed.slice(0, remaining).filter(v => v !== null && v !== undefined);
+    const restGusts = state.hourly.windGust.slice(0, remaining).filter(v => v !== null && v !== undefined);
+    const speed = Math.max(actualSpeed ?? 0, restSpeeds.length ? Math.max(...restSpeeds) : 0);
+    const gust = Math.max(actualGust ?? 0, restGusts.length ? Math.max(...restGusts) : 0);
+    if (speed > 0 || gust > 0) return { speed, gust };
+  }
+
+  const day = freshestDayFor(rollbackDays);
+  const speeds = [];
+  const gusts = [];
+  eligibleOrFallbackSources("wind").forEach(source => {
+    const speed = forecastValueFor(day, source, "wind", rollbackDays);
+    const ffv = ffvFor(source, "wind", day);
+    if (speed !== null && speed !== undefined) speeds.push(ffv !== null ? applyCorrection(speed, ffv, "wind") : speed);
+    const gust = windGustValueFor(day, source, rollbackDays);
+    if (gust !== null && gust !== undefined) gusts.push(gust);
+  });
+  if (!speeds.length) return null;
+  return { speed: median(speeds), gust: gusts.length ? median(gusts) : null };
+}
+
+// ---- Pressure trend ----
+// Today gets a genuine live trend from real recorded hourly pressure
+// (the last ~3 hours). Every other date on the slider uses a coarser
+// day-over-day trend instead (that day's figure vs. the day before it) —
+// less precise, but still a real, date-appropriate comparison rather
+// than no trend at all outside of Today.
+function pressureTrendFor(rollbackDays) {
+  if (rollbackDays === 0 && state.actual.pressure_hourly_values.length) {
+    const times = state.actual.pressure_hourly_times;
+    const values = state.actual.pressure_hourly_values;
+    const now = new Date();
+    let nowIdx = -1;
+    for (let i = times.length - 1; i >= 0; i--) {
+      if (new Date(times[i]).getTime() <= now.getTime()) { nowIdx = i; break; }
+    }
+    if (nowIdx >= 3 && values[nowIdx] !== null && values[nowIdx - 3] !== null) {
+      return { delta: values[nowIdx] - values[nowIdx - 3], hours: 3 };
+    }
+  }
+
+  // Day-over-day fallback: this date's merged pressure vs. the day
+  // immediately before it, using the same source-merge as the headline.
+  const valueFor = rb => {
+    const day = freshestDayFor(rb);
+    if (rb > 0) {
+      const idx = actualIndexForRollback(rb);
+      return idx !== null ? state.actual.pressure_mean[idx] : null;
+    }
+    const values = eligibleOrFallbackSources("pressure").map(source => {
+      const raw = forecastValueFor(day, source, "pressure", rb);
+      const ffv = ffvFor(source, "pressure", day);
+      return raw !== null && raw !== undefined ? (ffv !== null ? applyCorrection(raw, ffv, "pressure") : raw) : null;
+    }).filter(v => v !== null && v !== undefined);
+    return values.length ? median(values) : null;
+  };
+  const current = valueFor(rollbackDays);
+  const previous = valueFor(rollbackDays > 0 ? rollbackDays - 1 : rollbackDays + 1); // "the day before" — subtract a day either side of the past/future divide
+  if (current === null || previous === null) return null;
+  return { delta: current - previous, hours: 24 };
+}
+
+// Maps a pressure delta to an arrow: angle away from horizontal (bigger
+// or faster change = steeper, up to fully vertical) and stroke weight
+// (bigger/faster = bolder). hoursSpan lets the 3-hour live comparison and
+// the 24-hour fallback comparison share one scale, normalised to "per 3h".
+function pressureTrendArrowSvg({ delta, hours }) {
+  const per3h = delta / (hours / 3);
+  const magnitude = Math.min(Math.abs(per3h), 4); // clamp — beyond this it's already about as bold/steep as it gets
+  const angle = 15 + (magnitude / 4) * 75; // 15°(barely inclined) .. 90°(vertical)
+  const weight = 1.8 + (magnitude / 4) * 2.2; // 1.8 (thin) .. 4 (bold)
+  const rotation = per3h >= 0 ? -angle : angle; // negative (CCW) = up-right when rising, positive (CW) = down-right when falling
+  return (
+    `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="transform: rotate(${rotation}deg)">` +
+    `<line x1="3" y1="12" x2="18" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
+    `<polygon points="18,7.5 24,12 18,16.5" fill="currentColor"/>` +
+    `</svg>`
+  );
+}
+
 // Today gets the live treatment above where one exists; every other date
 // (and Sunshine, which has none) keeps the existing snapshot.
 function headlineDisplayValueFor(conditionName) {
@@ -1666,7 +1897,7 @@ function renderHeadline() {
       // string of zeros, so the moon phase takes over there instead.
       if (showHourly) {
         if (night) {
-          valueEl.textContent = moonPhaseEmoji(hourDate);
+          valueEl.innerHTML = moonPhaseSvg(hourDate);
           valueEl.classList.add("headline-moon");
         } else {
           const percent = hourlyUVPercent(state.hourIndex);
@@ -1679,6 +1910,25 @@ function renderHeadline() {
     } else if (showHourly) {
       const value = hourlyValueFor(conditionName);
       valueEl.textContent = value !== null ? formatValue(value, conditionName) : "–";
+    } else if (conditionName === "temperature") {
+      // High/low for the period rather than one single figure — mirrors
+      // how a normal weather app frames a day's temperature. See
+      // temperatureRangeFor for how past/today/future each source this.
+      const range = temperatureRangeFor(state.rollback);
+      valueEl.classList.add("headline-pair");
+      valueEl.textContent = range
+        ? `${formatValue(range.high, "temperature")}/${formatValue(range.low, "temperature")}`
+        : "–";
+    } else if (conditionName === "wind") {
+      // Peak sustained speed alongside peak gust — a bare "18mph" alone
+      // doesn't say whether that's one gusty moment or the whole period.
+      const pair = windSpeedGustFor(state.rollback);
+      if (pair) valueEl.classList.add("headline-pair");
+      valueEl.textContent = pair
+        ? (pair.gust !== null && pair.gust > pair.speed
+          ? `${formatValue(pair.speed, "wind")}/${formatValue(pair.gust, "wind")}g`
+          : formatValue(pair.speed, "wind"))
+        : "–";
     } else {
       const value = headlineDisplayValueFor(conditionName);
       valueEl.textContent = formatValue(value, conditionName);
@@ -1722,6 +1972,18 @@ function renderHeadline() {
         // data happens to be available, causing the whole grid to jump
         // as the slider moves between states.
         valueRow.append(arrow, dirEl);
+      }
+    }
+
+    if (conditionName === "pressure" && !showHourly) {
+      // See pressureTrendFor: a genuine live 3-hour trend for Today,
+      // a day-over-day trend for every other date on the slider.
+      const trend = pressureTrendFor(state.rollback);
+      if (trend && Math.abs(trend.delta) > 0.05) {
+        const arrow = document.createElement("span");
+        arrow.className = "pressure-arrow";
+        arrow.innerHTML = pressureTrendArrowSvg(trend);
+        valueRow.appendChild(arrow);
       }
     }
 
@@ -2332,7 +2594,7 @@ function renderTable() {
   // always has enough room, so .table-wrap's horizontal scroll kicks in
   // properly instead.
   const DAY_COLUMN_WIDTH = 70;
-  const FORECASTER_PAIR_WIDTH = 108 * 2;
+  const FORECASTER_PAIR_WIDTH = 96 * 2;
   table.style.minWidth = `${DAY_COLUMN_WIDTH + FORECASTER_PAIR_WIDTH * selectedSources.length}px`;
 
   table.innerHTML = "";
@@ -2693,7 +2955,12 @@ if (rollback) {
 function updateHourLabel() {
   if (!hourLabel) return;
   if (state.hourIndex === 0) {
-    hourLabel.textContent = "Now";
+    // At rest, this cell isn't showing one instant anymore — it's
+    // showing the whole Today range (see liveTodayValueFor). "+24h" /
+    // "+48h" describes that span itself, matching whichever the
+    // Settings hour-range choice is; dragging away from here switches to
+    // an actual clock time for the specific hour landed on, unchanged.
+    hourLabel.textContent = `+${loadHourRange()}h`;
     return;
   }
   const iso = state.hourly.times[state.hourIndex];

@@ -155,6 +155,26 @@ header p {
   display: block;
 }
 
+/* Two-figure headline cells (Temp high/low, Wind speed/gust) — a smaller
+   size than the usual single figure so "18/27g" or "21°/14°" still fits
+   comfortably without the cell growing or the text wrapping. */
+.headline-value.headline-pair {
+  font-size: 19px;
+}
+
+.pressure-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--accent-dark);
+}
+
+.pressure-arrow svg {
+  display: block;
+}
+
 .hour-slider {
   margin-top: 14px;
   padding-top: 12px;
@@ -239,6 +259,10 @@ input[type="range"]::-moz-range-thumb {
   border: 1px solid #dfe7e1;
   border-radius: 10px;
   padding: 10px 12px 12px;
+}
+
+.rollback {
+  margin-top: 16px;
 }
 
 label,
@@ -428,7 +452,9 @@ th.sub-corrected,
 th.sub-raw,
 td.col-corrected,
 td.col-raw {
-  width: 108px;
+  width: 96px;
+  padding-left: 9px;
+  padding-right: 9px;
 }
 
 th,
