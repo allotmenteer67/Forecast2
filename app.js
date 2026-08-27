@@ -2125,7 +2125,12 @@ function renderHeadline() {
 
   if (headlineDate) {
     headlineDate.textContent = state.rollback === 0
-      ? "Today"
+      // "Today" now means "the next 24/48h from now" (see
+      // displayWindowHourCount) rather than the calendar day — with 48h
+      // selected that window genuinely spans into tomorrow, so the
+      // title says so rather than silently showing tomorrow's figures
+      // under a title that still just says "Today".
+      ? (loadHourRange() === 48 ? "Today and Tomorrow" : "Today")
       : formatDateLong(targetDateForRollback(state.rollback));
   }
 

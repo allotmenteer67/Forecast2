@@ -113,6 +113,9 @@ header p {
 }
 
 .headline-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 31px;
   color: var(--accent-dark);
   font-size: 26px;
   font-weight: 700;
@@ -137,8 +140,18 @@ header p {
   opacity: 0.5;
 }
 
-.headline-moon {
-  font-size: 24px !important;
+/* The moon icon is a real SVG now (see moonPhaseSvg), not the old emoji
+   character this rule was originally written for — font-size no longer
+   does anything to it directly. Kept only to fix its size explicitly
+   rather than leaving it to whatever the SVG markup happens to specify,
+   since .headline-value is now a flex container that centers it either
+   way (see above) — this is what actually stops the moon/number/dash
+   swap from changing the cell's height and visibly shifting the layout.
+   */
+.headline-moon svg {
+  display: block;
+  width: 26px;
+  height: 26px;
 }
 
 .wind-arrow {
