@@ -680,6 +680,17 @@ tbody tr:last-child td {
   border-radius: 10px;
 }
 
+/* The [hidden] attribute and this block's own "display: flex" above
+   carry the same CSS specificity — without this rule, they're a genuine
+   tie, and the page's own styling wins that tie over the browser's
+   built-in [hidden] rule. The practical result: toggling .hidden in JS
+   silently did nothing, and this box could never actually disappear
+   once shown, even with the correct text cleared. This rule is more
+   specific than either on its own, so [hidden] reliably wins now. */
+.headline-status-block[hidden] {
+  display: none;
+}
+
 .headline-status-text {
   margin: 0;
   color: #7a5c1e;
@@ -869,11 +880,19 @@ footer {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+}
+
+.place-row-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .place-row-label {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  width: auto;
   min-height: auto;
   border: 1px solid #dfe7e1;
   border-radius: 6px;
@@ -887,9 +906,10 @@ footer {
 }
 
 .place-row-postcode {
-  padding-left: 2px;
+  flex: 0 0 auto;
   color: #6b7d70;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .place-row-switch {

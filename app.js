@@ -3190,6 +3190,9 @@ function renderPlacesList() {
     const info = document.createElement("div");
     info.className = "place-row-info";
 
+    const nameLine = document.createElement("div");
+    nameLine.className = "place-row-name-line";
+
     // Editable inline rather than a separate rename mode — defaults to
     // the postcode itself until changed, so a saved place is always
     // usable straight away and renaming is purely optional.
@@ -3202,16 +3205,25 @@ function renderPlacesList() {
     labelInput.addEventListener("change", () => {
       place.label = labelInput.value.trim() || place.postcode;
       labelInput.value = place.label;
+      renderPostcodeSub();
       savePlaces(places);
       renderPlaceMenu();
       renderPlaceChip();
     });
-    info.appendChild(labelInput);
+    nameLine.appendChild(labelInput);
 
+    // Only shown once a place has actually been given a real nickname —
+    // if the label is still just the postcode itself, showing the
+    // postcode a second time right next to it would be pure repetition.
     const postcodeSub = document.createElement("small");
     postcodeSub.className = "place-row-postcode";
-    postcodeSub.textContent = place.postcode;
-    info.appendChild(postcodeSub);
+    function renderPostcodeSub() {
+      postcodeSub.textContent = place.label !== place.postcode ? place.postcode : "";
+    }
+    renderPostcodeSub();
+    nameLine.appendChild(postcodeSub);
+
+    info.appendChild(nameLine);
 
     row.appendChild(info);
 
