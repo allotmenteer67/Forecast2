@@ -313,6 +313,8 @@ const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
 const headlineDate = document.getElementById("headlineDate");
 const headlineStatus = document.getElementById("headlineStatus");
+const headlineStatusBlock = document.getElementById("headlineStatusBlock");
+const headlineRetry = document.getElementById("headlineRetry");
 const hourSlider = document.getElementById("hourSlider");
 const hourLabel = document.getElementById("hourLabel");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
@@ -1185,8 +1187,10 @@ function renderActualStatus() {
     if (state.actual.status === "error") {
       headlineStatus.textContent = `Couldn't load weather: ${state.actual.error}`;
       headlineStatus.classList.add("is-error");
+      if (headlineStatusBlock) headlineStatusBlock.hidden = false;
     } else {
       headlineStatus.textContent = "";
+      if (headlineStatusBlock) headlineStatusBlock.hidden = true;
     }
   }
 
@@ -1878,6 +1882,7 @@ function renderHeadline() {
 
     const valueEl = document.createElement("span");
     valueEl.className = "headline-value";
+    let windGustText = null; // set below for Wind when a gust line is needed; appended after valueRow exists
 
     // Sunshine shows UV as a % while hourly is active during the day —
     // the label needs to reflect that, not Sunshine's usual "hrs" unit.
@@ -1915,20 +1920,19 @@ function renderHeadline() {
       // how a normal weather app frames a day's temperature. See
       // temperatureRangeFor for how past/today/future each source this.
       const range = temperatureRangeFor(state.rollback);
-      valueEl.classList.add("headline-pair");
       valueEl.textContent = range
-        ? `${formatValue(range.high, "temperature")}/${formatValue(range.low, "temperature")}`
+        ? `${formatValue(range.high, "temperature")} / ${formatValue(range.low, "temperature")}`
         : "–";
     } else if (conditionName === "wind") {
-      // Peak sustained speed alongside peak gust — a bare "18mph" alone
-      // doesn't say whether that's one gusty moment or the whole period.
+      // Peak sustained speed as the headline figure, same size and
+      // weight as every other condition — gust (when meaningfully
+      // higher) is a secondary line underneath rather than crammed into
+      // the same number, so neither figure has to shrink to fit.
       const pair = windSpeedGustFor(state.rollback);
-      if (pair) valueEl.classList.add("headline-pair");
-      valueEl.textContent = pair
-        ? (pair.gust !== null && pair.gust > pair.speed
-          ? `${formatValue(pair.speed, "wind")}/${formatValue(pair.gust, "wind")}g`
-          : formatValue(pair.speed, "wind"))
-        : "–";
+      valueEl.textContent = pair ? formatValue(pair.speed, "wind") : "–";
+      if (pair && pair.gust !== null && pair.gust > pair.speed) {
+        windGustText = `gust ${formatValue(pair.gust, "wind")}`;
+      }
     } else {
       const value = headlineDisplayValueFor(conditionName);
       valueEl.textContent = formatValue(value, conditionName);
@@ -1972,6 +1976,12 @@ function renderHeadline() {
         // data happens to be available, causing the whole grid to jump
         // as the slider moves between states.
         valueRow.append(arrow, dirEl);
+      }
+      if (windGustText) {
+        const gustLine = document.createElement("small");
+        gustLine.className = "headline-gust";
+        gustLine.textContent = windGustText;
+        cell.appendChild(gustLine);
       }
     }
 
@@ -3176,6 +3186,15 @@ function renderGeoStatus(message, isError) {
   if (!geoStatus) return;
   geoStatus.classList.toggle("is-error", !!isError);
   geoStatus.textContent = message || "";
+}
+
+if (headlineRetry) {
+  headlineRetry.addEventListener("click", () => {
+    headlineRetry.disabled = true;
+    loadLocationData().finally(() => {
+      headlineRetry.disabled = false;
+    });
+  });
 }
 
 if (useMyLocationButton) {

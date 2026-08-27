@@ -30,7 +30,10 @@
 
     <section class="headline">
       <p id="headlineDate" class="headline-date">Today</p>
-      <p id="headlineStatus" class="actual-status status-error-only"></p>
+      <div id="headlineStatusBlock" class="headline-status-block" hidden>
+        <p id="headlineStatus" class="headline-status-text"></p>
+        <button id="headlineRetry" type="button" class="headline-retry-button">Retry</button>
+      </div>
       <div id="headlineGrid" class="headline-grid"></div>
       <div class="hour-slider">
         <div class="hour-slider-title">

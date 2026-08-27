@@ -155,11 +155,12 @@ header p {
   display: block;
 }
 
-/* Two-figure headline cells (Temp high/low, Wind speed/gust) — a smaller
-   size than the usual single figure so "18/27g" or "21°/14°" still fits
-   comfortably without the cell growing or the text wrapping. */
-.headline-value.headline-pair {
-  font-size: 19px;
+.headline-gust {
+  display: block;
+  margin-top: 2px;
+  color: #4c6a58;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .pressure-arrow {
@@ -661,6 +662,42 @@ tbody tr:last-child td {
 
 .actual-status.is-error {
   color: var(--amber);
+}
+
+/* Front-page "couldn't load weather" block — a plain <button> is inline
+   sized (fits its text) rather than full-width like most buttons in this
+   app, since it sits right next to its own message rather than as a
+   standalone action in a list. */
+.headline-status-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: #fdf3e3;
+  border: 1px solid #ecd8ab;
+  border-radius: 10px;
+}
+
+.headline-status-text {
+  margin: 0;
+  color: #7a5c1e;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.headline-retry-button {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 0 16px;
+  font-size: 14px;
+  background: var(--amber);
+}
+
+.headline-retry-button:hover {
+  filter: brightness(0.92);
 }
 
 .backfill {
