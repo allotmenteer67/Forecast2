@@ -1879,56 +1879,36 @@ function anyRealWindDirection(day, rollbackDays) {
   return null;
 }
 
-// ---- "Today" specifically: live rather than snapshot ----
+// ---- "Today" specifically: forward-looking, matching the graph ----
 // Every other date on the slider (past or future) has to use a fixed
 // forecast snapshot — FFV training needs a stable "this was forecast,
 // this is what happened" pair, and a constantly-shifting live number
-// would make that comparison meaningless. But "Today" doesn't need to be
-// a training sample to be shown — it can use the freshest information
-// available, so it doesn't sit there showing yesterday's now-outdated
-// guess when a newer forecast run already knows better. This only
-// changes what's DISPLAYED for Today; the FFV/accuracy machinery
-// underneath keeps using the day-1 snapshot exactly as before.
-//
-// How many of state.hourly.times (which starts at "now") still fall on
-// today's calendar date — the cutoff for "the rest of today" below.
-function remainingTodayHourCount() {
-  if (!state.hourly.times.length) return 0;
-  const todayKey = isoDate(new Date());
-  let count = 0;
-  for (const iso of state.hourly.times) {
-    if (isoDate(new Date(iso)) !== todayKey) break;
-    count++;
-  }
-  return count;
+// would make that comparison meaningless. "Today" doesn't need to be a
+// training sample to be shown, so it uses the freshest information
+// instead — but it must show the SAME thing the graph/hour-slider show,
+// or the two can silently disagree (this used to blend in what had
+// already happened today, which could make the headline read higher —
+// or the low read warmer — than anything actually still forecast,
+// confusingly, since the graph never included that past portion).
+// Purely forward-looking now: the next 24 or 48 hours from right now
+// (matching the Settings hour-range choice), nothing before it.
+function displayWindowHourCount() {
+  return Math.min(loadHourRange(), state.hourly.times.length);
 }
 
 // Returns null for anything without a live path (currently Sunshine —
-// there's no hourly sunshine feed to build "actual so far + remaining
-// daylight" from) so the caller can fall back to the usual snapshot.
+// there's no hourly sunshine feed to build one from) so the caller can
+// fall back to the usual snapshot. Temperature and Wind aren't handled
+// here — they have their own dedicated range/pair functions below,
+// reached first in renderHeadline.
 function liveTodayValueFor(conditionName) {
-  const remaining = remainingTodayHourCount();
-  const actualToday = actualValueFor(conditionName, 0); // running total/max so far today, or null pre-dawn
+  const count = displayWindowHourCount();
 
   switch (conditionName) {
-    case "rain": {
-      const forecastRest = state.hourly.precipitation
-        .slice(0, remaining)
+    case "rain":
+      return state.hourly.precipitation
+        .slice(0, count)
         .reduce((sum, v) => sum + (v ?? 0), 0);
-      return (actualToday ?? 0) + forecastRest;
-    }
-    case "wind": {
-      // "Windiest hour today" — actual-so-far is already a running max
-      // (same convention as Rain's running total), so the live figure is
-      // whichever is bigger: what's already happened, or what's still
-      // forecast for the rest of today.
-      const forecastRestMax = state.hourly.windSpeed
-        .slice(0, remaining)
-        .reduce((max, v) => (v !== null && v !== undefined ? Math.max(max, v) : max), 0);
-      return Math.max(actualToday ?? 0, forecastRestMax);
-    }
-    case "temperature":
-      return state.hourly.temperature[0] ?? null;
     case "pressure":
       return state.hourly.pressure[0] ?? null;
     default:
@@ -1966,14 +1946,12 @@ function temperatureRangeFor(rollbackDays) {
   }
 
   if (rollbackDays === 0 && state.hourly.status === "ready") {
-    const remaining = remainingTodayHourCount();
-    const idx = actualIndexForRollback(0);
-    const actualMax = idx !== null ? state.actual.temperature_2m_max[idx] : null;
-    const actualMin = idx !== null ? state.actual.temperature_2m_min[idx] : null;
-    const restTemps = state.hourly.temperature.slice(0, remaining).filter(v => v !== null && v !== undefined);
-    const highs = [actualMax, restTemps.length ? Math.max(...restTemps) : null].filter(v => v !== null && v !== undefined);
-    const lows = [actualMin, restTemps.length ? Math.min(...restTemps) : null].filter(v => v !== null && v !== undefined);
-    if (highs.length && lows.length) return { low: Math.min(...lows), high: Math.max(...highs) };
+    // Purely forward-looking — the same next-24/48h window the graph and
+    // hour slider show, so this can never disagree with them the way
+    // blending in what already happened today used to.
+    const count = displayWindowHourCount();
+    const windowTemps = state.hourly.temperature.slice(0, count).filter(v => v !== null && v !== undefined);
+    if (windowTemps.length) return { low: Math.min(...windowTemps), high: Math.max(...windowTemps) };
   }
 
   // Future (or today with hourly not ready yet): merge every eligible
@@ -2039,15 +2017,18 @@ function windSpeedGustFor(rollbackDays) {
   }
 
   if (rollbackDays === 0 && state.hourly.status === "ready") {
-    const remaining = remainingTodayHourCount();
-    const idx = actualIndexForRollback(0);
-    const actualSpeed = idx !== null ? state.actual.windspeed_10m_max[idx] : null;
-    const actualGust = idx !== null ? state.actual.windgusts_10m_max[idx] : null;
-    const restSpeeds = state.hourly.windSpeed.slice(0, remaining).filter(v => v !== null && v !== undefined);
-    const restGusts = state.hourly.windGust.slice(0, remaining).filter(v => v !== null && v !== undefined);
-    const speed = Math.max(actualSpeed ?? 0, restSpeeds.length ? Math.max(...restSpeeds) : 0);
-    const gust = Math.max(actualGust ?? 0, restGusts.length ? Math.max(...restGusts) : 0);
-    if (speed > 0 || gust > 0) return { speed, gust };
+    // Purely forward-looking, same window as the graph/slider — see
+    // temperatureRangeFor's comment for why this no longer blends in
+    // what's already happened today.
+    const count = displayWindowHourCount();
+    const windowSpeeds = state.hourly.windSpeed.slice(0, count).filter(v => v !== null && v !== undefined);
+    const windowGusts = state.hourly.windGust.slice(0, count).filter(v => v !== null && v !== undefined);
+    if (windowSpeeds.length) {
+      return {
+        speed: Math.max(...windowSpeeds),
+        gust: windowGusts.length ? Math.max(...windowGusts) : null
+      };
+    }
   }
 
   const day = freshestDayFor(rollbackDays);
