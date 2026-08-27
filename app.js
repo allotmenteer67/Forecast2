@@ -113,10 +113,12 @@ function convertForDisplay(value, conditionName, isDelta = false) {
 }
 
 // ---- Actual weather (Open-Meteo, no API key) ----
-// Geocoding: api.postcodes.io (UK postcodes -> lat/lon)
+// Geocoding: api.postcodes.io (UK postcodes -> lat/lon), or Open-Meteo's
+// own free geocoding search for a plain place name — see resolveLocation.
 // Weather: api.open-meteo.com/v1/forecast with past_days to pull recent
 // recorded days alongside today. No key required for either.
 const GEOCODE_URL = "https://api.postcodes.io/outcodes/";
+const PLACE_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
@@ -506,6 +508,51 @@ async function geocodePostcode(pc) {
     label: district || areaCode,
     areaCode
   };
+}
+
+// A UK postcode or outward code (e.g. "TA6" or "TA6 1AB") — deliberately
+// permissive rather than a strict full-postcode pattern, since a bare
+// outcode is valid input on its own. Anything that doesn't match this
+// shape is treated as a place name instead.
+function looksLikePostcode(input) {
+  return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d[A-Z]{2})?$/i.test(input.trim());
+}
+
+// Resolves EITHER a UK postcode/outcode (via postcodes.io, as above) OR a
+// plain place name (via Open-Meteo's own free geocoding search) to the
+// same {lat, lon, label, areaCode} shape either way. Everything
+// downstream — FFV storage, eligibility, saved places, the daily
+// collector's history.json match — treats areaCode as an opaque
+// per-location key, not specifically a postcode, so a place name slots
+// into the exact same machinery without any of it needing to change.
+//
+// This doesn't cost any real accuracy: the app already only used a
+// postcode's first 3 characters (a whole area, not a precise address),
+// and the actual ceiling on precision is the weather models' own grid —
+// 10-25km for Met Office/ECMWF — which swallows the difference between a
+// postcode-area centre point and a place name's centre point regardless.
+async function resolveLocation(input) {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error("Enter a postcode or place name");
+
+  if (looksLikePostcode(trimmed)) {
+    return geocodePostcode(trimmed);
+  }
+
+  const res = await fetch(`${PLACE_GEOCODE_URL}?name=${encodeURIComponent(trimmed)}&count=1&language=en&format=json`);
+  if (!res.ok) throw new Error(`"${trimmed}" not found`);
+  const data = await res.json();
+  const match = data.results?.[0];
+  if (!match) throw new Error(`"${trimmed}" not found`);
+
+  const label = [...new Set([match.name, match.admin1, match.country].filter(Boolean))].join(", ");
+  // A place name has no natural short "area code" the way a postcode
+  // does — coordinates rounded to ~11km (matching the weather models'
+  // own resolution, so anything finer would be false precision anyway)
+  // make a stable, storage-safe key for the same place typed again later.
+  const areaCode = `${match.latitude.toFixed(1)},${match.longitude.toFixed(1)}`;
+
+  return { lat: match.latitude, lon: match.longitude, label, areaCode };
 }
 
 // Groups an hourly series into per-day aggregates (max/min/sum/mean), in
@@ -1026,7 +1073,7 @@ function anyRealSourceHasHistory() {
 
 async function loadLocationData() {
   try {
-    const { lat, lon, label, areaCode } = await geocodePostcode(state.postcode);
+    const { lat, lon, label, areaCode } = await resolveLocation(state.postcode);
     state.lat = lat;
     state.lon = lon;
     state.areaCode = areaCode;
@@ -2370,7 +2417,13 @@ function formatConverted(displayValue, conditionName) {
 
 function sheetClockLabel(iso) {
   const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:00`;
+  const time = `${String(d.getHours()).padStart(2, "0")}:00`;
+  // With 48h selected, dragging through the graph reaches well into
+  // tomorrow — a bare "02:00" partway along doesn't say whether that's
+  // later tonight or the small hours of the next day. Same pattern the
+  // Hour slider's own label already uses.
+  const crossesDay = isoDate(d) !== isoDate(new Date());
+  return crossesDay ? `${time}, ${formatDateShort(d)}` : time;
 }
 
 function niceStep(rawStep) {
@@ -3470,7 +3523,12 @@ setInterval(() => {
 const updateLocationButton = document.getElementById("updateLocation");
 if (updateLocationButton) {
   updateLocationButton.addEventListener("click", () => {
-    state.postcode = postcode.value.trim().toUpperCase();
+    const trimmed = postcode.value.trim();
+    // Only postcodes get uppercased (their conventional display form,
+    // and how looksLikePostcode expects to match them either way) — a
+    // place name keeps whatever capitalisation was typed, since forcing
+    // "LONDON" would just look wrong for no benefit.
+    state.postcode = looksLikePostcode(trimmed) ? trimmed.toUpperCase() : trimmed;
     postcode.value = state.postcode;
     saveCurrentPostcode(state.postcode);
     loadLocationData();
@@ -3642,6 +3700,70 @@ if (addCurrentPlaceButton) {
       renderPlacesList();
       renderPlaceMenu();
     }
+  });
+}
+
+// A direct, one-step way to add a place — postcode and name together in
+// a single action, rather than needing to switch the current location
+// via Update first and then separately remember to save it. Deliberately
+// doesn't change what's currently shown (see the note in the markup) —
+// adding a place and looking at it right now are two different things,
+// and someone adding a family member's postcode while wanting to keep
+// looking at their own weather shouldn't have the view yanked away.
+const newPlacePostcode = document.getElementById("newPlacePostcode");
+const newPlaceName = document.getElementById("newPlaceName");
+const addPlaceButton = document.getElementById("addPlaceButton");
+const addPlaceStatus = document.getElementById("addPlaceStatus");
+
+function renderAddPlaceStatus(message, isError) {
+  if (!addPlaceStatus) return;
+  addPlaceStatus.textContent = message || "";
+  addPlaceStatus.classList.toggle("is-error", !!isError);
+}
+
+if (addPlaceButton) {
+  addPlaceButton.addEventListener("click", async () => {
+    const rawInput = (newPlacePostcode?.value || "").trim();
+    if (!rawInput) {
+      renderAddPlaceStatus("Enter a postcode or place name first.", true);
+      return;
+    }
+    // Same rule as Update: only postcodes get uppercased, a place name
+    // keeps its natural capitalisation. This is also the string stored
+    // as the place's postcode/query going forward, so it's what
+    // switchToPostcode later feeds back into resolveLocation.
+    const pc = looksLikePostcode(rawInput) ? rawInput.toUpperCase() : rawInput;
+
+    const places = loadPlaces();
+    if (places.some(place => place.postcode === pc)) {
+      renderAddPlaceStatus(`${pc} is already saved.`, true);
+      return;
+    }
+
+    addPlaceButton.disabled = true;
+    renderAddPlaceStatus("Checking…", false);
+
+    try {
+      // Validates it actually resolves to a real place before saving it —
+      // the same lookup Update itself relies on — without loading full
+      // weather data for it (that only happens once it's switched to).
+      await resolveLocation(pc);
+    } catch (err) {
+      addPlaceButton.disabled = false;
+      renderAddPlaceStatus(err.message || "Not found.", true);
+      return;
+    }
+
+    const label = (newPlaceName?.value || "").trim() || pc;
+    places.push({ postcode: pc, label });
+    savePlaces(places);
+
+    if (newPlacePostcode) newPlacePostcode.value = "";
+    if (newPlaceName) newPlaceName.value = "";
+    addPlaceButton.disabled = false;
+    renderAddPlaceStatus("", false);
+    renderPlacesList();
+    renderPlaceMenu();
   });
 }
 

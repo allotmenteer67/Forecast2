@@ -291,6 +291,26 @@ fieldset,
   margin-top: 7px;
 }
 
+.add-place-row {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.add-place-row input#newPlacePostcode {
+  flex: 0 0 92px;
+}
+
+.add-place-row input#newPlaceName {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-place-row button {
+  flex: 0 0 auto;
+  padding: 0 14px;
+}
+
 .geo-button {
   margin-top: 8px;
   background: var(--accent-light);
@@ -944,6 +964,13 @@ footer {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 40vw;
+}
+
+#placeChipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .place-chip:hover {
