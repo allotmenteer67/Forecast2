@@ -467,7 +467,9 @@ tbody tr:nth-child(even) td.day {
    offset = Day's own width) so together they form one pinned block; each
    forecaster's Raw/Corrected columns can then be checked against this
    at a glance without losing track of which row, regardless of how far
-   right you've scrolled. */
+   right you've scrolled. Given a distinct blue tint (rather than Day's
+   green) plus its own left border, so the two pinned columns still read
+   as two separate things sitting side by side, not one merged block. */
 th.app-head,
 td.app {
   width: 64px;
@@ -475,26 +477,28 @@ td.app {
   position: sticky;
   left: 70px;
   z-index: 2;
+  border-left: 2px solid #bcd4e6;
   box-shadow: 2px 0 4px rgba(31, 42, 36, 0.08);
 }
 
 th.app-head {
-  background: var(--accent-light);
+  background: #dce9f2;
+  color: #2c5a7a;
   font-weight: 700;
 }
 
 td.app {
-  background: white;
+  background: #f3f8fb;
   font-weight: 700;
-  color: var(--accent-dark);
+  color: #2c5a7a;
 }
 
 tbody tr:nth-child(even) td.app {
-  background: #fafbf9;
+  background: #e9f1f7;
 }
 
 .row-final td.app {
-  background: #f2f7f0;
+  background: #d9e9f2;
 }
 
 th.sub-corrected,
@@ -599,6 +603,16 @@ td.col-collecting {
   text-align: left;
   font-style: italic;
   color: #8a9b8f;
+}
+
+/* The App (merged) row — matching the blue used for the App column on
+   the main table, so it's visually obvious this row is "the app itself"
+   rather than one of the selectable forecasters listed below it. */
+.accuracy-app-row td {
+  background: #dce9f2;
+  color: #2c5a7a;
+  font-weight: 700;
+  border-bottom: 2px solid #bcd4e6;
 }
 
 .whatif .checks,

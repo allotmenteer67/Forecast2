@@ -1352,6 +1352,64 @@ function saveEligibilityStore(areaCode, store) {
   }
 }
 
+// ---- App's own accuracy ----
+// Tracks how the app's own merged/weighted figure (the Compare table's
+// "App" column) has actually done against real Actual — separate from
+// any individual forecaster's FFV, since the merge isn't itself
+// corrected against anything further (that would be circular); this is
+// pure measurement, answering "is all this blending and weighting
+// actually working?" rather than feeding back into it.
+//
+// Honest limitation: unlike real sources, there's no equivalent backfill
+// for this — retroactively computing "what would the merge have said a
+// year ago" would need the exact weights/eligibility that applied back
+// then, which aren't preserved. So this only ever builds up from the
+// same rolling 7-day live window everything else here uses, at roughly
+// the same pace as a demo forecaster earning its own eligibility.
+function appAccuracyStorageKey(areaCode) {
+  return `forecast-compare:appAccuracy:${areaCode}`;
+}
+
+function loadAppAccuracyStore(areaCode) {
+  try {
+    const raw = localStorage.getItem(appAccuracyStorageKey(areaCode));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAppAccuracyStore(areaCode, store) {
+  try {
+    localStorage.setItem(appAccuracyStorageKey(areaCode), JSON.stringify(store));
+  } catch {
+    // Storage unavailable — this just won't persist between visits.
+  }
+}
+
+function recordAppAccuracySample(store, conditionName, day, forecastValue, actual) {
+  if (forecastValue === null || forecastValue === undefined) return;
+  store[conditionName] ??= {};
+  const entry = (store[conditionName][day] ??= { count: 0, sumAbsError: 0 });
+  entry.sumAbsError += Math.abs(forecastValue - actual);
+  entry.count += 1;
+}
+
+function appAccuracyStatsFor(conditionName) {
+  if (!state.areaCode) return null;
+  const store = loadAppAccuracyStore(state.areaCode);
+  const byDay = store[conditionName];
+  if (!byDay) return null;
+
+  let count = 0, sumAbsError = 0;
+  Object.values(byDay).forEach(entry => {
+    count += entry.count;
+    sumAbsError += entry.sumAbsError;
+  });
+  if (count === 0) return null;
+  return { count, avgError: sumAbsError / count };
+}
+
 function markDateSeen(eligStore, conditionName, sourceId, dateKey) {
   if (!dateKey) return;
   eligStore[conditionName] ??= {};
@@ -1467,6 +1525,7 @@ function updateFFVHistory() {
 
   const store = loadFFVStore(state.areaCode);
   const eligStore = loadEligibilityStore(state.areaCode);
+  const appStore = loadAppAccuracyStore(state.areaCode);
   const realIds = realSourceIds();
 
   for (let rollbackDays = 1; rollbackDays <= MAX_ROLLBACK; rollbackDays++) {
@@ -1474,6 +1533,14 @@ function updateFFVHistory() {
     Object.keys(CONFIG.conditions).forEach(conditionName => {
       const actual = actualValueFor(conditionName, rollbackDays);
       if (actual === null || actual === undefined) return;
+
+      // The app's own merge, scored at every lead-time — same figure the
+      // Compare table's App column shows for that row, checked directly
+      // against what actually happened.
+      for (let day = 1; day <= 7; day++) {
+        const forecast = mergedValueFor(conditionName, day, rollbackDays);
+        recordAppAccuracySample(appStore, conditionName, day, forecast, actual);
+      }
 
       CONFIG.forecasters
         .filter(source => !realIds.includes(source.id))
@@ -1489,6 +1556,7 @@ function updateFFVHistory() {
 
   saveFFVStore(state.areaCode, store);
   saveEligibilityStore(state.areaCode, eligStore);
+  saveAppAccuracyStore(state.areaCode, appStore);
 }
 
 // Returns the learned FFV for this source/condition/day, or null if there
@@ -2681,6 +2749,35 @@ function renderAccuracy() {
 
   const mode = accuracyMode ? accuracyMode.value : "both";
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+
+  // The app's own merged output, measured the same way every forecaster
+  // is — shown first and visually set apart, since it's not one of the
+  // choices in Settings, it's the answer to "is all the blending and
+  // weighting actually working better than any single source?"
+  const appStats = appAccuracyStatsFor(state.condition);
+  const appRow = document.createElement("tr");
+  appRow.className = "accuracy-app-row";
+  const appNameCell = document.createElement("td");
+  appNameCell.textContent = "App (merged)";
+  appRow.appendChild(appNameCell);
+  if (appStats) {
+    const appSamplesCell = document.createElement("td");
+    appSamplesCell.textContent = appStats.count;
+    appRow.appendChild(appSamplesCell);
+    const appRawCell = document.createElement("td");
+    appRawCell.textContent = "–"; // no separate Raw for the merge — it IS the corrected output
+    appRow.appendChild(appRawCell);
+    const appCorrectedCell = document.createElement("td");
+    appCorrectedCell.textContent = formatError(appStats.avgError, state.condition, mode);
+    appRow.appendChild(appCorrectedCell);
+  } else {
+    const collectingCell = document.createElement("td");
+    collectingCell.colSpan = 3;
+    collectingCell.className = "col-collecting";
+    collectingCell.textContent = "Collecting data";
+    appRow.appendChild(collectingCell);
+  }
+  accuracyBody.appendChild(appRow);
 
   selectedSources.forEach(source => {
     const stats = accuracyStatsFor(source, state.condition);
