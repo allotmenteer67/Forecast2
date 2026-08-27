@@ -3070,6 +3070,21 @@ window.addEventListener("online", () => {
   }
 });
 
+// Belt-and-braces alongside the listener above: "online" only fires on a
+// genuine OS-level network transition (e.g. leaving airplane mode) — it
+// never fires if the original failure was a one-off fetch hiccup while
+// the device stayed continuously connected the whole time, which would
+// leave the error block stuck with no transition to catch. This just
+// tries again periodically for as long as an error is actually showing,
+// so it clears itself either way without needing a manual tap. Cheap and
+// harmless when there's nothing wrong — it's a no-op unless
+// state.actual.status is genuinely "error".
+setInterval(() => {
+  if (state.actual.status === "error") {
+    loadLocationData();
+  }
+}, 30000);
+
 const updateLocationButton = document.getElementById("updateLocation");
 if (updateLocationButton) {
   updateLocationButton.addEventListener("click", () => {
