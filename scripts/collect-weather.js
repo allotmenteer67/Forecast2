@@ -28,9 +28,11 @@ const KEEP_DAYS = 400; // rolling cap so the committed file doesn't grow forever
 // this script doesn't need to know about the demo-only sources at all.
 const MODELS = [
   { id: "metoffice", model: "ukmo_global_deterministic_10km" },
-  { id: "ecmwf", model: "ecmwf_ifs025" }
-  // { id: "gfs", model: "gfs_seamless" },
-  // ...add more real Open-Meteo models here as the app grows to use them
+  { id: "ecmwf", model: "ecmwf_ifs025" },
+  { id: "gfs", model: "gfs_seamless" },
+  { id: "icon", model: "icon_seamless" },
+  { id: "gem", model: "gem_seamless" },
+  { id: "meteofrance", model: "meteofrance_seamless" }
 ];
 
 const fs = await import("node:fs/promises");
