@@ -2,6 +2,10 @@ const CONFIG = {
   forecasters: [
     { id: "metoffice", name: "Met Office", enabled: true, offset: 0 },
     { id: "ecmwf", name: "ECMWF", enabled: true, offset: 0.2 },
+    { id: "gfs", name: "GFS (US)", enabled: true, offset: 0.3 },
+    { id: "icon", name: "ICON (Germany)", enabled: true, offset: -0.2 },
+    { id: "gem", name: "GEM (Canada)", enabled: true, offset: 0.5 },
+    { id: "meteofrance", name: "Météo-France", enabled: true, offset: -0.4 },
     { id: "bbc", name: "BBC", enabled: true, offset: 0.6 },
     { id: "meteo", name: "Meteoblue", enabled: true, offset: -0.5 },
     { id: "yr", name: "YR", enabled: true, offset: 0.9 },
@@ -134,7 +138,16 @@ const REAL_SOURCES = [
   // UKV 2km only forecasts 2 days out, which would make longer lead
   // times inconsistent.
   { id: "metoffice", model: "ukmo_global_deterministic_10km" },
-  { id: "ecmwf", model: "ecmwf_ifs025" }
+  { id: "ecmwf", model: "ecmwf_ifs025" },
+  // Four more independent national models — genuinely different
+  // physics/data-assimilation per source, which is what actually
+  // improves an ensemble median (blending more demo/synthetic sources
+  // can't do this, since they're not independent observations of
+  // anything real).
+  { id: "gfs", model: "gfs_seamless" },        // NOAA (US)
+  { id: "icon", model: "icon_seamless" },      // DWD (Germany)
+  { id: "gem", model: "gem_seamless" },        // Environment Canada
+  { id: "meteofrance", model: "meteofrance_seamless" }
 ];
 function realSourceIds() {
   return REAL_SOURCES.map(s => s.id);
@@ -1047,6 +1060,12 @@ async function loadLocationData() {
       if (!anyRealSourceHasHistory()) {
         await backfillRealSourceHistory();
       }
+
+      // Refresh which sources currently count as underperforming here —
+      // cheap (pure localStorage math, no fetching) and needs to run on
+      // every page, not just Compare, so the front page's escalation
+      // banner always reflects the latest accuracy comparison too.
+      syncUnderperformFlags();
     } catch (bookkeepingErr) {
       console.error("FFV bookkeeping failed (data itself still loaded fine):", bookkeepingErr);
     }
@@ -1236,6 +1255,30 @@ const FFV_MIN_SAMPLES = 3;
 const FFV_RATIO_CLAMP = [0.1, 5]; // guards against near-zero means blowing up the ratio
 const FFV_OFFSET_CLAMP = [-15, 15]; // °C or hPa — generous but rules out a single wild sample skewing things
 
+// FFV used to be a plain lifetime average (every sample ever recorded
+// counted equally) — a source's bias from 8 months ago held exactly as
+// much sway as yesterday's. This makes it recency-weighted instead: an
+// exponential moving average with roughly a 30-day "memory", so a source
+// that's genuinely drifted (a model update, a change in local skew)
+// gets picked up within about a month rather than being diluted by
+// everything that came before. The classic N-period EMA smoothing
+// constant, 2/(N+1), with N=30.
+const FFV_EMA_ALPHA = 2 / (30 + 1);
+
+// An existing entry (recorded before this change) has count/sumRatio/
+// sumOffset but no ema fields yet — this seeds them ONCE from the
+// lifetime average as a starting point, so switching to EMA doesn't
+// throw away everything already learned; every sample after this point
+// updates via the EMA blend instead of the plain running mean.
+function ensureFFVEmaSeeded(entry) {
+  if (entry.emaRatio === undefined) {
+    entry.emaRatio = entry.count > 0 ? entry.sumRatio / entry.count : 1;
+  }
+  if (entry.emaOffset === undefined) {
+    entry.emaOffset = entry.count > 0 ? entry.sumOffset / entry.count : 0;
+  }
+}
+
 // Rain/Cloud/Wind are ratio quantities ("20% too high" is meaningful) so
 // a multiplicative correction (mean × FFV) is right for them. Temperature
 // in °C has no true zero — 20°C isn't "twice as hot" as 10°C — so a
@@ -1386,18 +1429,27 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
     scoredCount: 0,
     sumAbsErrorCorrected: 0
   });
+  ensureFFVEmaSeeded(entry);
 
   if (entry.count >= FFV_MIN_SAMPLES) {
-    const currentFFV = isRatioCondition(conditionName)
-      ? entry.sumRatio / entry.count
-      : entry.sumOffset / entry.count;
+    const currentFFV = isRatioCondition(conditionName) ? entry.emaRatio : entry.emaOffset;
     entry.sumAbsErrorCorrected += Math.abs(applyCorrection(mean, currentFFV, conditionName) - actual);
     entry.scoredCount += 1;
   }
 
   entry.sumAbsErrorRaw += Math.abs(mean - actual);
-  entry.sumRatio += clampRatio(actual / mean);
-  entry.sumOffset += clampOffset(actual - mean);
+
+  const newRatio = clampRatio(actual / mean);
+  const newOffset = clampOffset(actual - mean);
+  // EMA blend — the very first sample simply becomes the starting value
+  // rather than being diluted by the neutral 1/0 default.
+  entry.emaRatio = entry.count === 0 ? newRatio : FFV_EMA_ALPHA * newRatio + (1 - FFV_EMA_ALPHA) * entry.emaRatio;
+  entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
+
+  // Kept for eligibility gating and Raw-accuracy averaging — no longer
+  // used to derive the correction itself, but still needed elsewhere.
+  entry.sumRatio += newRatio;
+  entry.sumOffset += newOffset;
   entry.count += 1;
 }
 
@@ -1448,7 +1500,8 @@ function ffvFor(source, conditionName, day) {
   const store = loadFFVStore(state.areaCode);
   const entry = store[conditionName]?.[source.id]?.[day];
   if (!entry || entry.count < FFV_MIN_SAMPLES) return null;
-  return isRatioCondition(conditionName) ? entry.sumRatio / entry.count : entry.sumOffset / entry.count;
+  ensureFFVEmaSeeded(entry); // handles reading an entry untouched since this update
+  return isRatioCondition(conditionName) ? entry.emaRatio : entry.emaOffset;
 }
 
 // The corrected (FFV-adjusted) value now gets its own column to the left
@@ -1545,37 +1598,246 @@ function freshestDayFor(rollbackDays) {
   return Math.min(7, Math.max(1, -rollbackDays));
 }
 
-function headlineValueFor(conditionName) {
-  const day = freshestDayFor(state.rollback);
-  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
-
-  // Core ethos: merge every user-selected forecaster that's earned a
-  // place (ELIGIBILITY_MIN_DAYS of its own forecast-vs-actual history),
-  // not just the "official" real sources — the more corrected voices in
-  // the median, the more accurate the blend, and eligibility is what
-  // keeps a brand-new source's noise from joining before it's proven
-  // itself. Falls back to the old real-sources-first / full-selection
-  // behaviour only while NOTHING has reached eligibility yet (e.g. right
-  // after first setting up a new postcode, before backfill/collection
-  // has had a chance to run) — otherwise the headline would go blank.
-  const eligibleSources = selectedSources.filter(source => isForecasterEligible(source, conditionName));
-  let sourcesToUse = eligibleSources;
-  if (sourcesToUse.length === 0) {
-    const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
-    sourcesToUse = realSources.length > 0 ? realSources : selectedSources;
+function weightedMedian(entries) {
+  const valid = entries.filter(e => e.value !== null && e.value !== undefined && e.weight > 0);
+  if (!valid.length) return null;
+  const sorted = [...valid].sort((a, b) => a.value - b.value);
+  const totalWeight = sorted.reduce((sum, e) => sum + e.weight, 0);
+  let cumulative = 0;
+  for (const entry of sorted) {
+    cumulative += entry.weight;
+    if (cumulative >= totalWeight / 2) return entry.value;
   }
+  return sorted[sorted.length - 1].value;
+}
 
-  const values = sourcesToUse
-    .map(source => {
-      const ffv = ffvFor(source, conditionName, day);
-      if (ffv !== null) {
-        const mean = threeDayMean(day, source, conditionName, state.rollback);
-        if (mean !== null) return applyCorrection(mean, ffv, conditionName);
-      }
-      return forecastValueFor(day, source, conditionName, state.rollback);
+// A source's say in the merged figure, based on its own Corrected
+// accuracy — lower error means more weight, higher error means less,
+// rather than every eligible source getting an equal vote regardless of
+// track record. Falls back to a flat weight (1) whenever there isn't
+// enough scored history to trust the comparison yet (under 5 scored
+// samples), so a source never gets down-weighted on a fluke before it's
+// had a fair chance to prove itself either way.
+function sourceWeight(source, conditionName) {
+  const stats = accuracyStatsFor(source, conditionName);
+  if (!stats || stats.avgErrorCorrected === null || stats.scoredCount < 5) return 1;
+  const scale = ACCURACY_SCALE[conditionName] ?? 1;
+  return 1 / (0.2 + stats.avgErrorCorrected / scale);
+}
+
+// ---- Underperformance tracking ----
+// A source that's been notably worse than its peers for a sustained
+// stretch is quietly left out of the merge — not removed from the
+// user's selection, just not counted here, at THIS location, for THIS
+// condition. Tracked separately per postcode area (like FFV itself),
+// so a source that struggles in hilly terrain but is fine somewhere
+// flat isn't penalised everywhere just because of one place.
+const POOR_ACCURACY_MIN_DAYS = 30; // deliberately well past the 14-day eligibility bar — long enough to be a pattern, not a bad fortnight
+const POOR_ACCURACY_RATIO = 1.5; // must be at least this many times worse than the peer median to count as underperforming
+const HOME_ESCALATION_DAYS = 14; // if a flagged notice sits unacknowledged this long, it also surfaces on the front page
+
+function underperformStorageKey(areaCode) {
+  return `forecast-compare:underperform:${areaCode}`;
+}
+
+function loadUnderperformStore(areaCode) {
+  try {
+    const raw = localStorage.getItem(underperformStorageKey(areaCode));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveUnderperformStore(areaCode, store) {
+  try {
+    localStorage.setItem(underperformStorageKey(areaCode), JSON.stringify(store));
+  } catch {
+    // Storage unavailable — flags just won't persist between visits.
+  }
+}
+
+function daysSince(dateStr) {
+  const then = new Date(dateStr + "T00:00:00Z").getTime();
+  return Math.floor((Date.now() - then) / (24 * 60 * 60 * 1000));
+}
+
+// Recomputes, from accuracy stats alone, which selected sources currently
+// qualify as underperforming for one condition. Needs at least 2 peers
+// with their own scored history — "worse than the others" is meaningless
+// with no others to compare against.
+function computeUnderperformingIds(conditionName) {
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  const scored = selectedSources
+    .filter(source => daysSeenFor(source, conditionName) >= POOR_ACCURACY_MIN_DAYS)
+    .map(source => ({ source, stats: accuracyStatsFor(source, conditionName) }))
+    .filter(entry => entry.stats && entry.stats.avgErrorCorrected !== null);
+
+  if (scored.length < 3) return [];
+
+  return scored
+    .filter(entry => {
+      const peerErrors = scored.filter(e => e.source.id !== entry.source.id).map(e => e.stats.avgErrorCorrected);
+      const peerMedian = median(peerErrors);
+      return peerMedian !== null && peerMedian > 0 && entry.stats.avgErrorCorrected > peerMedian * POOR_ACCURACY_RATIO;
     })
-    .filter(v => v !== null && v !== undefined);
-  return median(values);
+    .map(entry => entry.source.id);
+}
+
+// Runs once per page load (see loadLocationData) so the flag store stays
+// current everywhere — Compare's notice and the front page's escalation
+// banner both just read whatever this last wrote, rather than each
+// recomputing the accuracy comparison themselves.
+function syncUnderperformFlags() {
+  if (!state.areaCode) return;
+  const store = loadUnderperformStore(state.areaCode);
+  const today = isoDate(new Date());
+
+  Object.keys(CONFIG.conditions).forEach(conditionName => {
+    const badIds = new Set(computeUnderperformingIds(conditionName));
+    store[conditionName] ??= {};
+
+    badIds.forEach(id => {
+      store[conditionName][id] ??= { firstFlagged: today, dismissed: null };
+    });
+    // A source no longer underperforming clears entirely — if it slips
+    // again later, that's treated as a fresh episode with its own timer.
+    Object.keys(store[conditionName]).forEach(id => {
+      if (!badIds.has(id)) delete store[conditionName][id];
+    });
+  });
+
+  saveUnderperformStore(state.areaCode, store);
+}
+
+function isUnderperforming(source, conditionName) {
+  if (!state.areaCode) return false;
+  const store = loadUnderperformStore(state.areaCode);
+  return !!store[conditionName]?.[source.id];
+}
+
+// ---- Compare page: quiet per-condition notice ----
+// Shows for whichever condition is currently selected — matches "in the
+// accuracy table" framing, since that's where the comparison this is
+// based on lives. Only the oldest undismissed flag for this condition is
+// shown at once, to avoid stacking up notices.
+function renderUnderperformNotice() {
+  const el = document.getElementById("underperformNotice");
+  if (!el) return;
+  if (!state.areaCode) { el.hidden = true; return; }
+
+  const store = loadUnderperformStore(state.areaCode);
+  const entries = Object.entries(store[state.condition] ?? {}).filter(([, flag]) => !flag.dismissed);
+  if (!entries.length) { el.hidden = true; return; }
+
+  entries.sort((a, b) => a[1].firstFlagged.localeCompare(b[1].firstFlagged));
+  const [sourceId, flag] = entries[0];
+  const source = CONFIG.forecasters.find(s => s.id === sourceId);
+  const conditionData = CONFIG.conditions[state.condition];
+
+  el.hidden = false;
+  el.innerHTML = "";
+  const text = document.createElement("p");
+  text.textContent = `${source ? source.name : sourceId}'s ${conditionData.name} forecasts have been notably less accurate than the others here for over ${POOR_ACCURACY_MIN_DAYS} days, so it's being left out of the merged figure for ${conditionData.name} for now.`;
+  el.appendChild(text);
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.textContent = "Got it";
+  dismissBtn.addEventListener("click", () => {
+    const freshStore = loadUnderperformStore(state.areaCode);
+    if (freshStore[state.condition]?.[sourceId]) {
+      freshStore[state.condition][sourceId].dismissed = isoDate(new Date());
+      saveUnderperformStore(state.areaCode, freshStore);
+    }
+    renderUnderperformNotice();
+  });
+  el.appendChild(dismissBtn);
+}
+
+// ---- Front page: escalation banner ----
+// Only reached if a Compare notice has sat undismissed for
+// HOME_ESCALATION_DAYS — a quiet nudge that's been ignored long enough
+// to warrant a more visible one, not a duplicate of the same message.
+function findEscalatedUnderperformance() {
+  if (!state.areaCode) return null;
+  const store = loadUnderperformStore(state.areaCode);
+  for (const conditionName of Object.keys(CONFIG.conditions)) {
+    for (const [sourceId, flag] of Object.entries(store[conditionName] ?? {})) {
+      if (!flag.dismissed && daysSince(flag.firstFlagged) >= HOME_ESCALATION_DAYS) {
+        return { conditionName, sourceId, flag };
+      }
+    }
+  }
+  return null;
+}
+
+function renderUnderperformBanner() {
+  const el = document.getElementById("underperformBanner");
+  if (!el) return;
+
+  const found = findEscalatedUnderperformance();
+  if (!found) { el.hidden = true; return; }
+
+  const source = CONFIG.forecasters.find(s => s.id === found.sourceId);
+  const conditionData = CONFIG.conditions[found.conditionName];
+
+  el.hidden = false;
+  el.innerHTML = "";
+  const text = document.createElement("p");
+  text.textContent = `${source ? source.name : found.sourceId} has been a consistently weaker ${conditionData.name} forecaster here for a while now.`;
+  el.appendChild(text);
+
+  const actions = document.createElement("div");
+  actions.className = "underperform-banner-actions";
+
+  const reviewLink = document.createElement("a");
+  reviewLink.href = "compare.html";
+  reviewLink.textContent = "Review in Compare";
+  actions.appendChild(reviewLink);
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.textContent = "Dismiss";
+  dismissBtn.addEventListener("click", () => {
+    const freshStore = loadUnderperformStore(state.areaCode);
+    if (freshStore[found.conditionName]?.[found.sourceId]) {
+      freshStore[found.conditionName][found.sourceId].dismissed = isoDate(new Date());
+      saveUnderperformStore(state.areaCode, freshStore);
+    }
+    renderUnderperformBanner();
+  });
+  actions.appendChild(dismissBtn);
+
+  el.appendChild(actions);
+}
+
+// The app's own weighted-merge figure at a SPECIFIC lead-time (day) for
+// a specific target date (rollbackDays) — the core merge logic, shared
+// by the headline (which always wants the freshest lead-time) and the
+// Compare table's own "App" column (which wants this at every lead-time
+// row, so each forecaster's Raw/Corrected can be checked directly
+// against what the app itself would have said at that same lead-time).
+function mergedValueFor(conditionName, day, rollbackDays) {
+  const sourcesToUse = eligibleOrFallbackSources(conditionName);
+
+  const entries = sourcesToUse.map(source => {
+    const ffv = ffvFor(source, conditionName, day);
+    let value = null;
+    if (ffv !== null) {
+      const mean = threeDayMean(day, source, conditionName, rollbackDays);
+      if (mean !== null) value = applyCorrection(mean, ffv, conditionName);
+    }
+    if (value === null || value === undefined) {
+      value = forecastValueFor(day, source, conditionName, rollbackDays);
+    }
+    return { value, weight: sourceWeight(source, conditionName) };
+  });
+  return weightedMedian(entries);
+}
+
+function headlineValueFor(conditionName) {
+  return mergedValueFor(conditionName, freshestDayFor(state.rollback), state.rollback);
 }
 
 function currentHourDate() {
@@ -1674,14 +1936,17 @@ function liveTodayValueFor(conditionName) {
   }
 }
 
-// Shared by the new range/pair helpers below — same "prefer sources
-// that have earned their place, fall back to real-or-everything while
-// nothing has yet" logic headlineValueFor already uses for the plain
-// figure, factored out so Temp/Wind/Pressure's richer versions don't
-// each duplicate it.
+// Shared by the headline and the range/pair helpers below: prefer
+// sources that have earned their place (eligibility) AND aren't
+// currently flagged as underperforming here, fall back progressively
+// looser only when that leaves nothing to work with.
 function eligibleOrFallbackSources(conditionName) {
   const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
   const eligibleSources = selectedSources.filter(source => isForecasterEligible(source, conditionName));
+  const goodSources = eligibleSources.filter(source => !isUnderperforming(source, conditionName));
+  if (goodSources.length > 0) return goodSources;
+  // Every eligible source happens to be flagged — better to still use
+  // them than collapse all the way back to unfiltered/demo fallback.
   if (eligibleSources.length > 0) return eligibleSources;
   const realSources = selectedSources.filter(source => isRealSource(source, conditionName));
   return realSources.length > 0 ? realSources : selectedSources;
@@ -1719,6 +1984,7 @@ function temperatureRangeFor(rollbackDays) {
   const highs = [];
   const lows = [];
   eligibleOrFallbackSources("temperature").forEach(source => {
+    const weight = sourceWeight(source, "temperature");
     const ffv = ffvFor(source, "temperature", day);
     if (isRealSource(source, "temperature") && day <= 7) {
       const slot = state.realSources[source.id];
@@ -1727,8 +1993,8 @@ function temperatureRangeFor(rollbackDays) {
       if (slot?.status === "ready" && idx !== null && byDay) {
         const max = byDay.tempMax[idx];
         const min = byDay.tempMin[idx];
-        if (max !== null && max !== undefined) highs.push(ffv !== null ? applyCorrection(max, ffv, "temperature") : max);
-        if (min !== null && min !== undefined) lows.push(ffv !== null ? applyCorrection(min, ffv, "temperature") : min);
+        if (max !== null && max !== undefined) highs.push({ value: ffv !== null ? applyCorrection(max, ffv, "temperature") : max, weight });
+        if (min !== null && min !== undefined) lows.push({ value: ffv !== null ? applyCorrection(min, ffv, "temperature") : min, weight });
         return;
       }
     }
@@ -1737,12 +2003,12 @@ function temperatureRangeFor(rollbackDays) {
     const mean = demoValue(day, source, "temperature");
     if (mean !== null && mean !== undefined) {
       const corrected = ffv !== null ? applyCorrection(mean, ffv, "temperature") : mean;
-      highs.push(corrected + 2.5);
-      lows.push(corrected - 2.5);
+      highs.push({ value: corrected + 2.5, weight });
+      lows.push({ value: corrected - 2.5, weight });
     }
   });
   if (!highs.length || !lows.length) return null;
-  return { low: median(lows), high: median(highs) };
+  return { low: weightedMedian(lows), high: weightedMedian(highs) };
 }
 
 // ---- Wind speed / gust pairing ----
@@ -1788,14 +2054,17 @@ function windSpeedGustFor(rollbackDays) {
   const speeds = [];
   const gusts = [];
   eligibleOrFallbackSources("wind").forEach(source => {
+    const weight = sourceWeight(source, "wind");
     const speed = forecastValueFor(day, source, "wind", rollbackDays);
     const ffv = ffvFor(source, "wind", day);
-    if (speed !== null && speed !== undefined) speeds.push(ffv !== null ? applyCorrection(speed, ffv, "wind") : speed);
+    if (speed !== null && speed !== undefined) {
+      speeds.push({ value: ffv !== null ? applyCorrection(speed, ffv, "wind") : speed, weight });
+    }
     const gust = windGustValueFor(day, source, rollbackDays);
-    if (gust !== null && gust !== undefined) gusts.push(gust);
+    if (gust !== null && gust !== undefined) gusts.push({ value: gust, weight });
   });
   if (!speeds.length) return null;
-  return { speed: median(speeds), gust: gusts.length ? median(gusts) : null };
+  return { speed: weightedMedian(speeds), gust: gusts.length ? weightedMedian(gusts) : null };
 }
 
 // ---- Pressure trend ----
@@ -1829,9 +2098,10 @@ function pressureTrendFor(rollbackDays) {
     const values = eligibleOrFallbackSources("pressure").map(source => {
       const raw = forecastValueFor(day, source, "pressure", rb);
       const ffv = ffvFor(source, "pressure", day);
-      return raw !== null && raw !== undefined ? (ffv !== null ? applyCorrection(raw, ffv, "pressure") : raw) : null;
-    }).filter(v => v !== null && v !== undefined);
-    return values.length ? median(values) : null;
+      const value = raw !== null && raw !== undefined ? (ffv !== null ? applyCorrection(raw, ffv, "pressure") : raw) : null;
+      return { value, weight: sourceWeight(source, "pressure") };
+    });
+    return weightedMedian(values);
   };
   const current = valueFor(rollbackDays);
   const previous = valueFor(rollbackDays > 0 ? rollbackDays - 1 : rollbackDays + 1); // "the day before" — subtract a day either side of the past/future divide
@@ -2010,6 +2280,8 @@ function renderHeadline() {
 
     headlineGrid.appendChild(cell);
   });
+
+  renderUnderperformBanner();
 }
 
 // ---- Hourly graph sheet ----
@@ -2529,17 +2801,23 @@ function initWhatIfIfNeeded() {
 function whatIfMergedValue() {
   const day = freshestDayFor(state.rollback);
   const chosen = CONFIG.forecasters.filter(source => state.whatIf?.has(source.id));
-  const values = chosen
-    .map(source => {
-      const ffv = ffvFor(source, state.condition, day);
-      if (ffv !== null) {
-        const mean = threeDayMean(day, source, state.condition, state.rollback);
-        if (mean !== null) return applyCorrection(mean, ffv, state.condition);
-      }
-      return forecastValueFor(day, source, state.condition, state.rollback);
-    })
-    .filter(v => v !== null && v !== undefined);
-  return median(values);
+  // Weighted the same way the live merge is — otherwise this preview
+  // could show a different figure than the real headline would actually
+  // produce for the same selection, which would defeat the point of a
+  // "what if" comparison.
+  const entries = chosen.map(source => {
+    const ffv = ffvFor(source, state.condition, day);
+    let value = null;
+    if (ffv !== null) {
+      const mean = threeDayMean(day, source, state.condition, state.rollback);
+      if (mean !== null) value = applyCorrection(mean, ffv, state.condition);
+    }
+    if (value === null || value === undefined) {
+      value = forecastValueFor(day, source, state.condition, state.rollback);
+    }
+    return { value, weight: sourceWeight(source, state.condition) };
+  });
+  return weightedMedian(entries);
 }
 
 function renderWhatIfResult() {
@@ -2615,8 +2893,9 @@ function renderTable() {
   // always has enough room, so .table-wrap's horizontal scroll kicks in
   // properly instead.
   const DAY_COLUMN_WIDTH = 70;
+  const APP_COLUMN_WIDTH = 64;
   const FORECASTER_PAIR_WIDTH = 96 * 2;
-  table.style.minWidth = `${DAY_COLUMN_WIDTH + FORECASTER_PAIR_WIDTH * selectedSources.length}px`;
+  table.style.minWidth = `${DAY_COLUMN_WIDTH + APP_COLUMN_WIDTH + FORECASTER_PAIR_WIDTH * selectedSources.length}px`;
 
   table.innerHTML = "";
 
@@ -2628,6 +2907,17 @@ function renderTable() {
   dayHead.rowSpan = 2;
   dayHead.className = "day-head";
   sourceRow.appendChild(dayHead);
+
+  // Fixed alongside Day out (not scrolled away with the forecaster
+  // columns) so the app's own merged figure is always visible right next
+  // to whichever row you're looking at — the point being an easy,
+  // constant visual check of each forecaster against the app's own
+  // output, not just against Actual at the bottom.
+  const appHead = document.createElement("th");
+  appHead.textContent = "App";
+  appHead.rowSpan = 2;
+  appHead.className = "app-head";
+  sourceRow.appendChild(appHead);
 
   const subRow = document.createElement("tr");
 
@@ -2687,6 +2977,14 @@ function renderTable() {
 
     dayCell.append(dayNum, dayDate);
     row.appendChild(dayCell);
+
+    const appCell = document.createElement("td");
+    appCell.className = "app";
+    const appValue = mergedValueFor(state.condition, day, rollbackDays);
+    appCell.textContent = appValue !== null && appValue !== undefined
+      ? formatValue(appValue, state.condition)
+      : "–";
+    row.appendChild(appCell);
 
     selectedSources.forEach((source, index) => {
       const tintClass = index % 2 === 1 ? " forecaster-tint" : "";
@@ -2771,6 +3069,7 @@ function renderTable() {
   }
 
   renderAccuracy();
+  renderUnderperformNotice();
   renderWhatIf();
   renderHeadline();
 }

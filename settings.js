@@ -4,6 +4,10 @@
 const FORECASTERS = [
   { id: "metoffice", name: "Met Office", enabled: true },
   { id: "ecmwf", name: "ECMWF", enabled: true },
+  { id: "gfs", name: "GFS (US)", enabled: true },
+  { id: "icon", name: "ICON (Germany)", enabled: true },
+  { id: "gem", name: "GEM (Canada)", enabled: true },
+  { id: "meteofrance", name: "Météo-France", enabled: true },
   { id: "bbc", name: "BBC", enabled: true },
   { id: "meteo", name: "Meteoblue", enabled: true },
   { id: "yr", name: "YR", enabled: true },

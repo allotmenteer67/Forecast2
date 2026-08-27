@@ -426,11 +426,12 @@ td.day {
   /* Pinned while the rest of the table scrolls sideways, so you never
      lose track of which row is which on a narrow screen. Needs an
      opaque background (set per state below) so scrolled-under cells
-     don't show through, and a shadow to mark the scroll edge. */
+     don't show through. The scroll-edge shadow lives on the App column
+     instead (see below), since that's now the right-hand edge of the
+     combined fixed group. */
   position: sticky;
   left: 0;
   z-index: 2;
-  box-shadow: 2px 0 4px rgba(31, 42, 36, 0.08);
 }
 
 th.day-head {
@@ -446,6 +447,40 @@ tbody tr:nth-child(even) td.day {
 }
 
 .row-final td.day {
+  background: #f2f7f0;
+}
+
+/* The app's own merged figure — fixed directly alongside Day out (left
+   offset = Day's own width) so together they form one pinned block; each
+   forecaster's Raw/Corrected columns can then be checked against this
+   at a glance without losing track of which row, regardless of how far
+   right you've scrolled. */
+th.app-head,
+td.app {
+  width: 64px;
+  text-align: center;
+  position: sticky;
+  left: 70px;
+  z-index: 2;
+  box-shadow: 2px 0 4px rgba(31, 42, 36, 0.08);
+}
+
+th.app-head {
+  background: var(--accent-light);
+  font-weight: 700;
+}
+
+td.app {
+  background: white;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+tbody tr:nth-child(even) td.app {
+  background: #fafbf9;
+}
+
+.row-final td.app {
   background: #f2f7f0;
 }
 
@@ -689,6 +724,87 @@ tbody tr:last-child td {
    specific than either on its own, so [hidden] reliably wins now. */
 .headline-status-block[hidden] {
   display: none;
+}
+
+/* Front-page escalation banner — a calm, informational green rather than
+   the amber "something's wrong" tone of the weather-load error above,
+   since this is an FYI worth a glance, not a problem needing action. */
+.underperform-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: var(--accent-light);
+  border: 1px solid #bcdcc7;
+  border-radius: 10px;
+}
+
+.underperform-banner[hidden] {
+  display: none;
+}
+
+.underperform-banner p {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.underperform-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.underperform-banner-actions a {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+.underperform-banner-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #bcdcc7;
+}
+
+/* Compare-page notice — same calm tone, sits inside the Accuracy
+   details block right above the table it's referring to. */
+.underperform-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: var(--accent-light);
+  border: 1px solid #bcdcc7;
+  border-radius: 10px;
+}
+
+.underperform-notice[hidden] {
+  display: none;
+}
+
+.underperform-notice p {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.underperform-notice button {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: white;
+  color: var(--accent-dark);
+  border: 1px solid #bcdcc7;
 }
 
 .headline-status-text {
