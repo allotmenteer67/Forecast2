@@ -45,14 +45,14 @@ const CONFIG = {
 // (Cloud/Sunshine/UV are unitless/universal either way, so they're left
 // out rather than offering a toggle that does nothing).
 const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
-const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure", "soilTemperature", "dewPoint"];
+const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
 const DEFAULT_CONDITION_UNITS = {
   rain: "metric", // mm
   temperature: "metric", // °C
   wind: "imperial", // mph
-  pressure: "metric", // hPa
-  soilTemperature: "metric", // °C
-  dewPoint: "metric" // °C
+  pressure: "metric" // hPa
+  // soilTemperature and dewPoint deliberately not listed — see
+  // conditionUnit(), which redirects them to Temperature's own setting.
 };
 const CONDITION_UNIT_LABELS = {
   rain: { metric: "mm", imperial: "in" },
@@ -92,7 +92,12 @@ function saveConditionUnit(conditionName, system) {
 // conditions without a toggle (Cloud, Sunshine, UV) always read as metric,
 // which is harmless since their labels are identical either way.
 function conditionUnit(conditionName) {
-  return state.conditionUnits[conditionName] ?? "metric";
+  // Soil Temp and Dew Point are both °C-scale like Temperature and don't
+  // get their own choice in Settings — asking twice for the same
+  // metric/imperial decision would just be clutter, so they follow
+  // whatever Temperature is already set to.
+  const key = (conditionName === "soilTemperature" || conditionName === "dewPoint") ? "temperature" : conditionName;
+  return state.conditionUnits[key] ?? "metric";
 }
 
 function unitLabel(conditionName) {
@@ -2679,6 +2684,51 @@ function sheetRenderLine(hourTimes, displayValues, color, conditionName) {
   return { wrap, svg, pts, extraHeight: 16 };
 }
 
+// Dew point plus air temperature on one graph — genuinely useful
+// together, not just decorative: whenever the two lines meet or nearly
+// meet, relative humidity is at or near 100% (fog/dew/frost territory),
+// and dew point's own height on a day when they stay well apart is a
+// better "how muggy will it feel" read than raw humidity. Both share the
+// same °C/°F scale, so there's no dual-axis awkwardness to work around.
+// Temperature is always the higher of the two, drawn as a plain red line
+// with no fill underneath — filling it too would just paint over dew
+// point's own fill and muddy exactly the convergence this exists to show.
+function sheetRenderDewPointWithTemp(hourTimes, dewDisplay, tempDisplay) {
+  const { wrap, svg, count } = sheetBaseSvg(hourTimes);
+  const dataMin = Math.min(...dewDisplay, ...tempDisplay);
+  const dataMax = Math.max(...dewDisplay, ...tempDisplay);
+  const { topValue, minValue, plotH } = sheetRenderYAxis(svg, dataMin, dataMax, false, "dewPoint");
+  const range = Math.max(1, topValue - minValue);
+  const yFor = v => SHEET_H - SHEET_PAD_B - ((v - minValue) / range) * plotH;
+
+  const dewPts = dewDisplay.map((v, i) => [sheetXFor(i, count), yFor(v)]);
+  const tempPts = tempDisplay.map((v, i) => [sheetXFor(i, count), yFor(v)]);
+
+  const areaPath = `M${dewPts[0][0]},${SHEET_H - SHEET_PAD_B} ` + dewPts.map(p => `L${p[0]},${p[1]}`).join(" ") + ` L${dewPts[dewPts.length - 1][0]},${SHEET_H - SHEET_PAD_B} Z`;
+  svg.appendChild(sheetSvgEl("path", { d: areaPath, fill: "#4c7a8a", opacity: 0.12 }));
+
+  const tempLinePath = "M" + tempPts.map(p => p.join(",")).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: tempLinePath, fill: "none", stroke: "#c0392b", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+
+  // Dew point drawn last so it stays the visually primary line, on top
+  // at the moments the two converge.
+  const dewLinePath = "M" + dewPts.map(p => p.join(",")).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: dewLinePath, fill: "none", stroke: "#4c7a8a", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+
+  const legend = document.createElement("div");
+  legend.className = "graph-legend";
+  const dewKey = document.createElement("span");
+  dewKey.className = "graph-legend-item";
+  dewKey.innerHTML = '<span class="graph-legend-swatch" style="background:#4c7a8a"></span>Dew point';
+  const tempKey = document.createElement("span");
+  tempKey.className = "graph-legend-item";
+  tempKey.innerHTML = '<span class="graph-legend-swatch" style="background:#c0392b"></span>Temperature';
+  legend.append(dewKey, tempKey);
+  wrap.insertBefore(legend, svg);
+
+  return { wrap, svg, pts: dewPts, extraHeight: 16 };
+}
+
 function sheetRenderWind(hourTimes, speedsDisplay, dirs) {
   // Arrow row needs its own clear space above the speed line — reserved
   // as extra top padding within the normal chart height (same baseline
@@ -2932,14 +2982,22 @@ function openHourlySheet(conditionName) {
           defaultReadout: { time: "Now", value: `${formatConverted(display[0], "soilTemperature")}${unitLabel("soilTemperature")}` }
         });
       } else if (conditionName === "dewPoint") {
-        const raw = state.hourly.dewPoint.slice(0, count);
-        const display = raw.map(v => convertForDisplay(v, "dewPoint"));
-        const g = sheetRenderLine(hourTimes, display, "#4c7a8a", "dewPoint");
+        const dewRaw = state.hourly.dewPoint.slice(0, count);
+        const dewDisplay = dewRaw.map(v => convertForDisplay(v, "dewPoint"));
+        const tempRaw = state.hourly.temperature.slice(0, count);
+        const tempDisplay = tempRaw.map(v => convertForDisplay(v, "temperature"));
+        const g = sheetRenderDewPointWithTemp(hourTimes, dewDisplay, tempDisplay);
         sheetBody.appendChild(g.wrap);
         attachSheetScrubber({
           ...g,
-          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "dewPoint")}${unitLabel("dewPoint")}` }),
-          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "dewPoint")}${unitLabel("dewPoint")}` }
+          formatReadout: i => ({
+            time: sheetClockLabel(hourTimes[i]),
+            value: `${formatConverted(dewDisplay[i], "dewPoint")}${unitLabel("dewPoint")} · temp ${formatConverted(tempDisplay[i], "temperature")}${unitLabel("temperature")}`
+          }),
+          defaultReadout: {
+            time: "Now",
+            value: `${formatConverted(dewDisplay[0], "dewPoint")}${unitLabel("dewPoint")} · temp ${formatConverted(tempDisplay[0], "temperature")}${unitLabel("temperature")}`
+          }
         });
       }
 

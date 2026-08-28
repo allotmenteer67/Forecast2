@@ -49,11 +49,13 @@ if (hourRange48 && hourRange24) {
 }
 
 // ---- Per-condition units ----
-// Each condition with a real unit gets its own Metric/Imperial radio pair
-// (see CONDITION_UNIT_TOGGLES in app.js for which conditions have one) —
-// replaces the old single global Metric/Imperial toggle, so Rain can stay
-// in mm while Wind stays in mph, matching how people actually mix units
-// day to day.
+// Each condition with a real unit gets its own compact Metric/Imperial
+// toggle (see CONDITION_UNIT_TOGGLES in app.js for which conditions have
+// one — Soil Temp and Dew Point deliberately don't, they follow
+// Temperature's own setting instead, see conditionUnit() in app.js).
+// Laid out as short rows in a 2-column grid rather than a full
+// bordered fieldset per condition, so this doesn't turn into a long
+// scroll as more conditions gain a unit choice.
 const unitFieldsets = document.getElementById("conditionUnits");
 if (unitFieldsets) {
   const units = loadConditionUnits();
@@ -61,20 +63,23 @@ if (unitFieldsets) {
     const conditionData = CONFIG.conditions[conditionName];
     const current = units[conditionName] || DEFAULT_CONDITION_UNITS[conditionName];
 
-    const fieldset = document.createElement("fieldset");
-    const legend = document.createElement("legend");
-    legend.textContent = conditionData.name;
-    fieldset.appendChild(legend);
-
     const row = document.createElement("div");
-    row.className = "checks";
+    row.className = "unit-row";
+
+    const name = document.createElement("span");
+    name.className = "unit-row-name";
+    name.textContent = conditionData.name;
+    row.appendChild(name);
+
+    const toggle = document.createElement("div");
+    toggle.className = "unit-row-toggle";
 
     [
       { value: "metric", text: CONDITION_UNIT_LABELS[conditionName].metric },
       { value: "imperial", text: CONDITION_UNIT_LABELS[conditionName].imperial }
     ].forEach(opt => {
       const label = document.createElement("label");
-      label.className = "check";
+      label.className = "unit-pill";
       const input = document.createElement("input");
       input.type = "radio";
       input.name = `unit-${conditionName}`;
@@ -86,11 +91,11 @@ if (unitFieldsets) {
       const text = document.createElement("span");
       text.textContent = opt.text;
       label.append(input, text);
-      row.appendChild(label);
+      toggle.appendChild(label);
     });
 
-    fieldset.appendChild(row);
-    unitFieldsets.appendChild(fieldset);
+    row.appendChild(toggle);
+    unitFieldsets.appendChild(row);
   });
 }
 

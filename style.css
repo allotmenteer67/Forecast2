@@ -404,6 +404,70 @@ legend {
   accent-color: var(--accent);
 }
 
+/* Per-condition units — compact rows in a 2-column grid rather than a
+   bordered fieldset per condition, so the list doesn't turn into a long
+   scroll as more conditions gain a unit choice. */
+#conditionUnits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.unit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.unit-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4c6a58;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unit-row-toggle {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.unit-pill {
+  position: relative;
+  cursor: pointer;
+}
+
+.unit-pill input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.unit-pill span {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #dfe7e1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4c6a58;
+  white-space: nowrap;
+}
+
+.unit-pill input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
 .rollback-title {
   display: flex;
   justify-content: space-between;
@@ -1235,6 +1299,27 @@ footer {
 .sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
 
 .graph-wrap { margin-top: 18px; }
+
+.graph-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #4c6a58;
+}
+
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.graph-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
 .graph-svg { width: 100%; height: auto; display: block; overflow: visible; }
 .graph-axis-label { font-size: 10px; fill: #6b7d70; }
 .graph-value-label { font-size: 10px; fill: var(--accent-dark); font-weight: 700; }
