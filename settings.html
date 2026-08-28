@@ -25,29 +25,24 @@
         <legend>Saved places</legend>
         <div id="placesList" class="places-list"></div>
 
-        <div class="add-place-row">
-          <input id="newPlacePostcode" type="text" placeholder="Postcode or place name" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
-          <input id="newPlaceName" type="text" placeholder="Name (optional)" maxlength="24">
-          <button id="addPlaceButton" type="button">Add</button>
+        <label>
+          Go somewhere
+          <div class="location-row">
+            <input id="postcode" value="TA6" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
+          </div>
+        </label>
+        <p class="note">A postcode or a plain place name both work — e.g. "TA6" or "York".</p>
+        <div class="location-actions">
+          <button id="updateLocation" class="location-action-switch">Switch</button>
+          <button id="addCurrentPlace" class="location-action-save">Save</button>
         </div>
         <p id="addPlaceStatus" class="actual-status status-error-only"></p>
 
-        <p class="note">Switching to a saved place reuses whatever forecast history it already has, instead of starting fresh. Adding one here doesn't change what's currently shown — use Switch above once it's added, or update the location below to look somewhere without saving it.</p>
-      </fieldset>
-    </section>
+        <button id="useMyLocation" type="button" class="geo-button">Use my location</button>
+        <p id="geoStatus" class="actual-status status-error-only"></p>
 
-    <section class="controls">
-      <label>
-        Select location
-        <div class="location-row">
-          <input id="postcode" value="TA6" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
-          <button id="updateLocation">Update</button>
-        </div>
-      </label>
-      <p class="note">A postcode or a plain place name both work — e.g. "TA6" or "Bridgwater".</p>
-      <button id="useMyLocation" type="button" class="geo-button">Use my location</button>
-      <p id="geoStatus" class="actual-status status-error-only"></p>
-      <button id="addCurrentPlace" type="button">Save selected location</button>
+        <p class="note">Switch looks at that place now, without saving it. Save adds it to the list above — without changing what's currently shown — so you can rename it or switch to it any time. Switching to a saved place reuses whatever forecast history it already has, instead of starting fresh.</p>
+      </fieldset>
     </section>
 
     <section class="controls">

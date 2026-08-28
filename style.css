@@ -291,24 +291,24 @@ fieldset,
   margin-top: 7px;
 }
 
-.add-place-row {
+.location-actions {
   display: flex;
   gap: 8px;
   margin: 10px 0 6px;
 }
 
-.add-place-row input#newPlacePostcode {
-  flex: 0 0 92px;
-}
-
-.add-place-row input#newPlaceName {
+.location-action-switch,
+.location-action-save {
   flex: 1;
-  min-width: 0;
 }
 
-.add-place-row button {
-  flex: 0 0 auto;
-  padding: 0 14px;
+.location-action-save {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.location-action-save:hover {
+  background: #d4e6da;
 }
 
 .geo-button {

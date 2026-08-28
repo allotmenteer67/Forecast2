@@ -1071,7 +1071,30 @@ function anyRealSourceHasHistory() {
   );
 }
 
-async function loadLocationData() {
+// Guards against overlapping runs of loadLocationData — with SIX real
+// sources now fetched (each sequentially awaited inside
+// fetchHourlyForecast/fetchRealSourceLive), a single full load can
+// genuinely take long enough that the 30-second retry timer, the
+// "online" listener, or a rapid re-tap of Update could start a SECOND
+// run before the first has finished. Both would then be writing into
+// the same shared state.hourly/state.actual/state.realSources fields at
+// once, and whichever happened to finish last would silently overwrite
+// the other's — for Rain's running total specifically, this could show
+// as the figure appearing to climb, then snap to a smaller "final"
+// number once every overlapping run had actually settled. Any call
+// while one is already in flight just reuses that same in-flight
+// promise instead of starting a second, competing run.
+let loadLocationDataPromise = null;
+
+function loadLocationData() {
+  if (loadLocationDataPromise) return loadLocationDataPromise;
+  loadLocationDataPromise = runLoadLocationData().finally(() => {
+    loadLocationDataPromise = null;
+  });
+  return loadLocationDataPromise;
+}
+
+async function runLoadLocationData() {
   try {
     const { lat, lon, label, areaCode } = await resolveLocation(state.postcode);
     state.lat = lat;
@@ -2446,6 +2469,15 @@ function sheetXFor(i, count) {
   return SHEET_PAD_L + (i / Math.max(1, count - 1)) * plotW;
 }
 
+// Axis ticks along the bottom always stay plain time-only — with 8 major
+// ticks across a 48h graph there's no room for a date on top without the
+// exact overlap this used to cause. The date only matters when actually
+// scrubbing a specific point (see sheetClockLabel below), not for the
+// static axis, which reads fine as a repeating 24h clock either way.
+function sheetAxisTickLabel(iso) {
+  return `${String(new Date(iso).getHours()).padStart(2, "0")}:00`;
+}
+
 function sheetBaseSvg(hourTimes, extraHeight = 16) {
   const wrap = document.createElement("div");
   wrap.className = "graph-wrap";
@@ -2466,7 +2498,7 @@ function sheetBaseSvg(hourTimes, extraHeight = 16) {
     }));
     if (isMajor) {
       const t = sheetSvgEl("text", { x, y: SHEET_H + 12, class: "graph-axis-label", "text-anchor": "middle" });
-      t.textContent = sheetClockLabel(iso);
+      t.textContent = sheetAxisTickLabel(iso);
       svg.appendChild(t);
     }
   });
@@ -2602,7 +2634,7 @@ function sheetRenderSunStrip(hourTimes, cloudCover) {
     cell.appendChild(sheetCloudIcon(cloudCover[i] ?? 0, isNight));
     const label = document.createElement("span");
     label.className = "sun-hour-label";
-    label.textContent = sheetClockLabel(iso);
+    label.textContent = sheetAxisTickLabel(iso);
     cell.appendChild(label);
     strip.appendChild(cell);
   });
@@ -3691,28 +3723,13 @@ function renderPlacesList() {
   });
 }
 
-if (addCurrentPlaceButton) {
-  addCurrentPlaceButton.addEventListener("click", () => {
-    const places = loadPlaces();
-    if (!places.some(place => place.postcode === state.postcode)) {
-      places.push({ postcode: state.postcode, label: state.postcode });
-      savePlaces(places);
-      renderPlacesList();
-      renderPlaceMenu();
-    }
-  });
-}
-
-// A direct, one-step way to add a place — postcode and name together in
-// a single action, rather than needing to switch the current location
-// via Update first and then separately remember to save it. Deliberately
-// doesn't change what's currently shown (see the note in the markup) —
-// adding a place and looking at it right now are two different things,
-// and someone adding a family member's postcode while wanting to keep
-// looking at their own weather shouldn't have the view yanked away.
-const newPlacePostcode = document.getElementById("newPlacePostcode");
-const newPlaceName = document.getElementById("newPlaceName");
-const addPlaceButton = document.getElementById("addPlaceButton");
+// Save reads directly from the same shared field Switch uses — typing a
+// place and tapping Save works on its own, with no need to Switch first.
+// Deliberately doesn't change what's currently shown (see the note in
+// the markup): adding a place and looking at it right now are two
+// different things, and someone adding a family member's postcode while
+// wanting to keep looking at their own weather shouldn't have the view
+// yanked away.
 const addPlaceStatus = document.getElementById("addPlaceStatus");
 
 function renderAddPlaceStatus(message, isError) {
@@ -3721,14 +3738,14 @@ function renderAddPlaceStatus(message, isError) {
   addPlaceStatus.classList.toggle("is-error", !!isError);
 }
 
-if (addPlaceButton) {
-  addPlaceButton.addEventListener("click", async () => {
-    const rawInput = (newPlacePostcode?.value || "").trim();
+if (addCurrentPlaceButton) {
+  addCurrentPlaceButton.addEventListener("click", async () => {
+    const rawInput = (postcode?.value || "").trim();
     if (!rawInput) {
       renderAddPlaceStatus("Enter a postcode or place name first.", true);
       return;
     }
-    // Same rule as Update: only postcodes get uppercased, a place name
+    // Same rule as Switch: only postcodes get uppercased, a place name
     // keeps its natural capitalisation. This is also the string stored
     // as the place's postcode/query going forward, so it's what
     // switchToPostcode later feeds back into resolveLocation.
@@ -3740,27 +3757,27 @@ if (addPlaceButton) {
       return;
     }
 
-    addPlaceButton.disabled = true;
+    addCurrentPlaceButton.disabled = true;
     renderAddPlaceStatus("Checking…", false);
 
     try {
       // Validates it actually resolves to a real place before saving it —
-      // the same lookup Update itself relies on — without loading full
+      // the same lookup Switch itself relies on — without loading full
       // weather data for it (that only happens once it's switched to).
       await resolveLocation(pc);
     } catch (err) {
-      addPlaceButton.disabled = false;
+      addCurrentPlaceButton.disabled = false;
       renderAddPlaceStatus(err.message || "Not found.", true);
       return;
     }
 
-    const label = (newPlaceName?.value || "").trim() || pc;
-    places.push({ postcode: pc, label });
+    // No separate name field any more — the saved places list already
+    // lets you rename any entry inline after adding it, so there's no
+    // need to ask for one upfront too.
+    places.push({ postcode: pc, label: pc });
     savePlaces(places);
 
-    if (newPlacePostcode) newPlacePostcode.value = "";
-    if (newPlaceName) newPlaceName.value = "";
-    addPlaceButton.disabled = false;
+    addCurrentPlaceButton.disabled = false;
     renderAddPlaceStatus("", false);
     renderPlacesList();
     renderPlaceMenu();
