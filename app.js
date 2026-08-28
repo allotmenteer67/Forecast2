@@ -25,7 +25,9 @@ const CONFIG = {
     temperature: { name: "Temperature", unit: "°C" },
     pressure: { name: "Pressure", unit: "hPa" },
     sunshine: { name: "Sunshine", unit: "hrs" },
-    uv: { name: "UV", unit: "index" }
+    uv: { name: "UV", unit: "index" },
+    soilTemperature: { name: "Soil Temp", unit: "°C" },
+    dewPoint: { name: "Dew Point", unit: "°C" }
   }
 };
 
@@ -43,12 +45,14 @@ const CONFIG = {
 // (Cloud/Sunshine/UV are unitless/universal either way, so they're left
 // out rather than offering a toggle that does nothing).
 const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
-const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
+const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure", "soilTemperature", "dewPoint"];
 const DEFAULT_CONDITION_UNITS = {
   rain: "metric", // mm
   temperature: "metric", // °C
   wind: "imperial", // mph
-  pressure: "metric" // hPa
+  pressure: "metric", // hPa
+  soilTemperature: "metric", // °C
+  dewPoint: "metric" // °C
 };
 const CONDITION_UNIT_LABELS = {
   rain: { metric: "mm", imperial: "in" },
@@ -57,7 +61,9 @@ const CONDITION_UNIT_LABELS = {
   temperature: { metric: "°C", imperial: "°F" },
   pressure: { metric: "hPa", imperial: "inHg" },
   sunshine: { metric: "hrs", imperial: "hrs" },
-  uv: { metric: "index", imperial: "index" }
+  uv: { metric: "index", imperial: "index" },
+  soilTemperature: { metric: "°C", imperial: "°F" },
+  dewPoint: { metric: "°C", imperial: "°F" }
 };
 
 function loadConditionUnits() {
@@ -103,13 +109,15 @@ function convertForDisplay(value, conditionName, isDelta = false) {
   const system = conditionUnit(conditionName);
   if (system === "imperial") {
     if (conditionName === "rain") return value / 25.4; // mm -> in
-    if (conditionName === "temperature") return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
+    if (conditionName === "temperature" || conditionName === "soilTemperature" || conditionName === "dewPoint") {
+      return isDelta ? value * 9 / 5 : value * 9 / 5 + 32; // °C -> °F
+    }
     if (conditionName === "pressure") return value / 33.8639; // hPa -> inHg
     return value; // wind is already mph natively
   }
   // metric
   if (conditionName === "wind") return value * 1.60934; // mph -> km/h
-  return value; // rain (mm), temperature (°C) and pressure (hPa) are already metric natively
+  return value; // rain (mm), temperature/soilTemperature/dewPoint (°C) and pressure (hPa) are already metric natively
 }
 
 // ---- Actual weather (Open-Meteo, no API key) ----
@@ -128,7 +136,7 @@ const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live 
 // Real data (Open-Meteo's Previous Runs API) only covers these four
 // conditions for any source — Sunshine and UV aren't in that dataset, so
 // real sources fall back to the demo formula for those two.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure"]);
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure", "soilTemperature", "dewPoint"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -239,7 +247,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [], soilTemp: [], dewPoint: [] };
   }
   return byLeadDay;
 }
@@ -281,6 +289,8 @@ const state = {
     uv_index_max: [],
     cloud_mean: [],
     pressure_mean: [],
+    soilTemp_mean: [],
+    dewPoint_mean: [],
     // Raw hourly pressure (not day-aggregated) covering the past window
     // through "now" — kept only to compute the pressure trend arrow
     // (see pressureTrend()), which needs a real few-hours-ago comparison
@@ -310,6 +320,8 @@ const state = {
     windGust: [],
     windDirection: [],
     pressure: [],
+    soilTemperature: [],
+    dewPoint: [],
     uvIndex: [],
     cloudCover: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
@@ -400,6 +412,16 @@ function demoValue(day, source, conditionName) {
       break;
     case "pressure":
       value = 1013 - day * 0.3 + sourceOffset * 2;
+      break;
+    case "soilTemperature":
+      // Soil lags and smooths air temperature — less day-to-day swing,
+      // rarely near the same extremes.
+      value = 12 - day * 0.15 + sourceOffset * 0.25;
+      break;
+    case "dewPoint":
+      // Dew point is always at or below air temperature — this demo
+      // formula mirrors Temperature's shape with a fixed gap under it.
+      value = 17.5 - day * 0.3 + sourceOffset * 0.4 - 4;
       break;
     case "sunshine":
       value = Math.max(0, 5.2 - day * 0.3 - sourceOffset * 0.2);
@@ -637,7 +659,7 @@ async function fetchActualWeather(lat, lon) {
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
-      hourly: "cloudcover,pressure_msl",
+      hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       wind_speed_unit: "mph",
@@ -668,6 +690,18 @@ async function fetchActualWeather(lat, lon) {
     state.actual.pressure_mean = aggregateHourlyByDay(
       data.hourly.time,
       data.hourly.pressure_msl,
+      dayCount,
+      "mean"
+    );
+    state.actual.soilTemp_mean = aggregateHourlyByDay(
+      data.hourly.time,
+      data.hourly.soil_temperature_0cm,
+      dayCount,
+      "mean"
+    );
+    state.actual.dewPoint_mean = aggregateHourlyByDay(
+      data.hourly.time,
+      data.hourly.dewpoint_2m,
       dayCount,
       "mean"
     );
@@ -702,7 +736,9 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `wind_direction_10m_previous_day${d}`,
         `wind_gusts_10m_previous_day${d}`,
         `cloud_cover_previous_day${d}`,
-        `pressure_msl_previous_day${d}`
+        `pressure_msl_previous_day${d}`,
+        `soil_temperature_0cm_previous_day${d}`,
+        `dewpoint_2m_previous_day${d}`
       );
     }
 
@@ -738,7 +774,9 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         windGust: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_gusts_10m_previous_day${d}`], dayCount, "max"),
         windDirection: directionAtPeakHour(hourlyTimes, windSpeedHourly, data.hourly[`wind_direction_10m_previous_day${d}`], dayCount),
         cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
-        pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
+        pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
+        soilTemp: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
+        dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
       };
     }
 
@@ -860,7 +898,7 @@ async function fetchHourlyForecast(lat, lon) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -896,7 +934,9 @@ async function fetchHourlyForecast(lat, lon) {
         windSpeed: data.hourly.wind_speed_10m.slice(from, from + sharedTimes.length || undefined),
         windGust: data.hourly.wind_gusts_10m.slice(from, from + sharedTimes.length || undefined),
         windDirection: data.hourly.wind_direction_10m.slice(from, from + sharedTimes.length || undefined),
-        pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined)
+        pressure: data.hourly.pressure_msl.slice(from, from + sharedTimes.length || undefined),
+        soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
+        dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined)
       };
     }
 
@@ -931,6 +971,8 @@ async function fetchHourlyForecast(lat, lon) {
     // correction rather than showing the raw model figure uncorrected.
     state.hourly.windGust = blend("windGust", "wind");
     state.hourly.pressure = blend("pressure", "pressure");
+    state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
+    state.hourly.dewPoint = blend("dewPoint", "dewPoint");
     // Direction can't be medianed the way speed can (it's angular, not
     // linear) — first real source with a reading for that hour, same
     // convention as anyRealWindDirection() uses for the daily table.
@@ -1184,6 +1226,10 @@ function actualValueFor(conditionName, rollbackDays) {
       return state.actual.uv_index_max[idx];
     case "pressure":
       return state.actual.pressure_mean[idx];
+    case "soilTemperature":
+      return state.actual.soilTemp_mean[idx];
+    case "dewPoint":
+      return state.actual.dewPoint_mean[idx];
     default:
       return null;
   }
@@ -1216,6 +1262,8 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
     case "cloud": return byDay.cloud[idx] ?? null;
     case "temperature": return byDay.tempAvg[idx] ?? null;
     case "pressure": return byDay.pressure[idx] ?? null;
+    case "soilTemperature": return byDay.soilTemp[idx] ?? null;
+    case "dewPoint": return byDay.dewPoint[idx] ?? null;
     default: return null;
   }
 }
@@ -1356,12 +1404,11 @@ function ensureFFVEmaSeeded(entry) {
 // additive correction instead (mean + FFV), tracked as a separate running
 // average alongside the ratio one, rather than reinterpreting.
 function isRatioCondition(conditionName) {
-  // Temperature (°C) and Pressure (hPa) both sit on scales without a
-  // practically-meaningful zero for this purpose — pressure varies in a
-  // narrow band around ~1013hPa, so "actual ÷ mean" would barely move
-  // and isn't a meaningful "X% too high" the way it is for Rain/Wind.
-  // Both get an additive correction instead.
-  return conditionName !== "temperature" && conditionName !== "pressure";
+  // Temperature, Pressure, Soil Temp, and Dew Point all sit on scales
+  // without a practically-meaningful zero for this purpose — same
+  // reasoning as Temperature/Pressure above, applied consistently to the
+  // two newer °C-scale conditions.
+  return !["temperature", "pressure", "soilTemperature", "dewPoint"].includes(conditionName);
 }
 
 function applyCorrection(mean, ffv, conditionName) {
@@ -1661,7 +1708,7 @@ function ffvSampleTotal(conditionName) {
 // Approximate 0-100 closeness scale per condition — the error (in real
 // units) at which the score bottoms out at 0. Deliberately simple, not a
 // formal statistic; the average-error-in-units figure is the primary one.
-const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3 };
+const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6 };
 
 function accuracyPercent(avgError, conditionName) {
   if (avgError === null) return null;
@@ -1722,7 +1769,47 @@ function median(values) {
 // rather than mean deliberately — a single wildly-off value (e.g. a stray
 // 45°C in November) gets outvoted rather than dragging an average off
 // course, with no arbitrary rejection threshold needed.
-const HEADLINE_CONDITIONS = ["rain", "temperature", "wind", "pressure", "sunshine"];
+// Rain/Temperature/Wind are always shown — the "obvious" ones nobody
+// would want to hide. Pressure, Sunshine, Soil Temp, and Dew Point are
+// each individually toggleable from Settings, so the front page only
+// shows what a given person actually finds useful — Sunshine matters a
+// lot to a gardener, barely at all to someone else, and there's no
+// reason to force either way.
+const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint"];
+const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
+const DEFAULT_HEADLINE_TOGGLES = {
+  pressure: true,
+  sunshine: true,
+  soilTemperature: false,
+  dewPoint: false
+};
+
+function loadHeadlineToggles() {
+  let stored = {};
+  try {
+    const raw = localStorage.getItem(HEADLINE_TOGGLES_KEY);
+    if (raw) stored = JSON.parse(raw);
+  } catch {
+    // fall through to defaults
+  }
+  return { ...DEFAULT_HEADLINE_TOGGLES, ...stored };
+}
+
+function saveHeadlineToggle(conditionName, enabled) {
+  const toggles = loadHeadlineToggles();
+  toggles[conditionName] = enabled;
+  try {
+    localStorage.setItem(HEADLINE_TOGGLES_KEY, JSON.stringify(toggles));
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+}
+
+function activeHeadlineConditions() {
+  const toggles = loadHeadlineToggles();
+  return [...HEADLINE_CORE_CONDITIONS, ...HEADLINE_OPTIONAL_CONDITIONS.filter(c => toggles[c])];
+}
 
 // The freshest available real forecast for the current target date. For
 // past/today (rollback >= 0) that's always day 1 — the closest forecast
@@ -2002,6 +2089,8 @@ function hourlyValueFor(conditionName) {
     case "wind": return state.hourly.windSpeed[idx] ?? null;
     case "temperature": return state.hourly.temperature[idx] ?? null;
     case "pressure": return state.hourly.pressure[idx] ?? null;
+    case "soilTemperature": return state.hourly.soilTemperature[idx] ?? null;
+    case "dewPoint": return state.hourly.dewPoint[idx] ?? null;
     default: return null; // Sunshine has no hourly reading — see renderHeadline
   }
 }
@@ -2125,6 +2214,42 @@ function temperatureRangeFor(rollbackDays) {
   });
   if (!highs.length || !lows.length) return null;
   return { low: weightedMedian(lows), high: weightedMedian(highs) };
+}
+
+// ---- Frost risk (Temperature cell tint, Today only) ----
+// A simple, well-established combination rather than a bare temperature
+// threshold: ground frost forms when it's cold AND skies are clear AND
+// wind is light — clear skies let heat radiate away overnight, and wind
+// mixing prevents that radiative cooling. A low reading alone, with
+// cloud holding heat in or wind keeping the air stirred, often doesn't
+// actually frost. Deliberately just a colour tint — no text, no
+// notification — the "gentle nudge" this was asked for, not another
+// warning to grow fatigued by.
+const FROST_TEMP_THRESHOLD = 2; // °C — ground frost can form even when air temp reads a little above freezing
+const FROST_CLOUD_THRESHOLD = 40; // % — below this counts as "clear enough"
+const FROST_WIND_THRESHOLD = 8; // mph — below this counts as "light enough"
+
+function frostRiskTonight() {
+  if (state.hourly.status !== "ready") return false;
+  const count = displayWindowHourCount();
+  const temps = state.hourly.temperature.slice(0, count);
+  if (!temps.length) return false;
+
+  let minIdx = -1;
+  let minTemp = Infinity;
+  temps.forEach((v, i) => {
+    if (v !== null && v !== undefined && v < minTemp) {
+      minTemp = v;
+      minIdx = i;
+    }
+  });
+  if (minIdx === -1 || minTemp > FROST_TEMP_THRESHOLD) return false;
+
+  const cloud = state.hourly.cloudCover?.[minIdx];
+  const wind = state.hourly.windSpeed?.[minIdx];
+  if (cloud === null || cloud === undefined || wind === null || wind === undefined) return false;
+
+  return cloud < FROST_CLOUD_THRESHOLD && wind < FROST_WIND_THRESHOLD;
 }
 
 // ---- Wind speed / gust pairing ----
@@ -2276,7 +2401,7 @@ function renderHeadline() {
   const showHourly = state.hourlyActive && state.hourly.status === "ready";
   const night = showHourly && !isDaytime(hourDate);
 
-  HEADLINE_CONDITIONS.forEach(conditionName => {
+  activeHeadlineConditions().forEach(conditionName => {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "headline-cell";
@@ -2328,6 +2453,9 @@ function renderHeadline() {
       valueEl.textContent = range
         ? `${formatValue(range.high, "temperature")} / ${formatValue(range.low, "temperature")}`
         : "–";
+      if (state.rollback === 0 && frostRiskTonight()) {
+        cell.classList.add("headline-cell-frost");
+      }
     } else if (conditionName === "wind") {
       // Peak sustained speed as the headline figure, same size and
       // weight as every other condition — gust (when meaningfully
@@ -2793,6 +2921,26 @@ function openHourlySheet(conditionName) {
           formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "pressure")}${unitLabel("pressure")}` }),
           defaultReadout: { time: "Now", value: `${formatConverted(display[0], "pressure")}${unitLabel("pressure")}` }
         });
+      } else if (conditionName === "soilTemperature") {
+        const raw = state.hourly.soilTemperature.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "soilTemperature"));
+        const g = sheetRenderLine(hourTimes, display, "#8a6d4f", "soilTemperature");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "soilTemperature")}${unitLabel("soilTemperature")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "soilTemperature")}${unitLabel("soilTemperature")}` }
+        });
+      } else if (conditionName === "dewPoint") {
+        const raw = state.hourly.dewPoint.slice(0, count);
+        const display = raw.map(v => convertForDisplay(v, "dewPoint"));
+        const g = sheetRenderLine(hourTimes, display, "#4c7a8a", "dewPoint");
+        sheetBody.appendChild(g.wrap);
+        attachSheetScrubber({
+          ...g,
+          formatReadout: i => ({ time: sheetClockLabel(hourTimes[i]), value: `${formatConverted(display[i], "dewPoint")}${unitLabel("dewPoint")}` }),
+          defaultReadout: { time: "Now", value: `${formatConverted(display[0], "dewPoint")}${unitLabel("dewPoint")}` }
+        });
       }
 
       sheetFootnote.textContent = conditionName === "sunshine"
@@ -3254,7 +3402,9 @@ const BACKFILL_FIELD_FOR_CONDITION = {
   wind: "wind",
   cloud: "cloud",
   temperature: "tempAvg",
-  pressure: "pressure"
+  pressure: "pressure",
+  soilTemperature: "soilTemp",
+  dewPoint: "dewPoint"
 };
 
 function renderBackfillStatus() {
@@ -3282,7 +3432,9 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `precipitation_previous_day${d}`,
       `wind_speed_10m_previous_day${d}`,
       `cloud_cover_previous_day${d}`,
-      `pressure_msl_previous_day${d}`
+      `pressure_msl_previous_day${d}`,
+      `soil_temperature_0cm_previous_day${d}`,
+      `dewpoint_2m_previous_day${d}`
     );
   }
   const params = new URLSearchParams({
@@ -3309,7 +3461,9 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       precip: aggregateHourlyByDay(hourlyTime, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
       wind: aggregateHourlyByDay(hourlyTime, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
       cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
-      pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
+      pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
+      soilTemp: aggregateHourlyByDay(hourlyTime, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
+      dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
     };
   }
   return byLeadDay;
@@ -3336,7 +3490,7 @@ async function backfillRealSourceHistory() {
       latitude: state.lat,
       longitude: state.lon,
       daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
-      hourly: "cloudcover,pressure_msl",
+      hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
       start_date: isoDate(start),
       end_date: isoDate(end),
       wind_speed_unit: "mph",
@@ -3352,6 +3506,8 @@ async function backfillRealSourceHistory() {
       wind: actualData.daily.windspeed_10m_max,
       cloud: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover, dayCount, "mean"),
       pressure: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.pressure_msl, dayCount, "mean"),
+      soilTemp: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.soil_temperature_0cm, dayCount, "mean"),
+      dewPoint: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.dewpoint_2m, dayCount, "mean"),
       tempAvg: actualData.daily.temperature_2m_max.map((max, i) => {
         const min = actualData.daily.temperature_2m_min[i];
         return (max !== null && min !== null) ? (max + min) / 2 : null;

@@ -31,6 +31,8 @@
           <option value="pressure">Pressure</option>
           <option value="sunshine">Sunshine</option>
           <option value="uv">UV</option>
+          <option value="soilTemperature">Soil Temp</option>
+          <option value="dewPoint">Dew Point</option>
         </select>
       </label>
     </section>
@@ -77,6 +79,7 @@
     <section class="comparison">
       <details class="accuracy" open>
         <summary>Accuracy so far</summary>
+        <div id="underperformNotice" class="underperform-notice" hidden></div>
         <p id="historyStatus" class="actual-status"></p>
         <label class="accuracy-mode">
           Show

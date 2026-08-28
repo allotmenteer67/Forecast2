@@ -82,6 +82,18 @@ header p {
   background: rgba(255, 255, 255, .5);
 }
 
+/* Frost risk — a plain colour tint, deliberately no icon or text (see
+   frostRiskTonight): a quiet visual cue rather than another warning to
+   get fatigued by. */
+.headline-cell-frost {
+  background: #e3f0fa;
+}
+
+.headline-cell-frost:hover,
+.headline-cell-frost:active {
+  background: #d3e6f5;
+}
+
 .headline-label {
   color: #4c6a58;
   font-size: 12px;
