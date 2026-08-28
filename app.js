@@ -2389,6 +2389,22 @@ function headlineDisplayValueFor(conditionName) {
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
+
+  // A location switch just started (see resetForLocationChange) — refuse
+  // to build cells from whatever's still sitting in state.hourly/
+  // state.actual at this exact moment, since that's the PREVIOUS place's
+  // data and the new fetch hasn't landed yet. Better to show nothing
+  // briefly than to silently keep showing numbers that belong somewhere
+  // else while the switch is still in flight.
+  if (state.actual.status === "loading") {
+    if (headlineDate) headlineDate.textContent = "";
+    const loadingMsg = document.createElement("p");
+    loadingMsg.className = "headline-loading";
+    loadingMsg.textContent = "Loading weather…";
+    headlineGrid.appendChild(loadingMsg);
+    return;
+  }
+
   const day = freshestDayFor(state.rollback);
 
   if (headlineDate) {
@@ -3247,6 +3263,18 @@ function renderTable() {
     return;
   }
 
+  // Same principle as renderHeadline: refuse to build the table from
+  // whatever's still sitting in state at this exact moment if a location
+  // switch just started — that's the previous place's data, not this one's.
+  if (state.actual.status === "loading") {
+    table.innerHTML = "";
+    if (actualStatus) actualStatus.textContent = "Loading weather…";
+    if (metOfficeStatus) metOfficeStatus.textContent = "";
+    renderAccuracy();
+    renderHeadline();
+    return;
+  }
+
   const selectedSources = CONFIG.forecasters.filter(
     source => state.selected.has(source.id)
   );
@@ -3777,9 +3805,10 @@ if (updateLocationButton) {
     state.postcode = looksLikePostcode(trimmed) ? trimmed.toUpperCase() : trimmed;
     postcode.value = state.postcode;
     saveCurrentPostcode(state.postcode);
-    loadLocationData();
+    resetForLocationChange();
     renderPlaceChip();
     renderPlacesList();
+    loadLocationData();
   });
 }
 
@@ -3792,11 +3821,28 @@ if (backfillButton) {
 // CURRENT_POSTCODE_KEY, so a place saved on one page shows up on the
 // other without needing a shared framework.
 
+// Called the INSTANT a location change is initiated (Switch, Update, or
+// the header chip) — before the new fetch has even started, let alone
+// finished. Marks the current data as stale and immediately re-renders
+// to a neutral "Loading…" state, so the previous place's numbers can
+// never sit on screen looking current while a new fetch is still in
+// flight. Blanking briefly is the deliberate trade-off here: showing
+// nothing for a moment is preferable to silently showing something
+// that's actually wrong.
+function resetForLocationChange() {
+  state.actual.status = "loading";
+  state.hourly.status = "loading";
+  renderActualStatus();
+  renderHeadline();
+  renderTable();
+}
+
 function switchToPostcode(pc) {
   if (!pc || pc === state.postcode) return;
   state.postcode = pc;
   if (postcode) postcode.value = pc;
   saveCurrentPostcode(pc);
+  resetForLocationChange();
   renderPlaceChip();
   renderPlacesList();
   loadLocationData();
