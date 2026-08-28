@@ -74,7 +74,7 @@ async function fetchActual(lat, lon, start, end) {
     latitude: lat,
     longitude: lon,
     daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
-    hourly: "cloudcover,pressure_msl",
+    hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
     start_date: isoDate(start),
     end_date: isoDate(end),
     wind_speed_unit: "mph",
@@ -87,6 +87,8 @@ async function fetchActual(lat, lon, start, end) {
 
   const cloud = aggregateHourlyByDay(data.hourly.time, data.hourly.cloudcover, dayCount, "mean");
   const pressure = aggregateHourlyByDay(data.hourly.time, data.hourly.pressure_msl, dayCount, "mean");
+  const soilTemperature = aggregateHourlyByDay(data.hourly.time, data.hourly.soil_temperature_0cm, dayCount, "mean");
+  const dewPoint = aggregateHourlyByDay(data.hourly.time, data.hourly.dewpoint_2m, dayCount, "mean");
 
   const byDate = {};
   data.daily.time.forEach((date, i) => {
@@ -97,6 +99,8 @@ async function fetchActual(lat, lon, start, end) {
       wind: data.daily.windspeed_10m_max[i],
       cloud: cloud[i],
       pressure: pressure[i],
+      soilTemperature: soilTemperature[i],
+      dewPoint: dewPoint[i],
       temperature: (max !== null && min !== null) ? (max + min) / 2 : null
     };
   });
@@ -111,7 +115,9 @@ async function fetchModel(lat, lon, model, start, end) {
       `precipitation_previous_day${d}`,
       `wind_speed_10m_previous_day${d}`,
       `cloud_cover_previous_day${d}`,
-      `pressure_msl_previous_day${d}`
+      `pressure_msl_previous_day${d}`,
+      `soil_temperature_0cm_previous_day${d}`,
+      `dewpoint_2m_previous_day${d}`
     );
   }
 
@@ -142,7 +148,9 @@ async function fetchModel(lat, lon, model, start, end) {
       precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
       wind: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
       cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
-      pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean")
+      pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
+      soilTemperature: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
+      dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
     };
   }
 
@@ -157,6 +165,8 @@ async function fetchModel(lat, lon, model, start, end) {
         wind: byLeadDay[d].wind[i],
         cloud: byLeadDay[d].cloud[i],
         pressure: byLeadDay[d].pressure[i],
+        soilTemperature: byLeadDay[d].soilTemperature[i],
+        dewPoint: byLeadDay[d].dewPoint[i],
         temperature: byLeadDay[d].tempAvg[i]
       };
     }
