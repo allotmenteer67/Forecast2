@@ -1133,15 +1133,45 @@ function anyRealSourceHasHistory() {
 // promise instead of starting a second, competing run.
 let loadLocationDataPromise = null;
 
+// A safety net for the re-entrancy guard above: without this, a single
+// genuinely stuck or very slow fetch (more likely now with six real
+// sources instead of two) would block every future call forever — not
+// just that one attempt, but every subsequent Switch, Save, or chip tap,
+// including switching back to where you started, since nothing would
+// ever resolve the stuck promise and free loadLocationDataPromise back
+// to null. This guarantees a load always settles one way or the other
+// within a bounded time.
+const LOAD_TIMEOUT_MS = 25000;
+
 function loadLocationData() {
   if (loadLocationDataPromise) return loadLocationDataPromise;
-  loadLocationDataPromise = runLoadLocationData().finally(() => {
-    loadLocationDataPromise = null;
+
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("Timed out waiting for weather data")), LOAD_TIMEOUT_MS);
   });
+
+  loadLocationDataPromise = Promise.race([runLoadLocationData(), timeout])
+    .catch(err => {
+      // Only reached if the timeout won the race — runLoadLocationData()
+      // already catches and reports its own errors internally without
+      // rethrowing, so this is specifically the "took too long" case.
+      state.actual.status = "error";
+      state.actual.error = err.message || "Could not load weather";
+      renderActualStatus();
+      renderTable();
+    })
+    .finally(() => {
+      loadLocationDataPromise = null;
+    });
+
   return loadLocationDataPromise;
 }
 
 async function runLoadLocationData() {
+  // Captured up front so a late-arriving result from an abandoned or
+  // timed-out request can tell it's been superseded by a newer switch —
+  // and skip committing/rendering itself over the newer, correct data.
+  const requestedFor = state.postcode;
   try {
     const { lat, lon, label, areaCode } = await resolveLocation(state.postcode);
     state.lat = lat;
@@ -1154,6 +1184,8 @@ async function runLoadLocationData() {
       loadCommittedHistory(),
       fetchHourlyForecast(lat, lon)
     ]);
+
+    if (state.postcode !== requestedFor) return; // a newer switch has since taken over — this result is stale, leave it alone
 
     // Everything from here on is bookkeeping (learning FFV, and the
     // one-off backfill for a genuinely new area) rather than data the
@@ -1187,10 +1219,13 @@ async function runLoadLocationData() {
       console.error("FFV bookkeeping failed (data itself still loaded fine):", bookkeepingErr);
     }
 
+    if (state.postcode !== requestedFor) return; // superseded partway through bookkeeping — same reasoning as above
+
     renderActualStatus();
     renderRealSourceStatus();
     renderTable();
   } catch (err) {
+    if (state.postcode !== requestedFor) return; // the newer request's own success/error handling owns the display now
     state.actual.status = "error";
     state.actual.error = err.message || "Could not resolve location";
     renderActualStatus();
