@@ -498,6 +498,32 @@ function isoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+// A stalled network request never resolves or rejects on its own, and
+// plain fetch() has no built-in time limit — left unbounded, one genuinely
+// stuck request (flaky wifi/cellular handoff, iOS pausing a backgrounded
+// PWA's connections, etc.) can hang an entire load indefinitely, freezing
+// the headline and leaving the guard in loadLocationData() with nothing
+// to ever clear it. Every fetch in this file goes through this wrapper so
+// a stall fails cleanly within a bounded time instead — that's what lets
+// the existing per-source error handling, and the Retry button, actually
+// do their job.
+const DEFAULT_FETCH_TIMEOUT_MS = 20000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Timed out — check your connection and try again");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // ---- Actual weather fetching ----
 
 // Reverse of geocodePostcode: given the device's raw coordinates (from
@@ -508,7 +534,7 @@ function isoDate(date) {
 // needing a separate lat/lon-based code path.
 async function reverseGeocodeCoords(lat, lon) {
   const url = `https://api.postcodes.io/postcodes?lon=${lon}&lat=${lat}&limit=1`;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) throw new Error("Could not look up a postcode for your location");
   const data = await res.json();
   const nearest = data.result?.[0]?.postcode;
@@ -522,7 +548,7 @@ async function geocodePostcode(pc) {
   // Note: some outward codes are 4 characters (e.g. "SW1A"); truncating to
   // 3 will miss those and the lookup below will fail for them.
   const areaCode = pc.replace(/\s+/g, "").slice(0, 3);
-  const res = await fetch(GEOCODE_URL + encodeURIComponent(areaCode));
+  const res = await fetchWithTimeout(GEOCODE_URL + encodeURIComponent(areaCode));
   if (!res.ok) throw new Error(`Area code "${areaCode}" not found`);
   const data = await res.json();
   if (!data.result) throw new Error(`Area code "${areaCode}" not found`);
@@ -566,7 +592,7 @@ async function resolveLocation(input) {
     return geocodePostcode(trimmed);
   }
 
-  const res = await fetch(`${PLACE_GEOCODE_URL}?name=${encodeURIComponent(trimmed)}&count=1&language=en&format=json`);
+  const res = await fetchWithTimeout(`${PLACE_GEOCODE_URL}?name=${encodeURIComponent(trimmed)}&count=1&language=en&format=json`);
   if (!res.ok) throw new Error(`"${trimmed}" not found`);
   const data = await res.json();
   const match = data.results?.[0];
@@ -671,7 +697,7 @@ async function fetchActualWeather(lat, lon) {
       timezone: "auto"
     });
 
-    const res = await fetch(`${WEATHER_URL}?${params.toString()}`);
+    const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Weather lookup failed");
     const data = await res.json();
 
@@ -758,7 +784,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
       timezone: "auto"
     });
 
-    const res = await fetch(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
+    const res = await fetchWithTimeout(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Data lookup failed");
     const data = await res.json();
 
@@ -911,7 +937,7 @@ async function fetchHourlyForecast(lat, lon) {
         ...(id === "metoffice" ? { daily: "sunrise,sunset,uv_index_max" } : {})
       });
 
-      const res = await fetch(`${WEATHER_URL}?${params.toString()}`);
+      const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`);
       if (!res.ok) throw new Error(`Hourly forecast lookup failed for ${id}`);
       const data = await res.json();
 
@@ -1036,7 +1062,7 @@ async function loadCommittedHistory() {
   renderHistoryStatus();
 
   try {
-    const res = await fetch(HISTORY_URL, { cache: "no-store" });
+    const res = await fetchWithTimeout(HISTORY_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("history.json not found");
     const data = await res.json();
 
@@ -3580,7 +3606,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
     wind_speed_unit: "mph",
     timezone: "auto"
   });
-  const res = await fetch(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
+  const res = await fetchWithTimeout(`${PREVIOUS_RUNS_URL}?${params.toString()}`, {}, 30000);
   if (!res.ok) throw new Error(`${sourceId} history lookup failed`);
   const data = await res.json();
   const hourlyTime = data.hourly.time;
@@ -3629,7 +3655,7 @@ async function backfillRealSourceHistory() {
       wind_speed_unit: "mph",
       timezone: "auto"
     });
-    const actualRes = await fetch(`${ARCHIVE_URL}?${actualParams.toString()}`);
+    const actualRes = await fetchWithTimeout(`${ARCHIVE_URL}?${actualParams.toString()}`, {}, 30000);
     if (!actualRes.ok) throw new Error("Actual weather archive lookup failed");
     const actualData = await actualRes.json();
     const dayCount = actualData.daily.time.length;
