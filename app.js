@@ -692,6 +692,50 @@ function looksLikePostcode(input) {
   return /^[A-Z]{1,2}\d[A-Z\d]?(\s*\d[A-Z]{2})?$/i.test(input.trim());
 }
 
+// Thrown instead of a plain Error when a plain place name genuinely
+// matches more than one distinct UK place (Gillingham in Kent vs
+// Dorset; Newport in Wales vs the Isle of Wight; Richmond in London vs
+// North Yorkshire — there are plenty). Carries the candidates so the
+// caller can offer a picker rather than just failing or silently
+// guessing — silently guessing is exactly what caused the Taunton/
+// Massachusetts mix-up this replaces.
+class AmbiguousLocationError extends Error {
+  constructor(candidates) {
+    super("More than one UK place matches that name");
+    this.name = "AmbiguousLocationError";
+    this.candidates = candidates;
+  }
+}
+
+// Straight-line distance in km — good enough to tell "basically the same
+// result reported twice" (a duplicate DB entry, a nearby hamlet with the
+// same name as its parish) apart from two genuinely different towns,
+// without needing a full geodesic library for what's just a threshold
+// check.
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Collapses candidates within 15km of one another (comfortably wider
+// than the weather models' own ~10-25km grid, so two "duplicates" this
+// close couldn't produce a meaningfully different forecast anyway) down
+// to the first, so a genuine single place that happens to appear twice
+// in the geocoder's own database doesn't trigger a pointless picker.
+function distinctPlaces(candidates) {
+  const kept = [];
+  candidates.forEach(c => {
+    if (!kept.some(k => distanceKm(k.latitude, k.longitude, c.latitude, c.longitude) < 15)) {
+      kept.push(c);
+    }
+  });
+  return kept;
+}
+
 // Resolves EITHER a UK postcode/outcode (via postcodes.io, as above) OR a
 // plain place name (via Open-Meteo's own free geocoding search) to the
 // same {lat, lon, label, areaCode} shape either way. Everything
@@ -713,13 +757,66 @@ async function resolveLocation(input) {
     return geocodePostcode(trimmed);
   }
 
-  const res = await fetchWithTimeout(`${PLACE_GEOCODE_URL}?name=${encodeURIComponent(trimmed)}&count=1&language=en&format=json`);
-  if (!res.ok) throw new Error(`"${trimmed}" not found`);
-  const data = await res.json();
-  const match = data.results?.[0];
-  if (!match) throw new Error(`"${trimmed}" not found`);
+  // A comma-qualified input (from a disambiguation pick below, or
+  // someone typing "Gillingham, Kent" themselves) is matched entirely on
+  // this app's OWN side, against every admin field a candidate has —
+  // deliberately NOT sent to Open-Meteo's own qualifier syntax, since
+  // that only ever matches at the admin1 level, and Open-Meteo's own
+  // documented example shows a UK admin1 is just "England" — far too
+  // coarse to tell two same-named English towns apart. Always querying
+  // by the base name and filtering locally means "Kent" or "Dorset"
+  // actually works, regardless of which admin level GeoNames happens to
+  // file a UK county under.
+  const commaIndex = trimmed.indexOf(",");
+  const baseName = commaIndex === -1 ? trimmed : trimmed.slice(0, commaIndex).trim();
+  const qualifier = commaIndex === -1 ? null : trimmed.slice(commaIndex + 1).trim().toLowerCase();
+  if (!baseName) throw new Error("Enter a postcode or place name");
 
-  const label = [...new Set([match.name, match.admin1, match.country].filter(Boolean))].join(", ");
+  // countryCode=GB matters more than it looks: plenty of British place
+  // names are shared with towns elsewhere in the world (Taunton,
+  // Massachusetts; Richmond, Virginia; Cambridge, Ontario — the list is
+  // long), and without this the geocoder has no way to prefer the UK
+  // match over a bigger, more "relevant" same-named place abroad. This
+  // app has no use for a non-UK result anywhere else in it (postcodes,
+  // Met Office, mph-first units), so scoping the search here is a
+  // straightforward, safe fix rather than a trade-off.
+  //
+  // count is higher than 1 specifically to catch ambiguity — a name
+  // shared by more than one distinct UK town (see AmbiguousLocationError
+  // above) needs to be told apart, not silently resolved to whichever
+  // one the geocoder's own relevance ranking happens to prefer.
+  const res = await fetchWithTimeout(`${PLACE_GEOCODE_URL}?name=${encodeURIComponent(baseName)}&count=8&language=en&format=json&countryCode=GB`);
+  if (!res.ok) throw new Error(`"${baseName}" not found`);
+  const data = await res.json();
+  let results = data.results || [];
+  if (!results.length) throw new Error(`"${baseName}" not found in the UK`);
+
+  if (qualifier) {
+    // Checked both ways (field contains qualifier, or qualifier contains
+    // field) since admin field wording can be slightly more or less
+    // specific than what got stored — "Kent" matching a field of exactly
+    // "Kent", and a qualifier of "Kent, South East England" still
+    // matching a field of just "Kent", both need to succeed.
+    const filtered = results.filter(r =>
+      [r.admin1, r.admin2, r.admin3, r.country].some(field => {
+        if (!field) return false;
+        const lower = field.toLowerCase();
+        return lower.includes(qualifier) || qualifier.includes(lower);
+      })
+    );
+    // If nothing matched (a renamed county, wording drift), fall through
+    // to the full unfiltered list below rather than failing outright —
+    // the ambiguity check further down will still catch it if more than
+    // one distinct place remains genuinely unresolved.
+    if (filtered.length) results = filtered;
+  } else {
+    const distinct = distinctPlaces(results);
+    if (distinct.length > 1) throw new AmbiguousLocationError(distinct);
+  }
+
+  const match = results[0];
+
+  const label = [...new Set([match.name, match.admin2, match.admin1, match.country].filter(Boolean))].join(", ");
   // A place name has no natural short "area code" the way a postcode
   // does — coordinates rounded to ~11km (matching the weather models'
   // own resolution, so anything finer would be false precision anyway)
@@ -4299,22 +4396,84 @@ setInterval(() => {
   }
 }, 30000);
 
+const placeAmbiguityPicker = document.getElementById("placeAmbiguityPicker");
+
+function clearPlaceAmbiguityPicker() {
+  if (!placeAmbiguityPicker) return;
+  placeAmbiguityPicker.hidden = true;
+  placeAmbiguityPicker.innerHTML = "";
+}
+
+// Shared by Switch and Save — both take a plain typed name and both need
+// to stop and ask, rather than silently resolving to whichever same-
+// named place the geocoder ranks first, when a name genuinely matches
+// more than one distinct UK town (Gillingham in Kent vs Dorset, and
+// plenty of others). Returns true if it found (and is now displaying) a
+// choice the caller should wait on; false means the caller can proceed
+// normally — either the name was never ambiguous, or the network check
+// itself failed, in which case the caller's own existing lookup will
+// surface that same failure in its own error handling rather than this
+// duplicating it.
+async function checkPlaceAmbiguity(trimmed, onChosen) {
+  clearPlaceAmbiguityPicker();
+  if (!trimmed || looksLikePostcode(trimmed) || trimmed.includes(",")) return false;
+
+  try {
+    await resolveLocation(trimmed);
+    return false; // resolved cleanly — not ambiguous
+  } catch (err) {
+    if (!(err instanceof AmbiguousLocationError)) return false; // let the caller's own lookup hit and report this
+    if (!placeAmbiguityPicker) return false; // nowhere to show it — proceed and let the caller's own lookup pick one
+
+    const heading = document.createElement("p");
+    heading.className = "place-ambiguity-heading";
+    heading.textContent = `More than one "${trimmed}" in the UK — which one?`;
+    placeAmbiguityPicker.appendChild(heading);
+
+    err.candidates.forEach(candidate => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "place-ambiguity-option";
+      // admin2 is preferred over admin1 here since, for the UK, admin1
+      // is usually just "England"/"Scotland"/"Wales" — not specific
+      // enough to actually distinguish two same-named English towns —
+      // whereas admin2 is typically the county (Kent, Dorset, etc.),
+      // which is.
+      const qualified = [candidate.name, candidate.admin2 || candidate.admin1].filter(Boolean).join(", ");
+      button.textContent = [candidate.name, candidate.admin2, candidate.admin1, candidate.country].filter(Boolean).join(", ");
+      button.addEventListener("click", () => {
+        postcode.value = qualified;
+        clearPlaceAmbiguityPicker();
+        onChosen(qualified);
+      });
+      placeAmbiguityPicker.appendChild(button);
+    });
+
+    placeAmbiguityPicker.hidden = false;
+    return true;
+  }
+}
+
 const updateLocationButton = document.getElementById("updateLocation");
+async function performSwitch() {
+  const trimmed = postcode.value.trim();
+  const isAmbiguous = await checkPlaceAmbiguity(trimmed, performSwitch);
+  if (isAmbiguous) return;
+
+  // Only postcodes get uppercased (their conventional display form,
+  // and how looksLikePostcode expects to match them either way) — a
+  // place name keeps whatever capitalisation was typed, since forcing
+  // "LONDON" would just look wrong for no benefit.
+  state.postcode = looksLikePostcode(trimmed) ? trimmed.toUpperCase() : trimmed;
+  postcode.value = state.postcode;
+  saveCurrentPostcode(state.postcode);
+  resetForLocationChange();
+  renderPlaceChip();
+  renderPlacesList();
+  loadLocationData();
+}
 if (updateLocationButton) {
-  updateLocationButton.addEventListener("click", () => {
-    const trimmed = postcode.value.trim();
-    // Only postcodes get uppercased (their conventional display form,
-    // and how looksLikePostcode expects to match them either way) — a
-    // place name keeps whatever capitalisation was typed, since forcing
-    // "LONDON" would just look wrong for no benefit.
-    state.postcode = looksLikePostcode(trimmed) ? trimmed.toUpperCase() : trimmed;
-    postcode.value = state.postcode;
-    saveCurrentPostcode(state.postcode);
-    resetForLocationChange();
-    renderPlaceChip();
-    renderPlacesList();
-    loadLocationData();
-  });
+  updateLocationButton.addEventListener("click", performSwitch);
 }
 
 if (backfillButton) {
@@ -4503,38 +4662,41 @@ function renderAddPlaceStatus(message, isError) {
   addPlaceStatus.classList.toggle("is-error", !!isError);
 }
 
-if (addCurrentPlaceButton) {
-  addCurrentPlaceButton.addEventListener("click", async () => {
-    const rawInput = (postcode?.value || "").trim();
-    if (!rawInput) {
-      renderAddPlaceStatus("Enter a postcode or place name first.", true);
-      return;
-    }
-    // Same rule as Switch: only postcodes get uppercased, a place name
-    // keeps its natural capitalisation. This is also the string stored
-    // as the place's postcode/query going forward, so it's what
-    // switchToPostcode later feeds back into resolveLocation.
-    const pc = looksLikePostcode(rawInput) ? rawInput.toUpperCase() : rawInput;
+async function performSave() {
+  const rawInput = (postcode?.value || "").trim();
+  if (!rawInput) {
+    renderAddPlaceStatus("Enter a postcode or place name first.", true);
+    return;
+  }
 
-    const places = loadPlaces();
-    if (places.some(place => place.postcode === pc)) {
-      renderAddPlaceStatus(`${pc} is already saved.`, true);
-      return;
-    }
+  const isAmbiguous = await checkPlaceAmbiguity(rawInput, performSave);
+  if (isAmbiguous) return;
 
-    addCurrentPlaceButton.disabled = true;
-    renderAddPlaceStatus("Checking…", false);
+  // Same rule as Switch: only postcodes get uppercased, a place name
+  // keeps its natural capitalisation. This is also the string stored
+  // as the place's postcode/query going forward, so it's what
+  // switchToPostcode later feeds back into resolveLocation.
+  const pc = looksLikePostcode(rawInput) ? rawInput.toUpperCase() : rawInput;
 
-    try {
-      // Validates it actually resolves to a real place before saving it —
-      // the same lookup Switch itself relies on — without loading full
-      // weather data for it (that only happens once it's switched to).
-      await resolveLocation(pc);
-    } catch (err) {
-      addCurrentPlaceButton.disabled = false;
-      renderAddPlaceStatus(err.message || "Not found.", true);
-      return;
-    }
+  const places = loadPlaces();
+  if (places.some(place => place.postcode === pc)) {
+    renderAddPlaceStatus(`${pc} is already saved.`, true);
+    return;
+  }
+
+  addCurrentPlaceButton.disabled = true;
+  renderAddPlaceStatus("Checking…", false);
+
+  try {
+    // Validates it actually resolves to a real place before saving it —
+    // the same lookup Switch itself relies on — without loading full
+    // weather data for it (that only happens once it's switched to).
+    await resolveLocation(pc);
+  } catch (err) {
+    addCurrentPlaceButton.disabled = false;
+    renderAddPlaceStatus(err.message || "Not found.", true);
+    return;
+  }
 
     // No separate name field any more — the saved places list already
     // lets you rename any entry inline after adding it, so there's no
@@ -4546,7 +4708,9 @@ if (addCurrentPlaceButton) {
     renderAddPlaceStatus("", false);
     renderPlacesList();
     renderPlaceMenu();
-  });
+}
+if (addCurrentPlaceButton) {
+  addCurrentPlaceButton.addEventListener("click", performSave);
 }
 
 function renderGeoStatus(message, isError) {

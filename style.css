@@ -1450,6 +1450,35 @@ footer {
 }
 .backup-import-button { margin-top: 8px; }
 
+/* ---- Place-name disambiguation picker (Settings) ---- */
+.place-ambiguity-picker {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #c3d0c6;
+  border-radius: 10px;
+  background: var(--accent-light);
+}
+.place-ambiguity-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+.place-ambiguity-option {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid #c3d0c6;
+  border-radius: 8px;
+  background: white;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.place-ambiguity-option:last-child { margin-bottom: 0; }
+
 /* ---- Appearance: colour theme swatches (Settings) ----
    Each swatch shows its OWN theme's accent colour regardless of
    whichever theme is currently active — so these can't just read
