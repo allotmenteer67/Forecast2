@@ -1391,6 +1391,8 @@ function anyRealSourceHasHistory() {
 // while one is already in flight just reuses that same in-flight
 // promise instead of starting a second, competing run.
 let loadLocationDataPromise = null;
+let loadLocationPromisePostcode = null;
+let loadLocationQueuedPostcode = null;
 let loadLocationGeneration = 0;
 
 // This used to race the real fetch against a timeout and, when the
@@ -1414,15 +1416,41 @@ let loadLocationGeneration = 0;
 const LOAD_SLOW_WARNING_MS = 45000;
 
 function loadLocationData() {
-  if (loadLocationDataPromise) return loadLocationDataPromise;
+  // Only ever one fetch actually runs at a time — every fetch function
+  // (fetchActualWeather, fetchRealSourceLive, fetchHourlyForecast)
+  // writes straight into this same shared state.actual/state.realSources/
+  // state.hourly, so two genuinely concurrent fetches for two DIFFERENT
+  // places could interleave their writes into that one shared object —
+  // reopening the exact "flash of mixed-up data" problem fixed earlier,
+  // just via a new route.
+  //
+  // But a switch that arrives while another is still in flight is
+  // QUEUED rather than dropped — remembered here, and automatically
+  // re-issued the moment the current fetch finishes. Before this, it was
+  // silently discarded entirely: nothing else ever re-triggered it, so a
+  // second place switched to quickly could get stuck on "Loading
+  // weather…" indefinitely, only recovering if something else happened
+  // to nudge it (a manual retry, or switching away and back again).
+  // resetForLocationChange has already updated what's ON SCREEN for the
+  // new place immediately either way (its cached snapshot, or a plain
+  // loading state) — queueing only affects how soon its FRESH data
+  // actually arrives, never what's shown in the meantime.
+  if (loadLocationDataPromise) {
+    if (loadLocationPromisePostcode !== state.postcode) {
+      loadLocationQueuedPostcode = state.postcode;
+    }
+    return loadLocationDataPromise;
+  }
 
   const myGeneration = ++loadLocationGeneration;
+  const myPostcode = state.postcode;
+  loadLocationPromisePostcode = myPostcode;
+  loadLocationQueuedPostcode = null;
 
   const warnTimeoutId = setTimeout(() => {
-    // Only touches the display if this attempt is still the current,
-    // still-running one — if it already finished (and cleared itself)
-    // there's nothing stale to warn about.
-    if (loadLocationGeneration === myGeneration && loadLocationDataPromise) {
+    // Only touches the display if this is still the current attempt for
+    // whatever place is actually on screen right now.
+    if (loadLocationGeneration === myGeneration && state.postcode === myPostcode) {
       state.actual.status = "error";
       state.actual.error = "Taking longer than usual to load — still trying in the background.";
       renderActualStatus();
@@ -1433,6 +1461,16 @@ function loadLocationData() {
   loadLocationDataPromise = runLoadLocationData().finally(() => {
     clearTimeout(warnTimeoutId);
     loadLocationDataPromise = null;
+    loadLocationPromisePostcode = null;
+    // A switch to somewhere else arrived while this was running — it was
+    // queued rather than dropped, so pick it up now. The postcode check
+    // guards against yet another switch having happened in the meantime
+    // (away from what was queued) — in that case its OWN call to
+    // loadLocationData already re-queued the right, newer target.
+    if (loadLocationQueuedPostcode !== null && loadLocationQueuedPostcode === state.postcode) {
+      loadLocationQueuedPostcode = null;
+      loadLocationData();
+    }
   });
 
   return loadLocationDataPromise;
