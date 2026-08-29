@@ -266,7 +266,7 @@ const REAL_SOURCES = [
   // times inconsistent.
   { id: "metoffice", model: "ukmo_global_deterministic_10km" },
   { id: "ecmwf", model: "ecmwf_ifs025" },
-  // Six more independent national models — genuinely different
+  // Seven more independent national models — genuinely different
   // physics/data-assimilation per source, which is what actually
   // improves an ensemble median (blending more demo/synthetic sources
   // can't do this, since they're not independent observations of
@@ -1276,7 +1276,7 @@ function anyRealSourceHasHistory() {
   );
 }
 
-// Guards against overlapping runs of loadLocationData — with SIX real
+// Guards against overlapping runs of loadLocationData — with NINE real
 // sources now fetched (each sequentially awaited inside
 // fetchHourlyForecast/fetchRealSourceLive), a single full load can
 // genuinely take long enough that the 30-second retry timer, the
@@ -2721,7 +2721,20 @@ function renderHeadline() {
   // data and the new fetch hasn't landed yet. Better to show nothing
   // briefly than to silently keep showing numbers that belong somewhere
   // else while the switch is still in flight.
-  if (actualNotYetReady() || selectedRealSourcesStillLoading()) {
+  //
+  // Critically, this also waits for state.hourly specifically (idle or
+  // loading, same as actual) — not just actual and the real sources.
+  // Without it, the headline was free to render as soon as actual/real
+  // sources settled, using headlineDisplayValueFor's plain daily-blend
+  // fallback (since hourly wasn't "ready" yet) — then, once hourly
+  // finished loading moments later (which takes longest, looping
+  // sequentially over nine sources) and correctly triggered its own
+  // redraw, the SAME cell would switch to the live hourly-corrected
+  // figure instead for Rain/Pressure/Soil Temp/Dew Point. Both numbers
+  // were genuine, real calculations — just two different ones, rendered
+  // moments apart — which is exactly what looked like a flash of "false"
+  // data settling into place on every switch.
+  if (actualNotYetReady() || selectedRealSourcesStillLoading() || state.hourly.status === "idle" || state.hourly.status === "loading") {
     if (headlineDate) headlineDate.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
@@ -3966,7 +3979,13 @@ function renderBackfillStatus() {
     backfillStatus.textContent = `Backfill failed: ${state.backfill.error}`;
     backfillStatus.classList.add("is-error");
   } else if (state.backfill.status === "done") {
-    backfillStatus.textContent = `Done — added ${state.backfill.samplesAdded} real samples to ${state.areaCode || "this area"}'s FFV history.`;
+    const failed = state.backfill.failedSourceIds || [];
+    const failedNames = failed
+      .map(id => CONFIG.forecasters.find(f => f.id === id)?.name || id)
+      .join(", ");
+    backfillStatus.textContent = failed.length
+      ? `Done — added ${state.backfill.samplesAdded} real samples to ${state.areaCode || "this area"}'s FFV history. ${failedNames} couldn't be reached this time and will build up gradually instead.`
+      : `Done — added ${state.backfill.samplesAdded} real samples to ${state.areaCode || "this area"}'s FFV history.`;
   } else {
     backfillStatus.textContent = "";
   }
@@ -4064,9 +4083,26 @@ async function backfillRealSourceHistory() {
     };
 
     // Real lead-time forecasts for the same year, one fetch per source.
+    // Each source's fetch is isolated — with nine real sources now (see
+    // REAL_SOURCES), the odds that at least one has a bad day (a timeout,
+    // a transient 5xx, a rate limit) are much higher than they were with
+    // six, and a single failure here used to abort the whole function
+    // before anything was saved — discarding every OTHER source's
+    // perfectly good year of data too, and leaving every source stuck on
+    // "Collecting data (0/14 days)" until a fully clean run happened to
+    // succeed. A source that fails here just sits out this run and
+    // stays on demo data until eligibility builds up the normal way (or
+    // a later backfill succeeds for it) — it doesn't take the other
+    // eight down with it.
     const byLeadDayBySource = {};
+    const failedSourceIds = [];
     for (const { id, model } of REAL_SOURCES) {
-      byLeadDayBySource[id] = await fetchYearOfModelData(id, model, start, end, dayCount);
+      try {
+        byLeadDayBySource[id] = await fetchYearOfModelData(id, model, start, end, dayCount);
+      } catch (err) {
+        console.error(`Backfill: ${id} failed, continuing with the remaining sources`, err);
+        failedSourceIds.push(id);
+      }
     }
 
     // Fold every (mean, actual) pair straight into the same FFV store the
@@ -4083,6 +4119,7 @@ async function backfillRealSourceHistory() {
 
         REAL_SOURCES.forEach(({ id: sourceId }) => {
           const byLeadDay = byLeadDayBySource[sourceId];
+          if (!byLeadDay) return; // this source failed its fetch above — sits out this run
           for (let day = 1; day <= 7; day++) {
             const leadDays = day === 1 ? [1, 2] : day === 7 ? [6, 7] : [day - 1, day, day + 1];
             const field = BACKFILL_FIELD_FOR_CONDITION[conditionName];
@@ -4102,7 +4139,12 @@ async function backfillRealSourceHistory() {
 
     saveFFVStore(state.areaCode, store);
     saveEligibilityStore(state.areaCode, eligStore);
-    state.backfill = { status: "done", error: null, samplesAdded };
+    state.backfill = {
+      status: "done",
+      error: null,
+      samplesAdded,
+      failedSourceIds
+    };
   } catch (err) {
     state.backfill = { status: "error", error: err.message || "Backfill failed", samplesAdded: 0 };
   }
