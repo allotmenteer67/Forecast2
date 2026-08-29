@@ -44,7 +44,7 @@ const CONFIG = {
 const THEME_KEY = "forecast-compare:theme";
 const THEMES = [
   { id: "mint", name: "Mint" },
-  { id: "slate", name: "Slate" },
+  { id: "gold", name: "Gold" },
   { id: "sand", name: "Sand" },
   { id: "red", name: "Red" },
   { id: "blue", name: "Blue" }
@@ -2631,7 +2631,6 @@ function renderHeadline() {
 
     const valueEl = document.createElement("span");
     valueEl.className = "headline-value";
-    let windGustText = null; // set below for Wind when a gust line is needed; appended after valueRow exists
 
     // Sunshine shows UV as a % while hourly is active during the day —
     // the label needs to reflect that, not Sunshine's usual "hrs" unit.
@@ -2676,14 +2675,23 @@ function renderHeadline() {
         cell.classList.add("headline-cell-frost");
       }
     } else if (conditionName === "wind") {
-      // Peak sustained speed as the headline figure, same size and
-      // weight as every other condition — gust (when meaningfully
-      // higher) is a secondary line underneath rather than crammed into
-      // the same number, so neither figure has to shrink to fit.
+      // Same one-line shape as Temperature's high/low — a plain speed
+      // figure most days, "speed / gust" only once gust is genuinely
+      // notable (see GUST_NOTABLE_MARGIN_MPH). This used to be a
+      // separate small line appended below the cell, which meant the
+      // cell's own height changed depending on whether a given hour or
+      // day happened to have a notable gust — visibly jumping the whole
+      // grid while scrubbing the Hour or Date slider. Folding it into
+      // the one line that's always there removes the jump entirely,
+      // the same way direction was already kept in the value row rather
+      // than its own line for exactly this reason (see below).
       const pair = windSpeedGustFor(state.rollback);
-      valueEl.textContent = pair ? formatValue(pair.speed, "wind") : "–";
-      if (pair && pair.gust !== null && pair.gust > pair.speed + GUST_NOTABLE_MARGIN_MPH) {
-        windGustText = `gust ${formatValue(pair.gust, "wind")}`;
+      if (!pair) {
+        valueEl.textContent = "–";
+      } else if (pair.gust !== null && pair.gust > pair.speed + GUST_NOTABLE_MARGIN_MPH) {
+        valueEl.textContent = `${formatValue(pair.speed, "wind")} / ${formatValue(pair.gust, "wind")}`;
+      } else {
+        valueEl.textContent = formatValue(pair.speed, "wind");
       }
     } else {
       const value = headlineDisplayValueFor(conditionName);
@@ -2728,12 +2736,6 @@ function renderHeadline() {
         // data happens to be available, causing the whole grid to jump
         // as the slider moves between states.
         valueRow.append(arrow, dirEl);
-      }
-      if (windGustText) {
-        const gustLine = document.createElement("small");
-        gustLine.className = "headline-gust";
-        gustLine.textContent = windGustText;
-        cell.appendChild(gustLine);
       }
     }
 
@@ -3190,21 +3192,22 @@ function openHourlySheet(conditionName) {
         const dirs = state.hourly.windDirection.slice(0, count);
         const g = sheetRenderWind(hourTimes, display, gustDisplay, dirs);
         sheetBody.appendChild(g.wrap);
-        // Compared in native mph (raw/gustRaw), not the display-converted
-        // arrays — same threshold regardless of whether Wind is shown in
-        // mph or km/h. See GUST_NOTABLE_MARGIN_MPH.
-        const gustSuffix = i => gustRaw[i] !== null && gustRaw[i] !== undefined && gustRaw[i] > raw[i] + GUST_NOTABLE_MARGIN_MPH
-          ? ` (gust ${formatConverted(gustDisplay[i], "wind")}${unitLabel("wind")})`
-          : "";
+        // Same "bare number most of the time, speed / gust only when
+        // notable" convention as the headline (see GUST_NOTABLE_MARGIN_MPH)
+        // — compared in native mph (raw/gustRaw), not the display-converted
+        // arrays, so the threshold doesn't shift with the mph/km-h setting.
+        const speedText = i => gustRaw[i] !== null && gustRaw[i] !== undefined && gustRaw[i] > raw[i] + GUST_NOTABLE_MARGIN_MPH
+          ? `${formatConverted(display[i], "wind")} / ${formatConverted(gustDisplay[i], "wind")}`
+          : formatConverted(display[i], "wind");
         attachSheetScrubber({
           ...g,
           formatReadout: i => ({
             time: sheetClockLabel(hourTimes[i]),
-            value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim() + gustSuffix(i)
+            value: `${speedText(i)}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim()
           }),
           defaultReadout: {
             time: "Now",
-            value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim() + gustSuffix(0)
+            value: `${speedText(0)}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim()
           }
         });
       } else if (conditionName === "sunshine") {

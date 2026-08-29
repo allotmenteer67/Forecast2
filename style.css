@@ -9,6 +9,7 @@
   --accent: #2f6f4f;
   --accent-dark: #234f39;
   --accent-light: #e4efe6;
+  --accent-muted: #4c6a58;
   --headline-bg: #dcebe1;
   --amber: #b5651d;
   --amber-light: #fbeee0;
@@ -16,27 +17,32 @@
 
 /* ---- Colour themes ----
    Mint (above) is the default with no data-theme attribute needed — kept
-   as :root's own plain values rather than a fifth override block, so the
+   as :root's own plain values rather than a sixth override block, so the
    most common case matches the fewest selectors. Each other theme
-   overrides the same four variables the whole app already draws from
-   (--accent/--accent-dark/--accent-light/--headline-bg) plus the page
-   background, so switching is a single attribute toggle on <html> (see
-   applyTheme() in app.js) rather than needing per-component overrides.
-   Every --accent-dark value here was picked to sit dark enough against
-   its own --accent-light/--headline-bg for text contrast, the same way
-   Mint's dark green already does — not derived from a formula, just
-   checked by eye against this app's actual light backgrounds. Neutral
-   chrome (page borders, input borders, the grey body background tone)
-   deliberately stays the same across every theme rather than being
-   retinted too — keeping that neutral is what makes the accent colour
-   still read as the accent, rather than every grey line in the app
-   fighting for attention alongside it. */
-:root[data-theme="slate"] {
-  background: #f4f6f7;
-  --accent: #51697a;
-  --accent-dark: #33465b;
-  --accent-light: #e6ebee;
-  --headline-bg: #dbe3e8;
+   overrides the same five variables the whole app already draws from
+   (--accent/--accent-dark/--accent-light/--accent-muted/--headline-bg)
+   plus the page background, so switching is a single attribute toggle on
+   <html> (see applyTheme() in app.js) rather than needing per-component
+   overrides. --accent-muted covers secondary text/UI (headline labels,
+   the hour slider, graph readout time) that used to be hardcoded to
+   Mint's own sage green regardless of theme — the actual cause of labels
+   and the hour slider staying green-tinted under every other theme.
+   Every --accent-dark/--accent-muted value here was picked to sit dark
+   enough against its own --accent-light/--headline-bg for text contrast,
+   the same way Mint's originals already did — not derived from a
+   formula, just checked by eye against this app's actual light
+   backgrounds. Neutral chrome (page borders, input borders, the grey
+   body background tone) deliberately stays the same across every theme
+   rather than being retinted too — keeping that neutral is what makes
+   the accent colour still read as the accent, rather than every grey
+   line in the app fighting for attention alongside it. */
+:root[data-theme="gold"] {
+  background: #faf6e6;
+  --accent: #c9a227;
+  --accent-dark: #6b5310;
+  --accent-light: #f8edc4;
+  --accent-muted: #8a6d1f;
+  --headline-bg: #f3e3a0;
 }
 
 :root[data-theme="sand"] {
@@ -44,6 +50,7 @@
   --accent: #a97142;
   --accent-dark: #6e4a26;
   --accent-light: #f3e8d8;
+  --accent-muted: #8a6a4a;
   --headline-bg: #ecdcc0;
 }
 
@@ -52,6 +59,7 @@
   --accent: #b0463f;
   --accent-dark: #7a2c26;
   --accent-light: #f6e0de;
+  --accent-muted: #9a5a53;
   --headline-bg: #f0d2cf;
 }
 
@@ -60,6 +68,7 @@
   --accent: #3d6d95;
   --accent-dark: #254a66;
   --accent-light: #dfe9f2;
+  --accent-muted: #55788f;
   --headline-bg: #cfe0ee;
 }
 
@@ -153,7 +162,7 @@ header p {
 }
 
 .headline-label {
-  color: #4c6a58;
+  color: var(--accent-muted);
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
@@ -167,8 +176,8 @@ header p {
   content: "";
   width: 5px;
   height: 5px;
-  border-right: 2px solid #7d9a89;
-  border-bottom: 2px solid #7d9a89;
+  border-right: 2px solid var(--accent-muted);
+  border-bottom: 2px solid var(--accent-muted);
   transform: rotate(-45deg);
   margin-top: -2px;
 }
@@ -194,7 +203,7 @@ header p {
 }
 
 .headline-direction {
-  color: #4c6a58;
+  color: var(--accent-muted);
   font-size: 11px;
 }
 
@@ -241,7 +250,7 @@ header p {
 .headline-gust {
   display: block;
   margin-top: 2px;
-  color: #4c6a58;
+  color: var(--accent-muted);
   font-size: 11px;
   font-weight: 600;
 }
@@ -270,7 +279,7 @@ header p {
   justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
-  color: #4c6a58;
+  color: var(--accent-muted);
   margin-bottom: 4px;
 }
 
@@ -322,16 +331,16 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .hour-slider input[type="range"]::-webkit-slider-runnable-track {
-  background: linear-gradient(to right, #4c6a58 0%, #4c6a58 var(--fill, 0%), #d3ddd6 var(--fill, 0%), #d3ddd6 100%);
+  background: linear-gradient(to right, var(--accent-muted) 0%, var(--accent-muted) var(--fill, 0%), #d3ddd6 var(--fill, 0%), #d3ddd6 100%);
 }
 
 .hour-slider input[type="range"]::-webkit-slider-thumb,
 .hour-slider input[type="range"]::-moz-range-thumb {
-  border-color: #4c6a58;
+  border-color: var(--accent-muted);
 }
 
 .hour-slider input[type="range"]::-moz-range-progress {
-  background: #4c6a58;
+  background: var(--accent-muted);
 }
 
 .controls {
@@ -484,7 +493,7 @@ legend {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #4c6a58;
+  color: var(--accent-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -516,7 +525,7 @@ legend {
   border: 1px solid #dfe7e1;
   font-size: 12px;
   font-weight: 600;
-  color: #4c6a58;
+  color: var(--accent-muted);
   white-space: nowrap;
 }
 
@@ -1365,7 +1374,7 @@ footer {
   font-variant-numeric: tabular-nums;
 }
 .sheet-readout[hidden] { display: none; }
-.sheet-readout-time { font-size: 16px; font-weight: 600; color: #4c6a58; }
+.sheet-readout-time { font-size: 16px; font-weight: 600; color: var(--accent-muted); }
 .sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
 
 .graph-wrap { margin-top: 18px; }
@@ -1375,7 +1384,7 @@ footer {
   gap: 16px;
   margin-bottom: 6px;
   font-size: 12px;
-  color: #4c6a58;
+  color: var(--accent-muted);
 }
 
 .graph-legend-item {
@@ -1435,7 +1444,7 @@ footer {
   text-shadow: 0 1px 2px rgba(0, 0, 0, .35);
 }
 .theme-swatch[data-theme="mint"] { background: #2f6f4f; }
-.theme-swatch[data-theme="slate"] { background: #51697a; }
+.theme-swatch[data-theme="gold"] { background: #c9a227; }
 .theme-swatch[data-theme="sand"] { background: #a97142; }
 .theme-swatch[data-theme="red"] { background: #b0463f; }
 .theme-swatch[data-theme="blue"] { background: #3d6d95; }
