@@ -893,7 +893,7 @@ function windArrowRotation(degrees) {
 async function fetchActualWeather(lat, lon) {
   state.actual.status = "loading";
   state.actual.error = null;
-  if (!suppressIntermediateRenders) renderActualStatus();
+  renderActualStatus();
 
   try {
     const params = new URLSearchParams({
@@ -960,10 +960,8 @@ async function fetchActualWeather(lat, lon) {
     state.actual.error = err.message || "Could not load actual weather";
   }
 
-  if (!suppressIntermediateRenders) {
-    renderActualStatus();
-    renderTable();
-  }
+  renderActualStatus();
+  renderTable();
 }
 
 // Live real data for the same rolling window as Actual (extended into
@@ -975,7 +973,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
   const slot = state.realSources[sourceId];
   slot.status = "loading";
   slot.error = null;
-  if (!suppressIntermediateRenders) renderRealSourceStatus();
+  renderRealSourceStatus();
 
   try {
     const hourlyVars = [];
@@ -1049,10 +1047,8 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
     slot.error = err.message || "Could not load data";
   }
 
-  if (!suppressIntermediateRenders) {
-    renderRealSourceStatus();
-    renderTable();
-  }
+  renderRealSourceStatus();
+  renderTable();
 }
 
 // The daily GitHub Action commits data/history.json — no location info in
@@ -1252,7 +1248,7 @@ async function fetchHourlyForecast(lat, lon) {
   // to the hour slider or opening the graph sheet forced a redraw and
   // "fixed" it, which is what made this look like inconsistent/fake
   // values rather than a stale render.
-  if (!suppressIntermediateRenders) renderTable();
+  renderTable();
 }
 
 function meanFromHistoryDay(dayEntry, sourceId, day, conditionName) {
@@ -1535,21 +1531,18 @@ async function runLoadLocationData() {
 
     if (state.postcode !== requestedFor) return; // superseded partway through bookkeeping — same reasoning as above
 
-    // The final render of a load always happens regardless of
-    // suppressIntermediateRenders — that flag only ever skips the messy
-    // progressive renders in between, never this one, which is what
-    // actually reveals freshly loaded data once it's genuinely ready.
-    suppressIntermediateRenders = false;
+    // The final render of a load always reveals what was actually
+    // fetched — this is what currentDisplayIsComplete flips true for,
+    // marking the display as genuinely settled for this postcode from
+    // here on, protected from being blanked by anything else that
+    // happens to trigger a render afterwards.
+    currentDisplayIsComplete = true;
     renderActualStatus();
     renderRealSourceStatus();
     renderTable();
     cacheCurrentLocationSnapshot();
   } catch (err) {
     if (state.postcode !== requestedFor) return; // the newer request's own success/error handling owns the display now
-    // Reset here too — otherwise a background refresh that failed before
-    // reaching the success path above could leave a later, unrelated
-    // load (e.g. pressing Retry) incorrectly suppressed forever.
-    suppressIntermediateRenders = false;
     state.actual.status = "error";
     state.actual.error = err.message || "Could not resolve location";
     renderActualStatus();
@@ -2844,18 +2837,27 @@ function selectedRealSourcesStillLoading() {
   );
 }
 
-// state.actual.status starts as "idle" (see initial state) and only ever
-// becomes "loading" once fetchActualWeather itself runs — but that's
-// reached via resolveLocation()'s own await first, so on a fresh page
-// load there's a real gap between the page's first render (fired
-// synchronously, before loadLocationData has even been called) and
-// "loading" actually being set. A render caught in that gap fell through
-// every guard below and built cells from completely empty state, which
-// forecastValueFor happily fills in with demo-formula numbers (see its
-// own "fallback while real data is loading" comment) — a brief flash of
-// plausible-looking placeholder data on every single app launch, not
-// just on a location switch. Treating "idle" the same as "loading" here
-// closes that gap.
+// Tracks whether what's currently on screen is a complete, correct
+// render for state.postcode as it stands right now — true once either a
+// cache restore or a fully finished load has shown something, false the
+// moment a switch to somewhere not yet shown happens. The gate below
+// keys off this rather than raw status flags for a reason: during a
+// background refresh behind an already-displayed cached snapshot, each
+// fetch function still flips its OWN status back to "loading" the
+// instant it starts (fetchActualWeather, fetchRealSourceLive,
+// fetchHourlyForecast all do this, unconditionally, right at their own
+// top) — entirely correctly, since that status still needs to reflect
+// reality for other things that read it. Gating the blank-out purely on
+// those statuses meant ANY render triggered during that window — not
+// just the fetch functions' own progressive ones, but genuinely anything
+// else in the app that calls renderHeadline(), like the visibility/
+// resume handlers — would see "loading" and blank over perfectly good,
+// still-valid cached data, undoing the entire point of showing it
+// instantly. This flag is the one thing that actually needs checking:
+// "do we already have something complete to show", independent of
+// whatever happens to be mid-flight underneath it.
+let currentDisplayIsComplete = false;
+
 function actualNotYetReady() {
   return state.actual.status === "idle" || state.actual.status === "loading";
 }
@@ -2869,21 +2871,11 @@ function renderHeadline() {
   // state.actual at this exact moment, since that's the PREVIOUS place's
   // data and the new fetch hasn't landed yet. Better to show nothing
   // briefly than to silently keep showing numbers that belong somewhere
-  // else while the switch is still in flight.
-  //
-  // Critically, this also waits for state.hourly specifically (idle or
-  // loading, same as actual) — not just actual and the real sources.
-  // Without it, the headline was free to render as soon as actual/real
-  // sources settled, using headlineDisplayValueFor's plain daily-blend
-  // fallback (since hourly wasn't "ready" yet) — then, once hourly
-  // finished loading moments later (which takes longest, looping
-  // sequentially over nine sources) and correctly triggered its own
-  // redraw, the SAME cell would switch to the live hourly-corrected
-  // figure instead for Rain/Pressure/Soil Temp/Dew Point. Both numbers
-  // were genuine, real calculations — just two different ones, rendered
-  // moments apart — which is exactly what looked like a flash of "false"
-  // data settling into place on every switch.
-  if (actualNotYetReady() || selectedRealSourcesStillLoading() || state.hourly.status === "idle" || state.hourly.status === "loading") {
+  // else while the switch is still in flight — UNLESS the display is
+  // already marked complete (a cache restore, or a load that's already
+  // finished), in which case none of these mid-flight status flags
+  // should be able to blank it — see currentDisplayIsComplete above.
+  if (!currentDisplayIsComplete && (actualNotYetReady() || selectedRealSourcesStillLoading() || state.hourly.status === "idle" || state.hourly.status === "loading")) {
     if (headlineDate) headlineDate.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
@@ -3896,8 +3888,11 @@ function renderTable() {
 
   // Same principle as renderHeadline: refuse to build the table from
   // whatever's still sitting in state at this exact moment if a location
-  // switch just started — that's the previous place's data, not this one's.
-  if (actualNotYetReady()) {
+  // switch just started — that's the previous place's data, not this
+  // one's — unless the display is already marked complete (see
+  // currentDisplayIsComplete), in which case a mid-flight status flag
+  // from a background refresh shouldn't be able to blank it either.
+  if (!currentDisplayIsComplete && actualNotYetReady()) {
     table.innerHTML = "";
     if (actualStatus) actualStatus.textContent = "Loading weather…";
     if (metOfficeStatus) metOfficeStatus.textContent = "";
@@ -4527,6 +4522,7 @@ async function performSwitch() {
   saveCurrentPostcode(state.postcode);
   resetForLocationChange();
   renderPlaceChip();
+  renderPlaceDots();
   renderPlacesList();
   loadLocationData();
 }
@@ -4560,17 +4556,12 @@ const RECENT_LOCATION_CACHE_MS = 5 * 60 * 1000;
 const recentLocationCache = new Map();
 
 // While a background refresh is running behind an already-displayed
-// cached snapshot, the individual per-source render calls that normally
-// fire progressively as each fetch completes (see fetchActualWeather,
-// fetchRealSourceLive, fetchHourlyForecast) are skipped — without this,
-// the moment any one of those sources reported back, the existing
-// loading-guard in renderHeadline would correctly-but-unhelpfully blank
-// the screen again since OTHER sources were still "loading", undoing the
-// entire point of showing the cached data instantly. The final render at
-// the end of a load always happens regardless of this flag (see
-// runLoadLocationData), so the screen still updates once fresh data is
-// genuinely ready — this only smooths over the messy middle.
-let suppressIntermediateRenders = false;
+// cached snapshot, currentDisplayIsComplete (see renderHeadline) is set
+// true immediately — which is what actually stops the screen blanking
+// mid-refresh, regardless of what triggers a render during that window.
+// The final render at the end of a load always sets it true again too
+// (whether or not this cache path was involved), so the screen still
+// updates once fresh data is genuinely ready.
 
 function cacheCurrentLocationSnapshot() {
   if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
@@ -4613,7 +4604,7 @@ function restoreFromRecentLocationCache(pc) {
 // need to show nothing at all.
 function resetForLocationChange() {
   if (restoreFromRecentLocationCache(state.postcode)) {
-    suppressIntermediateRenders = true;
+    currentDisplayIsComplete = true;
     renderActualStatus();
     renderRealSourceStatus();
     renderHeadline();
@@ -4621,7 +4612,7 @@ function resetForLocationChange() {
     return;
   }
 
-  suppressIntermediateRenders = false;
+  currentDisplayIsComplete = false;
   state.actual.status = "loading";
   state.hourly.status = "loading";
   renderActualStatus();
@@ -4636,6 +4627,7 @@ function switchToPostcode(pc) {
   saveCurrentPostcode(pc);
   resetForLocationChange();
   renderPlaceChip();
+  renderPlaceDots();
   renderPlacesList();
   loadLocationData();
 }
@@ -4716,6 +4708,34 @@ function renderPlaceChip() {
   placeChipLabel.textContent = match ? match.label : (state.postcode || "Set location");
 }
 
+const placeDots = document.getElementById("placeDots");
+
+// A small position indicator — the same idea as a photo carousel's dots
+// — so the swipe gesture (see swipeToAdjacentPlace above) isn't
+// completely invisible: nothing else on screen hints that swiping the
+// card does anything. Only shown with two or more saved places, since a
+// single dot (or none) would just be visual noise for nothing to
+// indicate. Rebuilt from scratch on every call rather than diffed —
+// there are only ever a handful of saved places, so this is cheap.
+function renderPlaceDots() {
+  if (!placeDots) return;
+  placeDots.innerHTML = "";
+
+  const places = loadPlaces();
+  if (places.length < 2) return;
+
+  places.forEach(place => {
+    // icon-192.png rather than a fresh SVG redraw — there's no source
+    // artwork for the mark other than the existing PNGs, and downscaling
+    // a 192px source to this size stays perfectly crisp.
+    const icon = document.createElement("img");
+    icon.src = "icon-192.png";
+    icon.alt = "";
+    icon.className = "place-dot" + (place.postcode === state.postcode ? " is-current" : "");
+    placeDots.appendChild(icon);
+  });
+}
+
 function closePlaceMenu() {
   if (!placeMenu) return;
   placeMenu.hidden = true;
@@ -4748,6 +4768,7 @@ function renderPlaceMenu() {
 
 if (placeChip) {
   renderPlaceChip();
+  renderPlaceDots();
   placeChip.addEventListener("click", () => {
     if (!placeMenu) return;
     if (placeMenu.hidden) {
@@ -4803,6 +4824,7 @@ function renderPlacesList() {
       savePlaces(places);
       renderPlaceMenu();
       renderPlaceChip();
+      renderPlaceDots();
     });
     nameLine.appendChild(labelInput);
 
@@ -4942,6 +4964,7 @@ if (useMyLocationButton) {
           if (postcode) postcode.value = pc;
           saveCurrentPostcode(pc);
           renderPlaceChip();
+          renderPlaceDots();
           renderPlacesList();
           loadLocationData();
         } catch (err) {

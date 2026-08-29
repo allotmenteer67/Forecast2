@@ -1142,6 +1142,27 @@ footer {
   color: #6b7d70;
 }
 
+.place-dots {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.place-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+.place-dot.is-current {
+  width: 20px;
+  height: 20px;
+  opacity: 1;
+  filter: none;
+}
+
 .place-menu {
   position: absolute;
   top: calc(100% + 6px);
