@@ -1020,6 +1020,17 @@ async function fetchHourlyForecast(lat, lon) {
     state.hourly.status = "error";
     state.hourly.error = err.message || "Could not load hourly forecast";
   }
+
+  // Every other fetch in this file redraws on its own completion — this
+  // one didn't, which meant "Today" could sit showing the plain daily
+  // blend indefinitely even after the live hourly data (which
+  // headlineDisplayValueFor prefers once ready) had quietly finished
+  // loading in the background. Nothing was wrong with the data itself,
+  // just that nothing ever told the page to look at it again — a nudge
+  // to the hour slider or opening the graph sheet forced a redraw and
+  // "fixed" it, which is what made this look like inconsistent/fake
+  // values rather than a stale render.
+  renderTable();
 }
 
 function meanFromHistoryDay(dayEntry, sourceId, day, conditionName) {
