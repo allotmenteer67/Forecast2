@@ -31,6 +31,66 @@ const CONFIG = {
   }
 };
 
+// ---- Colour themes ----
+// Applies to every page via the same four CSS variables (--accent,
+// --accent-dark, --accent-light, --headline-bg) each theme overrides in
+// style.css — see the comment there for how the colours themselves were
+// picked. This function is also called directly from Settings for an
+// immediate live preview when a swatch is tapped, not just on page load.
+// The actual anti-flash application happens via a small inline script in
+// each HTML file's <head> (duplicated per page, since this is a plain
+// multi-page site with no shared <head>) — this call here just keeps
+// state consistent on every page load and is what Settings reuses.
+const THEME_KEY = "forecast-compare:theme";
+const THEMES = [
+  { id: "mint", name: "Mint" },
+  { id: "slate", name: "Slate" },
+  { id: "sand", name: "Sand" },
+  { id: "red", name: "Red" },
+  { id: "blue", name: "Blue" }
+];
+
+function loadTheme() {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    if (raw && THEMES.some(t => t.id === raw)) return raw;
+  } catch {
+    // fall through to default
+  }
+  return "mint";
+}
+
+function saveTheme(themeId) {
+  try {
+    localStorage.setItem(THEME_KEY, themeId);
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+}
+
+function applyTheme(themeId) {
+  // Mint is :root's own untouched default (see style.css) — removing the
+  // attribute for it rather than setting data-theme="mint" means the
+  // most common case matches the fewest selectors, and also cleanly
+  // undoes a previous non-Mint choice.
+  if (themeId === "mint") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.dataset.theme = themeId;
+  }
+  // Keeps the browser's own chrome (address bar / status bar tint) in
+  // step with whatever's on screen — manifest.json's theme_color only
+  // ever applies at install time, so without this an installed icon's
+  // splash colour could drift from whatever theme is actually active.
+  const themeColorEl = document.querySelector('meta[name="theme-color"]');
+  if (themeColorEl) {
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+    if (accent) themeColorEl.setAttribute("content", accent);
+  }
+}
+
+applyTheme(loadTheme());
+
 // Everything is stored and computed internally in these native units —
 // rain in mm, wind in mph, temperature in °C, pressure in hPa — regardless
 // of the display choice below. Only formatValue() and unit labels convert
@@ -2352,6 +2412,17 @@ function frostRiskTonight() {
 }
 
 // ---- Wind speed / gust pairing ----
+// A gust reading only earns its own callout (headline's "gust X" line,
+// the graph's scrubber readout) once it's genuinely higher than sustained
+// speed — always in native mph regardless of the display unit, so the
+// bar doesn't quietly shift depending on someone's mph/km-h setting. A
+// couple of mph either side of sustained speed is well within normal
+// noise for a model's own gust parameter, not a "gust" worth naming. The
+// gust LINE on the graph itself still draws throughout — this only
+// gates the text callouts, since the line is useful context for the
+// whole day's shape even on an otherwise calm one.
+const GUST_NOTABLE_MARGIN_MPH = 5;
+
 function windGustValueFor(day, source, rollbackDays) {
   if (isRealSource(source, "wind") && day <= 7) {
     const slot = state.realSources[source.id];
@@ -2611,7 +2682,7 @@ function renderHeadline() {
       // the same number, so neither figure has to shrink to fit.
       const pair = windSpeedGustFor(state.rollback);
       valueEl.textContent = pair ? formatValue(pair.speed, "wind") : "–";
-      if (pair && pair.gust !== null && pair.gust > pair.speed) {
+      if (pair && pair.gust !== null && pair.gust > pair.speed + GUST_NOTABLE_MARGIN_MPH) {
         windGustText = `gust ${formatValue(pair.gust, "wind")}`;
       }
     } else {
@@ -3119,7 +3190,10 @@ function openHourlySheet(conditionName) {
         const dirs = state.hourly.windDirection.slice(0, count);
         const g = sheetRenderWind(hourTimes, display, gustDisplay, dirs);
         sheetBody.appendChild(g.wrap);
-        const gustSuffix = i => gustDisplay[i] !== null && gustDisplay[i] !== undefined && gustDisplay[i] > display[i]
+        // Compared in native mph (raw/gustRaw), not the display-converted
+        // arrays — same threshold regardless of whether Wind is shown in
+        // mph or km/h. See GUST_NOTABLE_MARGIN_MPH.
+        const gustSuffix = i => gustRaw[i] !== null && gustRaw[i] !== undefined && gustRaw[i] > raw[i] + GUST_NOTABLE_MARGIN_MPH
           ? ` (gust ${formatConverted(gustDisplay[i], "wind")}${unitLabel("wind")})`
           : "";
         attachSheetScrubber({

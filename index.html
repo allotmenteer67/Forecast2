@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints, so navigating
+    // between pages doesn't flash back to Mint for a frame before app.js
+    // catches up (same trick a standard dark-mode toggle uses). Duplicated
+    // in each HTML file's <head> since this is a plain multi-page static
+    // site with no shared <head> to place it in once.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">

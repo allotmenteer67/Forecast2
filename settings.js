@@ -23,12 +23,12 @@ const FORECASTERS = [
 
 // HOUR_RANGE_KEY, SELECTED_FORECASTERS_KEY, CONDITION_UNIT_TOGGLES,
 // CONDITION_UNIT_LABELS, DEFAULT_CONDITION_UNITS, loadConditionUnits(),
-// saveConditionUnit(), and loadHourRange() all now come from app.js, which
-// this page loads first — settings.html includes both scripts in the same
-// global scope, so redeclaring the same names here would be a
-// duplicate-const syntax error that silently breaks this entire file
-// (which is exactly what was happening: nothing on this page was saving
-// because the file never ran).
+// saveConditionUnit(), loadHourRange(), THEMES, loadTheme(), saveTheme(),
+// and applyTheme() all now come from app.js, which this page loads first
+// — settings.html includes both scripts in the same global scope, so
+// redeclaring the same names here would be a duplicate-const syntax
+// error that silently breaks this entire file (which is exactly what was
+// happening: nothing on this page was saving because the file never ran).
 
 const hourRange48 = document.getElementById("hourRange48");
 const hourRange24 = document.getElementById("hourRange24");
@@ -45,6 +45,41 @@ if (hourRange48 && hourRange24) {
         // display-only preference, fine if it doesn't persist
       }
     });
+  });
+}
+
+// ---- Appearance: colour theme ----
+// Swatches show each theme's OWN accent colour (via CSS, keyed off
+// data-theme on the button itself — see style.css) regardless of which
+// theme is currently active, so tapping one gives an honest before/after
+// rather than every swatch looking like the current theme.
+const themeSwatchesEl = document.getElementById("themeSwatches");
+if (themeSwatchesEl) {
+  const currentTheme = loadTheme();
+  THEMES.forEach(theme => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "theme-swatch" + (theme.id === currentTheme ? " is-selected" : "");
+    button.dataset.theme = theme.id;
+    button.setAttribute("aria-pressed", theme.id === currentTheme ? "true" : "false");
+    button.title = theme.name;
+
+    const label = document.createElement("span");
+    label.className = "theme-swatch-label";
+    label.textContent = theme.name;
+    button.appendChild(label);
+
+    button.addEventListener("click", () => {
+      saveTheme(theme.id);
+      applyTheme(theme.id);
+      [...themeSwatchesEl.children].forEach(el => {
+        const selected = el === button;
+        el.classList.toggle("is-selected", selected);
+        el.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+    });
+
+    themeSwatchesEl.appendChild(button);
   });
 }
 

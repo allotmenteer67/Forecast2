@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints — see index.html
+    // for the full explanation; duplicated identically in every page's head.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">
@@ -42,6 +52,14 @@
         <p id="geoStatus" class="actual-status status-error-only"></p>
 
         <p class="note">Switch looks at that place now, without saving it. Save adds it to the list above — without changing what's currently shown — so you can rename it or switch to it any time. Switching to a saved place reuses whatever forecast history it already has, instead of starting fresh.</p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Appearance</legend>
+        <p class="note">Pick a colour theme — applies everywhere immediately.</p>
+        <div id="themeSwatches" class="theme-swatches"></div>
       </fieldset>
     </section>
 

@@ -9,8 +9,58 @@
   --accent: #2f6f4f;
   --accent-dark: #234f39;
   --accent-light: #e4efe6;
+  --headline-bg: #dcebe1;
   --amber: #b5651d;
   --amber-light: #fbeee0;
+}
+
+/* ---- Colour themes ----
+   Mint (above) is the default with no data-theme attribute needed — kept
+   as :root's own plain values rather than a fifth override block, so the
+   most common case matches the fewest selectors. Each other theme
+   overrides the same four variables the whole app already draws from
+   (--accent/--accent-dark/--accent-light/--headline-bg) plus the page
+   background, so switching is a single attribute toggle on <html> (see
+   applyTheme() in app.js) rather than needing per-component overrides.
+   Every --accent-dark value here was picked to sit dark enough against
+   its own --accent-light/--headline-bg for text contrast, the same way
+   Mint's dark green already does — not derived from a formula, just
+   checked by eye against this app's actual light backgrounds. Neutral
+   chrome (page borders, input borders, the grey body background tone)
+   deliberately stays the same across every theme rather than being
+   retinted too — keeping that neutral is what makes the accent colour
+   still read as the accent, rather than every grey line in the app
+   fighting for attention alongside it. */
+:root[data-theme="slate"] {
+  background: #f4f6f7;
+  --accent: #51697a;
+  --accent-dark: #33465b;
+  --accent-light: #e6ebee;
+  --headline-bg: #dbe3e8;
+}
+
+:root[data-theme="sand"] {
+  background: #f8f4ee;
+  --accent: #a97142;
+  --accent-dark: #6e4a26;
+  --accent-light: #f3e8d8;
+  --headline-bg: #ecdcc0;
+}
+
+:root[data-theme="red"] {
+  background: #faf4f3;
+  --accent: #b0463f;
+  --accent-dark: #7a2c26;
+  --accent-light: #f6e0de;
+  --headline-bg: #f0d2cf;
+}
+
+:root[data-theme="blue"] {
+  background: #f2f6fa;
+  --accent: #3d6d95;
+  --accent-dark: #254a66;
+  --accent-light: #dfe9f2;
+  --headline-bg: #cfe0ee;
 }
 
 body {
@@ -49,7 +99,7 @@ header p {
 }
 
 .headline {
-  background: #dcebe1;
+  background: var(--headline-bg);
   border-radius: 14px;
   padding: 16px 18px;
   margin-bottom: 16px;
@@ -328,7 +378,7 @@ fieldset,
 }
 
 .location-action-save:hover {
-  background: #d4e6da;
+  filter: brightness(0.96);
 }
 
 .geo-button {
@@ -339,7 +389,7 @@ fieldset,
 }
 
 .geo-button:hover {
-  background: #d4e6da;
+  filter: brightness(0.96);
 }
 
 input,
@@ -1359,3 +1409,33 @@ footer {
 
 .sheet-footnote { margin: 16px 2px 0; font-size: 12px; color: #6b7d70; line-height: 1.5; }
 .sheet-empty { margin: 24px 4px; color: #6b7d70; font-size: 14px; text-align: center; }
+
+/* ---- Appearance: colour theme swatches (Settings) ----
+   Each swatch shows its OWN theme's accent colour regardless of
+   whichever theme is currently active — so these can't just read
+   var(--accent), which only ever reflects the live theme. Kept as its
+   own small hardcoded list here rather than computed from JS, since a
+   colour swatch is fundamentally a style concern. */
+.theme-swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.theme-swatch {
+  width: 64px;
+  min-height: 64px;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 6px 4px;
+}
+.theme-swatch.is-selected { border-color: #1f2a24; }
+.theme-swatch-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .35);
+}
+.theme-swatch[data-theme="mint"] { background: #2f6f4f; }
+.theme-swatch[data-theme="slate"] { background: #51697a; }
+.theme-swatch[data-theme="sand"] { background: #a97142; }
+.theme-swatch[data-theme="red"] { background: #b0463f; }
+.theme-swatch[data-theme="blue"] { background: #3d6d95; }

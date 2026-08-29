@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints — see index.html
+    // for the full explanation; duplicated identically in every page's head.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">
