@@ -1132,37 +1132,49 @@ function anyRealSourceHasHistory() {
 // while one is already in flight just reuses that same in-flight
 // promise instead of starting a second, competing run.
 let loadLocationDataPromise = null;
+let loadLocationGeneration = 0;
 
-// A safety net for the re-entrancy guard above: without this, a single
-// genuinely stuck or very slow fetch (more likely now with six real
-// sources instead of two) would block every future call forever — not
-// just that one attempt, but every subsequent Switch, Save, or chip tap,
-// including switching back to where you started, since nothing would
-// ever resolve the stuck promise and free loadLocationDataPromise back
-// to null. This guarantees a load always settles one way or the other
-// within a bounded time.
-const LOAD_TIMEOUT_MS = 25000;
+// This used to race the real fetch against a timeout and, when the
+// timeout won, treat the real fetch as abandoned — freeing
+// loadLocationDataPromise back to null even though the real work was
+// STILL genuinely running in the background. That was the actual cause
+// of the flickering: the freed guard let the 30-second background retry
+// (and any other trigger) start a brand new, fully independent second
+// fetch on top of the still-running first one — and with six real
+// sources now fetched, sometimes a third or fourth — each eventually
+// finishing at its own staggered time and overwriting whatever the
+// previous one had just shown, which is exactly the repeated
+// error/data/error/different-data cycling that could take minutes to
+// finally settle.
+//
+// This version never abandons the real request — loadLocationDataPromise
+// stays pointing at it for as long as it's genuinely running, however
+// long that takes, so the guard actually guards. The timer below only
+// ever updates what's ON SCREEN if things are taking a while; it never
+// starts a second fetch or gives up on the first one.
+const LOAD_SLOW_WARNING_MS = 45000;
 
 function loadLocationData() {
   if (loadLocationDataPromise) return loadLocationDataPromise;
 
-  const timeout = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("Timed out waiting for weather data")), LOAD_TIMEOUT_MS);
-  });
+  const myGeneration = ++loadLocationGeneration;
 
-  loadLocationDataPromise = Promise.race([runLoadLocationData(), timeout])
-    .catch(err => {
-      // Only reached if the timeout won the race — runLoadLocationData()
-      // already catches and reports its own errors internally without
-      // rethrowing, so this is specifically the "took too long" case.
+  const warnTimeoutId = setTimeout(() => {
+    // Only touches the display if this attempt is still the current,
+    // still-running one — if it already finished (and cleared itself)
+    // there's nothing stale to warn about.
+    if (loadLocationGeneration === myGeneration && loadLocationDataPromise) {
       state.actual.status = "error";
-      state.actual.error = err.message || "Could not load weather";
+      state.actual.error = "Taking longer than usual to load — still trying in the background.";
       renderActualStatus();
       renderTable();
-    })
-    .finally(() => {
-      loadLocationDataPromise = null;
-    });
+    }
+  }, LOAD_SLOW_WARNING_MS);
+
+  loadLocationDataPromise = runLoadLocationData().finally(() => {
+    clearTimeout(warnTimeoutId);
+    loadLocationDataPromise = null;
+  });
 
   return loadLocationDataPromise;
 }
