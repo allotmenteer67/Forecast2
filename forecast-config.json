@@ -1,6 +1,6 @@
 {
   "name": "Cloude",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "platform": "GitHub Pages",
   "technology": [
     "HTML",
@@ -21,6 +21,13 @@
   "forecasters": [
     { "id": "metoffice", "name": "Met Office", "enabled": true },
     { "id": "ecmwf", "name": "ECMWF", "enabled": true },
+    { "id": "gfs", "name": "GFS (US)", "enabled": true },
+    { "id": "icon", "name": "ICON (Germany)", "enabled": true },
+    { "id": "gem", "name": "GEM (Canada)", "enabled": true },
+    { "id": "meteofrance", "name": "M\u00e9t\u00e9o-France", "enabled": true },
+    { "id": "jma", "name": "JMA (Japan)", "enabled": true },
+    { "id": "bom", "name": "BOM (Australia)", "enabled": true },
+    { "id": "cma", "name": "CMA (China)", "enabled": true },
     { "id": "bbc", "name": "BBC", "enabled": true },
     { "id": "meteo", "name": "Meteoblue", "enabled": true },
     { "id": "yr", "name": "YR", "enabled": true },
@@ -35,7 +42,7 @@
   ],
   "rollback_days": 6,
   "eligibility_min_days": 14,
-  "forecaster_data": "demo, except Met Office and ECMWF which use real Open-Meteo model data",
+  "forecaster_data": "demo, except Met Office, ECMWF, GFS, ICON, GEM, M\u00e9t\u00e9o-France, JMA, BOM, and CMA which use real Open-Meteo model data",
   "actual_data": {
     "source": "Open-Meteo",
     "geocoding": "postcodes.io outcodes (first 3 characters of postcode)",

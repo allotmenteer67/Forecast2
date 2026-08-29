@@ -6,6 +6,9 @@ const CONFIG = {
     { id: "icon", name: "ICON (Germany)", enabled: true, offset: -0.2 },
     { id: "gem", name: "GEM (Canada)", enabled: true, offset: 0.5 },
     { id: "meteofrance", name: "Météo-France", enabled: true, offset: -0.4 },
+    { id: "jma", name: "JMA (Japan)", enabled: true, offset: 0.15 },
+    { id: "bom", name: "BOM (Australia)", enabled: true, offset: -0.3 },
+    { id: "cma", name: "CMA (China)", enabled: true, offset: 0.45 },
     { id: "bbc", name: "BBC", enabled: true, offset: 0.6 },
     { id: "meteo", name: "Meteoblue", enabled: true, offset: -0.5 },
     { id: "yr", name: "YR", enabled: true, offset: 0.9 },
@@ -90,6 +93,55 @@ function applyTheme(themeId) {
 }
 
 applyTheme(loadTheme());
+
+// ---- Backup: export / import ----
+// Everything this app stores — FFV history, eligibility, saved places,
+// the theme choice, all of it — lives only in this browser's localStorage
+// on this one device. Clearing Safari's site data, or moving to a new
+// phone, silently loses all of it with no warning. This is a plain
+// key/value dump of every "forecast-compare:" prefixed key rather than a
+// hand-maintained list of specific keys — new features that add their
+// own storage key (like accuracy-trend above did) are included
+// automatically without this needing to be updated to know about them.
+const BACKUP_KEY_PREFIX = "forecast-compare:";
+
+function exportAppData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(BACKUP_KEY_PREFIX)) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return JSON.stringify({ app: "Cloude", exportedAt: new Date().toISOString(), data }, null, 2);
+}
+
+// Returns { ok: true, keyCount } on success, or { ok: false, error } on
+// failure — never throws, so the caller can show a plain message either
+// way rather than needing its own try/catch around this.
+function importAppData(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return { ok: false, error: "That doesn't look like valid backup text — check it was copied in full." };
+  }
+  if (!parsed || typeof parsed.data !== "object" || parsed.data === null) {
+    return { ok: false, error: "That text isn't a Cloude backup (missing expected data)." };
+  }
+
+  const entries = Object.entries(parsed.data).filter(([key]) => key.startsWith(BACKUP_KEY_PREFIX));
+  if (!entries.length) {
+    return { ok: false, error: "That backup doesn't contain any Cloude data to restore." };
+  }
+
+  try {
+    entries.forEach(([key, value]) => localStorage.setItem(key, value));
+  } catch {
+    return { ok: false, error: "Storage is unavailable right now — nothing was restored." };
+  }
+  return { ok: true, keyCount: entries.length };
+}
 
 // Everything is stored and computed internally in these native units —
 // rain in mm, wind in mph, temperature in °C, pressure in hPa — regardless
@@ -214,7 +266,7 @@ const REAL_SOURCES = [
   // times inconsistent.
   { id: "metoffice", model: "ukmo_global_deterministic_10km" },
   { id: "ecmwf", model: "ecmwf_ifs025" },
-  // Four more independent national models — genuinely different
+  // Six more independent national models — genuinely different
   // physics/data-assimilation per source, which is what actually
   // improves an ensemble median (blending more demo/synthetic sources
   // can't do this, since they're not independent observations of
@@ -222,7 +274,16 @@ const REAL_SOURCES = [
   { id: "gfs", model: "gfs_seamless" },        // NOAA (US)
   { id: "icon", model: "icon_seamless" },      // DWD (Germany)
   { id: "gem", model: "gem_seamless" },        // Environment Canada
-  { id: "meteofrance", model: "meteofrance_seamless" }
+  { id: "meteofrance", model: "meteofrance_seamless" },
+  // Three more, chosen for genuinely different geography/assimilation
+  // rather than just adding numbers — East Asia, Southern Hemisphere,
+  // and China had no representation at all before these. Confirmed
+  // against Open-Meteo's own current model list rather than assumed,
+  // since a wrong model string here would silently fall back to demo
+  // data with no obvious error.
+  { id: "jma", model: "jma_seamless" },        // Japan Meteorological Agency
+  { id: "bom", model: "bom_access_global" },   // Australian Bureau of Meteorology
+  { id: "cma", model: "cma_grapes_global" }    // China Meteorological Administration
 ];
 function realSourceIds() {
   return REAL_SOURCES.map(s => s.id);
@@ -1324,6 +1385,11 @@ async function runLoadLocationData() {
       // every page, not just Compare, so the front page's escalation
       // banner always reflects the latest accuracy comparison too.
       syncUnderperformFlags();
+
+      // One snapshot of the app's own merged accuracy per calendar day —
+      // must run after updateFFVHistory() above, which is what actually
+      // records today's samples into appAccuracyStore in the first place.
+      updateAccuracyTrend();
     } catch (bookkeepingErr) {
       console.error("FFV bookkeeping failed (data itself still loaded fine):", bookkeepingErr);
     }
@@ -1674,6 +1740,67 @@ function appAccuracyStatsFor(conditionName) {
   });
   if (count === 0) return null;
   return { count, avgError: sumAbsError / count };
+}
+
+// ---- Accuracy over time ----
+// appAccuracyStatsFor above only ever answers "what's the app's accuracy
+// right now" — it has no memory of what that number used to be, so there
+// was no way to see whether the merge is actually improving over time,
+// which is a big part of the point of learning FFV in the first place.
+// This keeps a separate, small time series: one snapshot of that same
+// avgError per condition, once per calendar day, capped so it can't grow
+// forever. Deliberately just the App's own merged figure rather than
+// every individual forecaster too — that would multiply the storage and
+// the graph's complexity a lot for a question ("is my blend of everyone
+// actually getting better") this already answers on its own.
+const ACCURACY_TREND_MAX_POINTS = 120; // roughly 4 months of daily snapshots
+
+function accuracyTrendStorageKey(areaCode) {
+  return `forecast-compare:accuracyTrend:${areaCode}`;
+}
+
+function loadAccuracyTrendStore(areaCode) {
+  try {
+    const raw = localStorage.getItem(accuracyTrendStorageKey(areaCode));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAccuracyTrendStore(areaCode, store) {
+  try {
+    localStorage.setItem(accuracyTrendStorageKey(areaCode), JSON.stringify(store));
+  } catch {
+    // Storage unavailable — trend history just won't persist between visits.
+  }
+}
+
+// Appends today's snapshot for every condition that has an accuracy
+// figure yet, once per calendar day (checked against the series' own
+// last entry, not a separate "last run" flag, so it self-corrects if a
+// day is skipped rather than drifting out of step with what's actually
+// stored). Called once per page load, after updateFFVHistory() has
+// already recorded today's samples into appAccuracyStore.
+function updateAccuracyTrend() {
+  if (!state.areaCode) return;
+  const today = isoDate(new Date());
+  const store = loadAccuracyTrendStore(state.areaCode);
+  let changed = false;
+
+  Object.keys(CONFIG.conditions).forEach(conditionName => {
+    const stats = appAccuracyStatsFor(conditionName);
+    if (!stats) return;
+    const series = (store[conditionName] ??= []);
+    if (series.length && series[series.length - 1].date === today) return; // already snapshotted today
+    series.push({ date: today, avgError: stats.avgError });
+    if (series.length > ACCURACY_TREND_MAX_POINTS) {
+      series.splice(0, series.length - ACCURACY_TREND_MAX_POINTS);
+    }
+    changed = true;
+  });
+
+  if (changed) saveAccuracyTrendStore(state.areaCode, store);
 }
 
 function markDateSeen(eligStore, conditionName, sourceId, dateKey) {
@@ -3358,6 +3485,107 @@ function renderAccuracy() {
 
     accuracyBody.appendChild(row);
   });
+
+  renderAccuracyTrend();
+}
+
+// Small standalone line graph, deliberately not reusing the hourly
+// sheet's chart helpers — those are built around a fixed-count hourly
+// x-axis (see sheetXFor/sheetBaseSvg), whereas this one has a variable
+// number of daily points that only grows over time, and needs date
+// labels rather than clock times. Simple enough to just draw directly.
+function renderAccuracyTrend() {
+  const container = document.getElementById("accuracyTrend");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (!state.areaCode) return;
+  const store = loadAccuracyTrendStore(state.areaCode);
+  const series = store[state.condition] ?? [];
+
+  const heading = document.createElement("h3");
+  heading.className = "accuracy-trend-heading";
+  heading.textContent = "Accuracy over time";
+  container.appendChild(heading);
+
+  if (series.length < 2) {
+    const note = document.createElement("p");
+    note.className = "actual-status";
+    note.textContent = "Not enough history yet for a trend — one snapshot is recorded each day the app is opened.";
+    container.appendChild(note);
+    return;
+  }
+
+  const values = series.map(pt => pt.avgError);
+  const W = 320, H = 90, PAD_L = 34, PAD_B = 16, PAD_T = 8;
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("class", "graph-svg");
+
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = Math.max(0.001, maxV - minV);
+  const plotW = W - PAD_L - 10;
+  const plotH = H - PAD_T - PAD_B;
+  const xFor = i => PAD_L + (i / Math.max(1, series.length - 1)) * plotW;
+  const yFor = v => H - PAD_B - ((v - minV) / range) * plotH;
+
+  // Just the min/max gridlines — this is a small at-a-glance shape, not
+  // a precision instrument, so a middle line would add clutter without
+  // adding anything worth reading.
+  [minV, maxV].forEach(v => {
+    const y = yFor(v);
+    const line = document.createElementNS(svgNS, "line");
+    line.setAttribute("x1", PAD_L); line.setAttribute("x2", String(W - 6));
+    line.setAttribute("y1", String(y)); line.setAttribute("y2", String(y));
+    line.setAttribute("class", "graph-gridline");
+    svg.appendChild(line);
+
+    const label = document.createElementNS(svgNS, "text");
+    label.setAttribute("x", String(PAD_L - 6));
+    label.setAttribute("y", String(y + 3));
+    label.setAttribute("class", "graph-axis-value");
+    label.setAttribute("text-anchor", "end");
+    label.textContent = formatValue(v, state.condition, true);
+    svg.appendChild(label);
+  });
+
+  const pts = values.map((v, i) => [xFor(i), yFor(v)]);
+  const path = document.createElementNS(svgNS, "path");
+  path.setAttribute("d", "M" + pts.map(p => p.join(",")).join(" L"));
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "var(--accent)");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(path);
+
+  const startLabel = document.createElementNS(svgNS, "text");
+  startLabel.setAttribute("x", String(PAD_L));
+  startLabel.setAttribute("y", String(H - 2));
+  startLabel.setAttribute("class", "graph-axis-label");
+  startLabel.textContent = formatDateShort(new Date(series[0].date));
+  svg.appendChild(startLabel);
+
+  const endLabel = document.createElementNS(svgNS, "text");
+  endLabel.setAttribute("x", String(W - 6));
+  endLabel.setAttribute("y", String(H - 2));
+  endLabel.setAttribute("class", "graph-axis-label");
+  endLabel.setAttribute("text-anchor", "end");
+  endLabel.textContent = formatDateShort(new Date(series[series.length - 1].date));
+  svg.appendChild(endLabel);
+
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap accuracy-trend-graph";
+  wrap.appendChild(svg);
+  container.appendChild(wrap);
+
+  const caption = document.createElement("p");
+  caption.className = "sheet-footnote accuracy-trend-caption";
+  caption.textContent =
+    `App's own merged accuracy for ${CONFIG.conditions[state.condition].name} — average error in ${unitLabel(state.condition)}, one point per day, ${series.length} day${series.length === 1 ? "" : "s"} tracked so far. Lower is better.`;
+  container.appendChild(caption);
 }
 
 if (accuracyMode) {

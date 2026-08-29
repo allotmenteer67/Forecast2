@@ -65,6 +65,23 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Backup &amp; restore</legend>
+        <p class="note">Everything Cloude knows — FFV history, saved places, settings — lives only on this device. Copy a backup here before switching phones or clearing site data, or to hand your learned history to someone else in the same postcode area.</p>
+        <button id="exportButton" type="button">Copy backup to clipboard</button>
+        <p id="exportStatus" class="actual-status status-error-only"></p>
+        <textarea id="exportOutput" class="backup-textarea" readonly hidden></textarea>
+
+        <label class="backup-import-label">
+          Restore from a backup
+          <textarea id="importInput" class="backup-textarea" placeholder="Paste backup text here"></textarea>
+        </label>
+        <button id="importButton" type="button" class="backup-import-button">Restore this backup</button>
+        <p id="importStatus" class="actual-status status-error-only"></p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Front page cells</legend>
         <p class="note">Rain, Temperature, and Wind always show. Pick which of these also appear.</p>
         <div id="headlineToggles" class="checks"></div>

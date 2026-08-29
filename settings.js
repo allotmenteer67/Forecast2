@@ -8,6 +8,9 @@ const FORECASTERS = [
   { id: "icon", name: "ICON (Germany)", enabled: true },
   { id: "gem", name: "GEM (Canada)", enabled: true },
   { id: "meteofrance", name: "Météo-France", enabled: true },
+  { id: "jma", name: "JMA (Japan)", enabled: true },
+  { id: "bom", name: "BOM (Australia)", enabled: true },
+  { id: "cma", name: "CMA (China)", enabled: true },
   { id: "bbc", name: "BBC", enabled: true },
   { id: "meteo", name: "Meteoblue", enabled: true },
   { id: "yr", name: "YR", enabled: true },
@@ -62,12 +65,11 @@ if (themeSwatchesEl) {
     button.className = "theme-swatch" + (theme.id === currentTheme ? " is-selected" : "");
     button.dataset.theme = theme.id;
     button.setAttribute("aria-pressed", theme.id === currentTheme ? "true" : "false");
+    // No visible label on the swatch itself (kept deliberately small) —
+    // the colour is the point, so the name only needs to be available to
+    // a screen reader or a hover tooltip, not printed on top of the tile.
+    button.setAttribute("aria-label", theme.name);
     button.title = theme.name;
-
-    const label = document.createElement("span");
-    label.className = "theme-swatch-label";
-    label.textContent = theme.name;
-    button.appendChild(label);
 
     button.addEventListener("click", () => {
       saveTheme(theme.id);
@@ -80,6 +82,72 @@ if (themeSwatchesEl) {
     });
 
     themeSwatchesEl.appendChild(button);
+  });
+}
+
+// ---- Backup & restore ----
+const exportButton = document.getElementById("exportButton");
+const exportStatus = document.getElementById("exportStatus");
+const exportOutput = document.getElementById("exportOutput");
+
+function renderExportStatus(message, isError) {
+  if (!exportStatus) return;
+  exportStatus.textContent = message || "";
+  exportStatus.classList.toggle("is-error", !!isError);
+}
+
+if (exportButton) {
+  exportButton.addEventListener("click", async () => {
+    const backup = exportAppData();
+    try {
+      await navigator.clipboard.writeText(backup);
+      renderExportStatus("Copied to clipboard.", false);
+      if (exportOutput) exportOutput.hidden = true;
+    } catch {
+      // Clipboard access can fail or be unavailable (older Safari,
+      // permissions) — fall back to a plain selectable text box so the
+      // backup is still reachable by hand, rather than a dead end.
+      if (exportOutput) {
+        exportOutput.hidden = false;
+        exportOutput.value = backup;
+        exportOutput.focus();
+        exportOutput.select();
+      }
+      renderExportStatus("Couldn't copy automatically — select the text below and copy it manually.", true);
+    }
+  });
+}
+
+const importInput = document.getElementById("importInput");
+const importButton = document.getElementById("importButton");
+const importStatus = document.getElementById("importStatus");
+
+function renderImportStatus(message, isError) {
+  if (!importStatus) return;
+  importStatus.textContent = message || "";
+  importStatus.classList.toggle("is-error", !!isError);
+}
+
+if (importButton) {
+  importButton.addEventListener("click", () => {
+    const text = (importInput?.value || "").trim();
+    if (!text) {
+      renderImportStatus("Paste a backup first.", true);
+      return;
+    }
+    // Genuinely destructive if the pasted backup is stale or from
+    // somewhere else — a plain confirm is enough friction for a
+    // one-off, user-initiated action like this.
+    if (!confirm("This replaces this device's Cloude data (FFV history, places, settings) with the pasted backup. Continue?")) {
+      return;
+    }
+    const result = importAppData(text);
+    if (!result.ok) {
+      renderImportStatus(result.error, true);
+      return;
+    }
+    renderImportStatus(`Restored ${result.keyCount} item${result.keyCount === 1 ? "" : "s"} — reloading…`, false);
+    setTimeout(() => location.reload(), 600);
   });
 }
 
