@@ -2470,6 +2470,23 @@ function headlineDisplayValueFor(conditionName) {
   return headlineValueFor(conditionName);
 }
 
+// forecastValueFor() deliberately falls back to a real source's demo
+// formula while that source's own real data is still loading — a
+// sensible default for the Compare table, which wants something to show
+// per cell as sources stream in. But headlineValueFor()'s merge reads
+// straight from that same fallback, which meant the headline could
+// render a "final-looking" figure that was actually part real, part
+// demo stand-in — then visibly shift over the next few seconds as each
+// real source's own load finished and replaced its stand-in. Gating on
+// this (alongside the state.actual.status check below) means the
+// headline only ever shows one number: the one every selected real
+// source actually settles on, never a partway blend.
+function selectedRealSourcesStillLoading() {
+  return REAL_SOURCES.some(
+    ({ id }) => state.selected.has(id) && state.realSources[id].status === "loading"
+  );
+}
+
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
@@ -2480,7 +2497,7 @@ function renderHeadline() {
   // data and the new fetch hasn't landed yet. Better to show nothing
   // briefly than to silently keep showing numbers that belong somewhere
   // else while the switch is still in flight.
-  if (state.actual.status === "loading") {
+  if (state.actual.status === "loading" || selectedRealSourcesStillLoading()) {
     if (headlineDate) headlineDate.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
