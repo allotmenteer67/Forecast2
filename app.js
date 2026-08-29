@@ -2227,6 +2227,16 @@ function liveTodayValueFor(conditionName) {
         .reduce((sum, v) => sum + (v ?? 0), 0);
     case "pressure":
       return state.hourly.pressure[0] ?? null;
+    // Same shape as Pressure: both are point-in-time readings, not a
+    // running total the way Rain is, so "now" is the right figure — this
+    // was simply missed when Soil Temp/Dew Point were added as headline
+    // conditions, leaving them stuck on the older daily-snapshot figure
+    // even once the live hourly data (fetched for both already, see
+    // fetchHourlyForecast) was sitting there ready to use.
+    case "soilTemperature":
+      return state.hourly.soilTemperature[0] ?? null;
+    case "dewPoint":
+      return state.hourly.dewPoint[0] ?? null;
     default:
       return null;
   }
@@ -2487,6 +2497,22 @@ function selectedRealSourcesStillLoading() {
   );
 }
 
+// state.actual.status starts as "idle" (see initial state) and only ever
+// becomes "loading" once fetchActualWeather itself runs — but that's
+// reached via resolveLocation()'s own await first, so on a fresh page
+// load there's a real gap between the page's first render (fired
+// synchronously, before loadLocationData has even been called) and
+// "loading" actually being set. A render caught in that gap fell through
+// every guard below and built cells from completely empty state, which
+// forecastValueFor happily fills in with demo-formula numbers (see its
+// own "fallback while real data is loading" comment) — a brief flash of
+// plausible-looking placeholder data on every single app launch, not
+// just on a location switch. Treating "idle" the same as "loading" here
+// closes that gap.
+function actualNotYetReady() {
+  return state.actual.status === "idle" || state.actual.status === "loading";
+}
+
 function renderHeadline() {
   if (!headlineGrid) return;
   headlineGrid.innerHTML = "";
@@ -2497,7 +2523,7 @@ function renderHeadline() {
   // data and the new fetch hasn't landed yet. Better to show nothing
   // briefly than to silently keep showing numbers that belong somewhere
   // else while the switch is still in flight.
-  if (state.actual.status === "loading" || selectedRealSourcesStillLoading()) {
+  if (actualNotYetReady() || selectedRealSourcesStillLoading()) {
     if (headlineDate) headlineDate.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
@@ -3367,7 +3393,7 @@ function renderTable() {
   // Same principle as renderHeadline: refuse to build the table from
   // whatever's still sitting in state at this exact moment if a location
   // switch just started — that's the previous place's data, not this one's.
-  if (state.actual.status === "loading") {
+  if (actualNotYetReady()) {
     table.innerHTML = "";
     if (actualStatus) actualStatus.textContent = "Loading weather…";
     if (metOfficeStatus) metOfficeStatus.textContent = "";
