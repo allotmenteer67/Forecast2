@@ -32,7 +32,10 @@ const MODELS = [
   { id: "gfs", model: "gfs_seamless" },
   { id: "icon", model: "icon_seamless" },
   { id: "gem", model: "gem_seamless" },
-  { id: "meteofrance", model: "meteofrance_seamless" }
+  { id: "meteofrance", model: "meteofrance_seamless" },
+  { id: "jma", model: "jma_seamless" },
+  { id: "bom", model: "bom_access_global" },
+  { id: "cma", model: "cma_grapes_global" }
 ];
 
 const fs = await import("node:fs/promises");
