@@ -113,6 +113,11 @@ header p {
   padding: 16px 18px;
   margin-bottom: 16px;
   box-shadow: 0 1px 4px rgba(31, 42, 36, .12);
+  /* Lets the browser keep handling vertical page scrolling natively from
+     inside this card — the swipe-between-places gesture only ever looks
+     at horizontal movement, so this avoids the two fighting over the
+     same touch. */
+  touch-action: pan-y;
 }
 
 .headline-grid {
@@ -1108,8 +1113,8 @@ footer {
 }
 
 .place-chip {
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 44px;
+  padding: 0 14px;
   border-radius: 999px;
   background: white;
   color: var(--accent-dark);
@@ -1376,6 +1381,7 @@ footer {
 .sheet-readout[hidden] { display: none; }
 .sheet-readout-time { font-size: 16px; font-weight: 600; color: var(--accent-muted); }
 .sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
+.sheet-readout-value.is-compact { font-size: 13px; }
 
 .graph-wrap { margin-top: 18px; }
 

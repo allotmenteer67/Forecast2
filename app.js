@@ -893,7 +893,7 @@ function windArrowRotation(degrees) {
 async function fetchActualWeather(lat, lon) {
   state.actual.status = "loading";
   state.actual.error = null;
-  renderActualStatus();
+  if (!suppressIntermediateRenders) renderActualStatus();
 
   try {
     const params = new URLSearchParams({
@@ -960,8 +960,10 @@ async function fetchActualWeather(lat, lon) {
     state.actual.error = err.message || "Could not load actual weather";
   }
 
-  renderActualStatus();
-  renderTable();
+  if (!suppressIntermediateRenders) {
+    renderActualStatus();
+    renderTable();
+  }
 }
 
 // Live real data for the same rolling window as Actual (extended into
@@ -973,7 +975,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
   const slot = state.realSources[sourceId];
   slot.status = "loading";
   slot.error = null;
-  renderRealSourceStatus();
+  if (!suppressIntermediateRenders) renderRealSourceStatus();
 
   try {
     const hourlyVars = [];
@@ -1047,8 +1049,10 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
     slot.error = err.message || "Could not load data";
   }
 
-  renderRealSourceStatus();
-  renderTable();
+  if (!suppressIntermediateRenders) {
+    renderRealSourceStatus();
+    renderTable();
+  }
 }
 
 // The daily GitHub Action commits data/history.json — no location info in
@@ -1248,7 +1252,7 @@ async function fetchHourlyForecast(lat, lon) {
   // to the hour slider or opening the graph sheet forced a redraw and
   // "fixed" it, which is what made this look like inconsistent/fake
   // values rather than a stale render.
-  renderTable();
+  if (!suppressIntermediateRenders) renderTable();
 }
 
 function meanFromHistoryDay(dayEntry, sourceId, day, conditionName) {
@@ -1493,11 +1497,21 @@ async function runLoadLocationData() {
 
     if (state.postcode !== requestedFor) return; // superseded partway through bookkeeping — same reasoning as above
 
+    // The final render of a load always happens regardless of
+    // suppressIntermediateRenders — that flag only ever skips the messy
+    // progressive renders in between, never this one, which is what
+    // actually reveals freshly loaded data once it's genuinely ready.
+    suppressIntermediateRenders = false;
     renderActualStatus();
     renderRealSourceStatus();
     renderTable();
+    cacheCurrentLocationSnapshot();
   } catch (err) {
     if (state.postcode !== requestedFor) return; // the newer request's own success/error handling owns the display now
+    // Reset here too — otherwise a background refresh that failed before
+    // reaching the success path above could leave a later, unrelated
+    // load (e.g. pressing Retry) incorrectly suppressed forever.
+    suppressIntermediateRenders = false;
     state.actual.status = "error";
     state.actual.error = err.message || "Could not resolve location";
     renderActualStatus();
@@ -3379,6 +3393,12 @@ function openHourlySheet(conditionName) {
   sheetRange.textContent = `Next ${hourRange}h`;
   sheetBody.innerHTML = "";
   sheetReadout.hidden = conditionName === "sunshine";
+  // Dew Point's readout carries its own figure plus Temperature
+  // alongside it, and Wind's carries speed plus gust plus direction —
+  // both routinely longer than every other condition's plain single
+  // number, so they get a slightly smaller readout size to keep them
+  // comfortably on one line instead of the default full size.
+  readoutValue.classList.toggle("is-compact", conditionName === "dewPoint" || conditionName === "wind");
 
   if (state.hourly.status !== "ready") {
     const empty = document.createElement("p");
@@ -3410,7 +3430,7 @@ function openHourlySheet(conditionName) {
         // visible window closes that gap without needing a second chart.
         const total = display.reduce((a, b) => a + (b ?? 0), 0);
         sheetFootnote.textContent =
-          `Total across shown ${count}h: ${formatConverted(total, "rain")}${unitLabel("rain")} · Drag your finger along the graph to read any hour.`;
+          `Total across shown ${count}h: ${formatConverted(total, "rain")}${unitLabel("rain")}`;
       } else if (conditionName === "temperature") {
         const raw = state.hourly.temperature.slice(0, count);
         const display = raw.map(v => convertForDisplay(v, "temperature"));
@@ -3493,7 +3513,7 @@ function openHourlySheet(conditionName) {
         ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
         : conditionName === "rain"
         ? sheetFootnote.textContent // already set above with the running total
-        : "Drag your finger along the graph to read any hour — the reading above stays put so your hand doesn't cover it.";
+        : "";
     } catch (err) {
       // Whatever went wrong building the graph, the sheet still needs to
       // open and say so — a silent failure here previously meant tapping
@@ -4485,15 +4505,85 @@ if (backfillButton) {
 // CURRENT_POSTCODE_KEY, so a place saved on one page shows up on the
 // other without needing a shared framework.
 
-// Called the INSTANT a location change is initiated (Switch, Update, or
-// the header chip) — before the new fetch has even started, let alone
-// finished. Marks the current data as stale and immediately re-renders
-// to a neutral "Loading…" state, so the previous place's numbers can
-// never sit on screen looking current while a new fetch is still in
-// flight. Blanking briefly is the deliberate trade-off here: showing
-// nothing for a moment is preferable to silently showing something
-// that's actually wrong.
+// ---- Recent-location cache ----
+// Switching between a couple of saved places to compare (checking beach
+// vs hills for tomorrow, say) used to mean a full blank-then-reload every
+// single time, even switching straight back to somewhere just looked at
+// moments ago. This keeps a short-lived, in-memory-only snapshot of the
+// last successfully completed load per place — cleared on app close or
+// reload, never written to disk — so switching back within a few minutes
+// shows that data immediately, with a fresh fetch still kicked off
+// silently behind it. It only ever stores a genuinely COMPLETE, already-
+// rendered snapshot, never a partial one, so this doesn't reopen the
+// "flash of inconsistent data" problem fixed earlier — it's showing data
+// that was fully correct a few minutes ago, the same trade-off any
+// ordinary weather app's own caching already makes.
+const RECENT_LOCATION_CACHE_MS = 5 * 60 * 1000;
+const recentLocationCache = new Map();
+
+// While a background refresh is running behind an already-displayed
+// cached snapshot, the individual per-source render calls that normally
+// fire progressively as each fetch completes (see fetchActualWeather,
+// fetchRealSourceLive, fetchHourlyForecast) are skipped — without this,
+// the moment any one of those sources reported back, the existing
+// loading-guard in renderHeadline would correctly-but-unhelpfully blank
+// the screen again since OTHER sources were still "loading", undoing the
+// entire point of showing the cached data instantly. The final render at
+// the end of a load always happens regardless of this flag (see
+// runLoadLocationData), so the screen still updates once fresh data is
+// genuinely ready — this only smooths over the messy middle.
+let suppressIntermediateRenders = false;
+
+function cacheCurrentLocationSnapshot() {
+  if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
+  recentLocationCache.set(state.postcode, {
+    actual: structuredClone(state.actual),
+    realSources: structuredClone(state.realSources),
+    hourly: structuredClone(state.hourly),
+    areaCode: state.areaCode,
+    lat: state.lat,
+    lon: state.lon,
+    cachedAt: Date.now()
+  });
+}
+
+// Restores state from a cached snapshot if one exists for this exact
+// postcode/place string and is still within the buffer window. Returns
+// true if it did (caller should render immediately and can rely on a
+// background refresh to update things further), false if there was
+// nothing usable (caller should fall back to its normal blank-and-load
+// behaviour).
+function restoreFromRecentLocationCache(pc) {
+  const snap = recentLocationCache.get(pc);
+  if (!snap || Date.now() - snap.cachedAt > RECENT_LOCATION_CACHE_MS) return false;
+  state.actual = structuredClone(snap.actual);
+  state.realSources = structuredClone(snap.realSources);
+  state.hourly = structuredClone(snap.hourly);
+  state.areaCode = snap.areaCode;
+  state.lat = snap.lat;
+  state.lon = snap.lon;
+  return true;
+}
+
+// A location switch just started (see resetForLocationChange) — refuse
+// to build cells from whatever's still sitting in state.hourly/
+// state.actual at this exact moment, since that's the PREVIOUS place's
+// data and the new fetch hasn't landed yet. Better to show nothing
+// briefly than to silently keep showing numbers that belong somewhere
+// else while the switch is still in flight — UNLESS a fresh-enough
+// cached snapshot for the NEW place exists, in which case there's no
+// need to show nothing at all.
 function resetForLocationChange() {
+  if (restoreFromRecentLocationCache(state.postcode)) {
+    suppressIntermediateRenders = true;
+    renderActualStatus();
+    renderRealSourceStatus();
+    renderHeadline();
+    renderTable();
+    return;
+  }
+
+  suppressIntermediateRenders = false;
   state.actual.status = "loading";
   state.hourly.status = "loading";
   renderActualStatus();
@@ -4510,6 +4600,76 @@ function switchToPostcode(pc) {
   renderPlaceChip();
   renderPlacesList();
   loadLocationData();
+}
+
+// ---- Swipe between saved places (front page) ----
+// The whole "Today" card is the swipe zone — a much bigger, more
+// discoverable target than the header chip alone — except the Hour
+// slider itself, which already owns a horizontal drag gesture in the
+// same card. Layering a second horizontal gesture directly on top of it
+// would make both ambiguous, so touches starting on the slider are left
+// alone entirely and it keeps behaving exactly as it always has.
+//
+// touch-action: pan-y on the card (see style.css) tells the browser to
+// keep handling vertical page scrolling natively here — this code only
+// ever looks at horizontal movement, so scrolling the page from inside
+// the card is never intercepted or fought over.
+const headlineSwipeZone = document.querySelector(".headline");
+if (headlineSwipeZone) {
+  const SWIPE_THRESHOLD_PX = 40;
+  let swipeStartX = null;
+  let swipeStartY = null;
+  let swiping = false;
+
+  headlineSwipeZone.addEventListener("pointerdown", e => {
+    if (e.target.closest(".hour-slider")) return; // the slider owns its own drag entirely
+    swipeStartX = e.clientX;
+    swipeStartY = e.clientY;
+    swiping = false;
+  });
+
+  headlineSwipeZone.addEventListener("pointermove", e => {
+    if (swipeStartX === null) return;
+    const dx = e.clientX - swipeStartX;
+    const dy = e.clientY - swipeStartY;
+    // Horizontal has to clearly dominate before this counts as a swipe
+    // rather than the start of a vertical scroll or a plain tap on one
+    // of the headline cells (which still needs to open its own graph
+    // sheet normally — this only intervenes once movement is unambiguous).
+    if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      swiping = true;
+    }
+  });
+
+  headlineSwipeZone.addEventListener("pointerup", e => {
+    if (swipeStartX === null) return;
+    const dx = e.clientX - swipeStartX;
+    if (swiping) {
+      swipeToAdjacentPlace(dx < 0 ? 1 : -1);
+    }
+    swipeStartX = null;
+    swipeStartY = null;
+    swiping = false;
+  });
+
+  headlineSwipeZone.addEventListener("pointercancel", () => {
+    swipeStartX = null;
+    swipeStartY = null;
+    swiping = false;
+  });
+}
+
+// Cycles to the next/previous saved place relative to whichever one is
+// currently showing, wrapping around at either end. Does nothing if the
+// current location isn't itself a saved place (nothing to cycle
+// relative to) or there are fewer than two saved places to cycle between.
+function swipeToAdjacentPlace(direction) {
+  const places = loadPlaces();
+  if (places.length < 2) return;
+  const currentIndex = places.findIndex(place => place.postcode === state.postcode);
+  if (currentIndex === -1) return;
+  const nextIndex = (currentIndex + direction + places.length) % places.length;
+  switchToPostcode(places[nextIndex].postcode);
 }
 
 function renderPlaceChip() {
