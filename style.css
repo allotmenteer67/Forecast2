@@ -1315,7 +1315,7 @@ footer {
   font-variant-numeric: tabular-nums;
 }
 .sheet-readout[hidden] { display: none; }
-.sheet-readout-time { font-size: 12px; font-weight: 600; color: #4c6a58; }
+.sheet-readout-time { font-size: 16px; font-weight: 600; color: #4c6a58; }
 .sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
 
 .graph-wrap { margin-top: 18px; }

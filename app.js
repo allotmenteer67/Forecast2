@@ -2872,14 +2872,29 @@ function sheetRenderDewPointWithTemp(hourTimes, dewDisplay, tempDisplay) {
   return { wrap, svg, pts: dewPts, extraHeight: 16 };
 }
 
-function sheetRenderWind(hourTimes, speedsDisplay, dirs) {
+function sheetRenderWind(hourTimes, speedsDisplay, gustsDisplay, dirs) {
   // Arrow row needs its own clear space above the speed line — reserved
   // as extra top padding within the normal chart height (same baseline
   // as every other graph), rather than shifting the plotted line down
   // into the x-axis labels' space.
   const WIND_TOP_PAD = 34;
   const { wrap, svg, count } = sheetBaseSvg(hourTimes);
-  const { topValue, plotH } = sheetRenderYAxis(svg, 0, Math.max(0.001, ...speedsDisplay), false, "wind", WIND_TOP_PAD);
+  const { topValue, plotH } = sheetRenderYAxis(svg, 0, Math.max(0.001, ...speedsDisplay, ...gustsDisplay), false, "wind", WIND_TOP_PAD);
+
+  // Gust drawn first (and dashed) so the solid speed line sits visually
+  // on top of it — gust is the secondary/context figure here, speed is
+  // still the primary reading the cell and scrubber dot are built
+  // around. Model gust is itself an hourly figure like everything else
+  // in this graph, so a single sharp convective gust can still get
+  // smoothed into its hour rather than standing out as a spike — worth
+  // knowing, not a reason to leave it off.
+  const gustPts = gustsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
+  const gustPath = "M" + gustPts.map(p => p.join(",")).join(" L");
+  svg.appendChild(sheetSvgEl("path", {
+    d: gustPath, fill: "none", stroke: "#c0392b", "stroke-width": 1.8,
+    "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "4 3"
+  }));
+
   const pts = speedsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
   const linePath = "M" + pts.map(p => p.join(",")).join(" L");
   svg.appendChild(sheetSvgEl("path", { d: linePath, fill: "none", stroke: "#4c6a58", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
@@ -2899,6 +2914,17 @@ function sheetRenderWind(hourTimes, speedsDisplay, dirs) {
     g.appendChild(sheetSvgEl("path", { d: "M0,-7 L5,6 L0,2.5 L-5,6 Z", fill: "#2f6f4f" }));
     svg.appendChild(g);
   });
+
+  const legend = document.createElement("div");
+  legend.className = "graph-legend";
+  const speedKey = document.createElement("span");
+  speedKey.className = "graph-legend-item";
+  speedKey.innerHTML = '<span class="graph-legend-swatch" style="background:#4c6a58"></span>Speed';
+  const gustKey = document.createElement("span");
+  gustKey.className = "graph-legend-item";
+  gustKey.innerHTML = '<span class="graph-legend-swatch" style="background:#c0392b"></span>Gust';
+  legend.append(speedKey, gustKey);
+  wrap.insertBefore(legend, svg);
 
   return { wrap, svg, pts, extraHeight: 16 };
 }
@@ -3088,18 +3114,23 @@ function openHourlySheet(conditionName) {
       } else if (conditionName === "wind") {
         const raw = state.hourly.windSpeed.slice(0, count);
         const display = raw.map(v => convertForDisplay(v, "wind"));
+        const gustRaw = state.hourly.windGust.slice(0, count);
+        const gustDisplay = gustRaw.map(v => convertForDisplay(v, "wind"));
         const dirs = state.hourly.windDirection.slice(0, count);
-        const g = sheetRenderWind(hourTimes, display, dirs);
+        const g = sheetRenderWind(hourTimes, display, gustDisplay, dirs);
         sheetBody.appendChild(g.wrap);
+        const gustSuffix = i => gustDisplay[i] !== null && gustDisplay[i] !== undefined && gustDisplay[i] > display[i]
+          ? ` (gust ${formatConverted(gustDisplay[i], "wind")}${unitLabel("wind")})`
+          : "";
         attachSheetScrubber({
           ...g,
           formatReadout: i => ({
             time: sheetClockLabel(hourTimes[i]),
-            value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim()
+            value: `${formatConverted(display[i], "wind")}${unitLabel("wind")} ${compassLabel(dirs[i]) ?? ""}`.trim() + gustSuffix(i)
           }),
           defaultReadout: {
             time: "Now",
-            value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim()
+            value: `${formatConverted(display[0], "wind")}${unitLabel("wind")} ${compassLabel(dirs[0]) ?? ""}`.trim() + gustSuffix(0)
           }
         });
       } else if (conditionName === "sunshine") {
