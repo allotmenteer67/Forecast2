@@ -5037,6 +5037,30 @@ if (useMyLocationButton) {
           state.postcode = pc;
           if (postcode) postcode.value = pc;
           saveCurrentPostcode(pc);
+          // This used to skip straight to loadLocationData() without ever
+          // calling resetForLocationChange() — every OTHER way of
+          // changing location (Switch button, saved-place tap, swipe,
+          // header chip) goes through it, but this one didn't. Two real
+          // consequences: (1) it never even checked the recent-location
+          // cache, so "Use my location" always did a full cold reload
+          // even when you'd looked at this exact spot moments ago; (2)
+          // far worse, currentDisplayIsComplete was left exactly as it
+          // was for the PREVIOUS place — usually true — so the headline
+          // kept confidently showing the previous location's numbers
+          // (not blanked, not marked mid-switch) while state.postcode
+          // had already silently moved on to the new one underneath it.
+          // Once the background fetch started flipping sources to
+          // "loading", the mid-refresh guard in renderHeadline() (which
+          // exists to stop a partial blend flickering into view) would
+          // then refuse to repaint AT ALL until every source finished —
+          // freezing the previous location's stale display on screen for
+          // the whole fetch, with nothing forcing a repaint once it
+          // finished either. Touching the Hour or Date slider afterwards
+          // called renderHeadline() directly, which by then found
+          // everything genuinely settled and finally painted the correct
+          // figures — which is exactly why the data only ever seemed to
+          // "fix itself" once a slider was nudged.
+          resetForLocationChange();
           renderPlaceChip();
           renderPlaceDots();
           renderPlacesList();
@@ -5069,7 +5093,26 @@ updateHourLabel();
 // The front page (headlineGrid) and Compare page (table) both need live
 // weather data; Settings doesn't display anything weather-dependent, so
 // it skips the fetch entirely rather than making wasted API calls.
+//
+// This used to call renderTable() directly here, which always shows the
+// plain "Loading weather…" blank state and never once checked the
+// recent-location cache — resetForLocationChange() (which DOES check it)
+// was only ever called from the explicit in-page switch actions (Switch
+// button, saved-place tap, swipe, header chip). But this is a plain
+// multi-page site: index.html, compare.html, settings.html, and
+// help.html are each a full separate document, so EVERY navigation
+// between them re-runs this entire script from scratch and hits this
+// exact line — there is no other bootstrap path. That made the recent-
+// location cache effectively dead for the single most common case it
+// was actually built for (per its own comments): switching pages, or
+// backgrounding/resuming the app, for the SAME place you were just
+// looking at. Calling resetForLocationChange() here instead means a
+// fresh page load or navigation gets exactly the same cache check as an
+// explicit switch — instant display from a fresh-enough snapshot if one
+// exists for the current postcode, a plain loading blank otherwise —
+// before the background fetch (still always run, to keep things
+// current) kicks off underneath it.
 if (headlineGrid || table) {
-  renderTable();
+  resetForLocationChange();
   loadLocationData();
 }
