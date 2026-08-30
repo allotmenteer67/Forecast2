@@ -2880,18 +2880,21 @@ function actualNotYetReady() {
 
 function renderHeadline() {
   if (!headlineGrid) return;
-  headlineGrid.innerHTML = "";
 
-  // A location switch just started (see resetForLocationChange) — refuse
-  // to build cells from whatever's still sitting in state.hourly/
-  // state.actual at this exact moment, since that's the PREVIOUS place's
-  // data and the new fetch hasn't landed yet. Better to show nothing
-  // briefly than to silently keep showing numbers that belong somewhere
-  // else while the switch is still in flight — UNLESS the display is
-  // already marked complete (a cache restore, or a load that's already
-  // finished), in which case none of these mid-flight status flags
-  // should be able to blank it — see currentDisplayIsComplete above.
-  if (!currentDisplayIsComplete && (actualNotYetReady() || selectedRealSourcesStillLoading() || state.hourly.status === "idle" || state.hourly.status === "loading")) {
+  // True while ANY selected real source, actual, or hourly fetch is
+  // still mid-flight for whatever's currently on screen — regardless of
+  // whether that's a fresh load with nothing shown yet, or a background
+  // refresh running quietly behind an already-displayed cached snapshot.
+  const stillSettling = actualNotYetReady() || selectedRealSourcesStillLoading() || state.hourly.status === "idle" || state.hourly.status === "loading";
+
+  // A location switch just started (see resetForLocationChange) with
+  // nothing valid to show yet — refuse to build cells from whatever's
+  // still sitting in state.hourly/state.actual at this exact moment,
+  // since that's the PREVIOUS place's data and the new fetch hasn't
+  // landed. Better to show nothing briefly than numbers that belong
+  // somewhere else.
+  if (!currentDisplayIsComplete && stillSettling) {
+    headlineGrid.innerHTML = "";
     if (headlineDate) headlineDate.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
@@ -2899,6 +2902,25 @@ function renderHeadline() {
     headlineGrid.appendChild(loadingMsg);
     return;
   }
+
+  // There IS already something valid on screen (a cache restore, or a
+  // load that finished earlier) but a background refresh for the SAME
+  // place is still incomplete — e.g. only 4 of 9 real sources have
+  // landed so far. Rebuilding now would blend whichever sources happen
+  // to be ready yet against the rest's still-loading placeholders, which
+  // is exactly the "flickers through partial data" bug: each source
+  // finishing at its own staggered time would repaint the headline with
+  // a slightly different partial mix, and whatever partial mix happened
+  // to be on screen when the user looked could then sit there until
+  // something else (like nudging the Hour slider) forced a fresh
+  // rebuild. Leaving the DOM completely untouched here — not even
+  // clearing it — means the existing (cache or prior load's) render just
+  // keeps showing as-is until the refresh is FULLY done, at which point
+  // the fetch that finishes last calls this again with stillSettling now
+  // false and rebuilds once, atomically, with the complete new data.
+  if (currentDisplayIsComplete && stillSettling) return;
+
+  headlineGrid.innerHTML = "";
 
   const day = freshestDayFor(state.rollback);
 
