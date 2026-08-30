@@ -1479,6 +1479,22 @@ async function runLoadLocationData() {
   const requestedFor = state.postcode;
   try {
     const { lat, lon, label, areaCode } = await resolveLocation(state.postcode);
+
+    // resolveLocation is itself a network round-trip (postcodes.io or
+    // Open-Meteo's geocoder) — if a newer switch has already taken over
+    // by the time this one resolves, committing these coordinates to the
+    // shared state.lat/lon/areaCode anyway would silently overwrite
+    // whatever the CURRENT, correctly-displayed location is using with
+    // this old, now-irrelevant one's. Every fetch below reads lat/lon
+    // straight off this closure (not back off state), so nothing past
+    // this point actually needs the shared fields updated to keep
+    // running correctly for THIS request — checking here rather than
+    // only after the fetches finish (as below) closes the gap where a
+    // slow, superseded resolve could corrupt a newer, already-displayed
+    // location's identity for anything else that reads state.areaCode in
+    // the meantime (FFV lookups, the eligibility store, and so on).
+    if (state.postcode !== requestedFor) return;
+
     state.lat = lat;
     state.lon = lon;
     state.areaCode = areaCode;
