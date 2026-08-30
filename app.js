@@ -4559,17 +4559,44 @@ if (backfillButton) {
 // Switching between a couple of saved places to compare (checking beach
 // vs hills for tomorrow, say) used to mean a full blank-then-reload every
 // single time, even switching straight back to somewhere just looked at
-// moments ago. This keeps a short-lived, in-memory-only snapshot of the
-// last successfully completed load per place — cleared on app close or
-// reload, never written to disk — so switching back within a few minutes
-// shows that data immediately, with a fresh fetch still kicked off
-// silently behind it. It only ever stores a genuinely COMPLETE, already-
-// rendered snapshot, never a partial one, so this doesn't reopen the
-// "flash of inconsistent data" problem fixed earlier — it's showing data
-// that was fully correct a few minutes ago, the same trade-off any
+// moments ago. This keeps a short-lived snapshot of the last
+// successfully completed load per place, so switching back within a few
+// minutes shows that data immediately, with a fresh fetch still kicked
+// off silently behind it. It only ever stores a genuinely COMPLETE,
+// already-rendered snapshot, never a partial one, so this doesn't reopen
+// the "flash of inconsistent data" problem fixed earlier — it's showing
+// data that was fully correct a few minutes ago, the same trade-off any
 // ordinary weather app's own caching already makes.
+//
+// Backed by sessionStorage rather than a plain in-memory variable — this
+// is a plain multi-page site (index.html, compare.html, settings.html,
+// help.html are each separate documents), so a variable would be wiped
+// on every single navigation between them, and iOS reloads a backgrounded
+// PWA's page fairly readily too. sessionStorage survives both of those
+// (cleared only when the browser tab/window itself actually closes),
+// which is the lifetime this feature is actually meant to have — a
+// plain variable was silently making the buffer far less reliable than
+// it looked like it should be.
 const RECENT_LOCATION_CACHE_MS = 5 * 60 * 1000;
-const recentLocationCache = new Map();
+const RECENT_LOCATION_CACHE_KEY = "forecast-compare:recentLocationCache";
+
+function loadRecentLocationCache() {
+  try {
+    const raw = sessionStorage.getItem(RECENT_LOCATION_CACHE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveRecentLocationCache(cache) {
+  try {
+    sessionStorage.setItem(RECENT_LOCATION_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Storage unavailable or full — the buffer just won't persist this
+    // time, no different from it never having been cached at all.
+  }
+}
 
 // While a background refresh is running behind an already-displayed
 // cached snapshot, currentDisplayIsComplete (see renderHeadline) is set
@@ -4581,15 +4608,17 @@ const recentLocationCache = new Map();
 
 function cacheCurrentLocationSnapshot() {
   if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
-  recentLocationCache.set(state.postcode, {
-    actual: structuredClone(state.actual),
-    realSources: structuredClone(state.realSources),
-    hourly: structuredClone(state.hourly),
+  const cache = loadRecentLocationCache();
+  cache[state.postcode] = {
+    actual: state.actual,
+    realSources: state.realSources,
+    hourly: state.hourly,
     areaCode: state.areaCode,
     lat: state.lat,
     lon: state.lon,
     cachedAt: Date.now()
-  });
+  };
+  saveRecentLocationCache(cache);
 }
 
 // Restores state from a cached snapshot if one exists for this exact
@@ -4599,8 +4628,15 @@ function cacheCurrentLocationSnapshot() {
 // nothing usable (caller should fall back to its normal blank-and-load
 // behaviour).
 function restoreFromRecentLocationCache(pc) {
-  const snap = recentLocationCache.get(pc);
+  const cache = loadRecentLocationCache();
+  const snap = cache[pc];
   if (!snap || Date.now() - snap.cachedAt > RECENT_LOCATION_CACHE_MS) return false;
+  // structuredClone here (rather than using snap's own nested objects
+  // directly) matters: snap came straight out of JSON.parse, so it's
+  // already a fresh, unshared set of objects — but state.actual etc. get
+  // mutated in place by the fetch functions the moment a background
+  // refresh starts, and cloning keeps this restored copy from being
+  // affected if the SAME cache object were ever reused elsewhere.
   state.actual = structuredClone(snap.actual);
   state.realSources = structuredClone(snap.realSources);
   state.hourly = structuredClone(snap.hourly);
