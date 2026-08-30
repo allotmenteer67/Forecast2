@@ -869,8 +869,20 @@ function directionAtPeakHour(hourlyTimes, speedValues, directionValues, dayCount
   });
   return buckets.map(entries => {
     if (!entries.length) return null;
-    const peak = entries.reduce((a, b) => (b.speed > a.speed ? b : a));
-    return peak.direction ?? null;
+    // Prefer the day's genuine peak-speed hour, but if THAT specific
+    // hour's direction field happens to be missing — seen in practice on
+    // "today" specifically, where the model's direction field for the
+    // most recent hour(s) can lag slightly behind its own speed field
+    // and fill in a little later — fall back to the next-highest-speed
+    // hour that actually has one, rather than giving up on direction for
+    // the whole day just because its single busiest hour hasn't got a
+    // reading yet. This is exactly why the wind arrow could sit missing
+    // at "Now" and then appear later with no other change: the peak
+    // hour's direction backfilled upstream in the meantime.
+    const withDirection = entries
+      .filter(e => e.direction !== null && e.direction !== undefined)
+      .sort((a, b) => b.speed - a.speed);
+    return withDirection.length ? withDirection[0].direction : null;
   });
 }
 
@@ -1770,6 +1782,22 @@ function ensureFFVEmaSeeded(entry) {
   }
 }
 
+// Same recency-weighting, same reasoning, applied to the accuracy
+// figures (raw and corrected error) rather than the correction itself —
+// see recordFFVSample. Sharing FFV_EMA_ALPHA rather than a second
+// constant is deliberate: there's no reason accuracy should have a
+// shorter or longer memory than the correction it's judging.
+const ACCURACY_EMA_ALPHA = FFV_EMA_ALPHA;
+
+function ensureAccuracyEmaSeeded(entry) {
+  if (entry.emaErrorRaw === undefined) {
+    entry.emaErrorRaw = entry.count > 0 ? entry.sumAbsErrorRaw / entry.count : undefined;
+  }
+  if (entry.emaErrorCorrected === undefined) {
+    entry.emaErrorCorrected = (entry.scoredCount ?? 0) > 0 ? entry.sumAbsErrorCorrected / entry.scoredCount : undefined;
+  }
+}
+
 // Rain/Cloud/Wind are ratio quantities ("20% too high" is meaningful) so
 // a multiplicative correction (mean × FFV) is right for them. Temperature
 // in °C has no true zero — 20°C isn't "twice as hot" as 10°C — so a
@@ -1788,25 +1816,75 @@ function applyCorrection(mean, ffv, conditionName) {
   return isRatioCondition(conditionName) ? mean * ffv : mean + ffv;
 }
 
+// ---- In-memory read cache for the five per-area localStorage stores
+// (FFV, eligibility, underperform, app-accuracy, accuracy-trend) ----
+// Every one of these follows the exact same load-parses-JSON /
+// save-stringifies-JSON shape, and every headline/table render calls
+// several of them PER FORECASTER PER CONDITION — the Compare page alone
+// re-derives Eligibility, FFV, and Underperform status for up to 20
+// forecasters across 7 rows on every single render. None of that is a
+// problem in isolation, but the Date and Hour sliders fire a full
+// re-render on every "input" event while being dragged — not just on
+// release — so a drag gesture could trigger this same expensive
+// JSON.parse-from-localStorage fan-out dozens of times a second, on
+// stores that only grow over a testing session (FFV/eligibility keep
+// per-source-per-condition-per-day entries capped at 400). That's the
+// real explanation for sliders, the "back to Cloude" link, and Compare's
+// date scroller all feeling like they're wading through treacle: none of
+// them are doing anything expensive themselves, they're just triggering
+// a render that re-reads and re-parses megabytes' worth of localStorage
+// from scratch, repeatedly, for data that hasn't actually changed since
+// the last render.
+//
+// None of these five stores are ever mutated except through their own
+// saveXStore() below (bookkeeping after a location load, or the
+// Backfill action) — never read-modify-write via a stale intermediate,
+// and never touched directly by anything else (Restore backup replaces
+// localStorage wholesale but then forces a full page reload, which wipes
+// this cache along with everything else in memory). So a simple
+// per-areaCode cache, kept in sync by having saveXStore() write straight
+// into it, is safe: a read either returns the same object last handed
+// back for this areaCode (no disk hit at all), or — the first time this
+// areaCode is asked for, or after a hard reload — does the one real
+// parse and remembers it for next time.
+const _perAreaStoreCache = new Map(); // "<kind>:<areaCode>" -> parsed store object
+
+function cachedLoadStore(kind, areaCode, storageKey) {
+  const cacheKey = `${kind}:${areaCode}`;
+  if (_perAreaStoreCache.has(cacheKey)) return _perAreaStoreCache.get(cacheKey);
+  let store;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    store = raw ? JSON.parse(raw) : {};
+  } catch {
+    store = {};
+  }
+  _perAreaStoreCache.set(cacheKey, store);
+  return store;
+}
+
+function cachedSaveStore(kind, areaCode, storageKey, store) {
+  _perAreaStoreCache.set(`${kind}:${areaCode}`, store);
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(store));
+  } catch {
+    // Storage unavailable (e.g. private browsing) — this just won't
+    // persist to the NEXT page load, but the cache above still keeps it
+    // correct for the rest of THIS session rather than silently
+    // reverting every read back to empty.
+  }
+}
+
 function ffvStorageKey(areaCode) {
   return `forecast-compare:ffv:${areaCode}`;
 }
 
 function loadFFVStore(areaCode) {
-  try {
-    const raw = localStorage.getItem(ffvStorageKey(areaCode));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return cachedLoadStore("ffv", areaCode, ffvStorageKey(areaCode));
 }
 
 function saveFFVStore(areaCode, store) {
-  try {
-    localStorage.setItem(ffvStorageKey(areaCode), JSON.stringify(store));
-  } catch {
-    // Storage unavailable (e.g. private browsing) — FFV just won't persist.
-  }
+  cachedSaveStore("ffv", areaCode, ffvStorageKey(areaCode), store);
 }
 
 // ---- Eligibility: how many distinct CALENDAR DATES a source/condition
@@ -1826,20 +1904,11 @@ function eligibilityStorageKey(areaCode) {
 }
 
 function loadEligibilityStore(areaCode) {
-  try {
-    const raw = localStorage.getItem(eligibilityStorageKey(areaCode));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return cachedLoadStore("eligibility", areaCode, eligibilityStorageKey(areaCode));
 }
 
 function saveEligibilityStore(areaCode, store) {
-  try {
-    localStorage.setItem(eligibilityStorageKey(areaCode), JSON.stringify(store));
-  } catch {
-    // Storage unavailable — eligibility just won't persist between visits.
-  }
+  cachedSaveStore("eligibility", areaCode, eligibilityStorageKey(areaCode), store);
 }
 
 // ---- App's own accuracy ----
@@ -1861,27 +1930,33 @@ function appAccuracyStorageKey(areaCode) {
 }
 
 function loadAppAccuracyStore(areaCode) {
-  try {
-    const raw = localStorage.getItem(appAccuracyStorageKey(areaCode));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return cachedLoadStore("appAccuracy", areaCode, appAccuracyStorageKey(areaCode));
 }
 
 function saveAppAccuracyStore(areaCode, store) {
-  try {
-    localStorage.setItem(appAccuracyStorageKey(areaCode), JSON.stringify(store));
-  } catch {
-    // Storage unavailable — this just won't persist between visits.
-  }
+  cachedSaveStore("appAccuracy", areaCode, appAccuracyStorageKey(areaCode), store);
 }
 
+// Recency-weighted the same way FFV itself is (see FFV_EMA_ALPHA below) —
+// this used to be a plain lifetime average, which is exactly what the
+// 370-day simulation exposed as misleading: a source (or, here, the
+// app's own merge) that had a genuinely bad multi-month stretch would
+// barely recover for MONTHS afterward even once behaving perfectly,
+// because a few dozen good days can't meaningfully dilute a sum going
+// back to day one. An EMA answers "how's it doing lately" instead of
+// "how's it done ever", which is what "accuracy" should mean here.
 function recordAppAccuracySample(store, conditionName, day, forecastValue, actual) {
   if (forecastValue === null || forecastValue === undefined) return;
   store[conditionName] ??= {};
   const entry = (store[conditionName][day] ??= { count: 0, sumAbsError: 0 });
-  entry.sumAbsError += Math.abs(forecastValue - actual);
+  // An entry recorded before this change has count/sumAbsError but no
+  // emaError yet — seed it ONCE from the lifetime average so switching
+  // to EMA doesn't throw away everything already measured.
+  if (entry.emaError === undefined) {
+    entry.emaError = entry.count > 0 ? entry.sumAbsError / entry.count : undefined;
+  }
+  const error = Math.abs(forecastValue - actual);
+  entry.emaError = entry.emaError === undefined ? error : FFV_EMA_ALPHA * error + (1 - FFV_EMA_ALPHA) * entry.emaError;
   entry.count += 1;
 }
 
@@ -1891,13 +1966,20 @@ function appAccuracyStatsFor(conditionName) {
   const byDay = store[conditionName];
   if (!byDay) return null;
 
-  let count = 0, sumAbsError = 0;
+  // Each lead-day (1-7) has its own EMA — combined here as a
+  // count-weighted average across them, so a lead-day with barely any
+  // samples yet doesn't pull the combined figure as hard as one with a
+  // long track record.
+  let count = 0, weightedSum = 0;
   Object.values(byDay).forEach(entry => {
+    if (entry.emaError === undefined) {
+      entry.emaError = entry.count > 0 ? entry.sumAbsError / entry.count : undefined;
+    }
     count += entry.count;
-    sumAbsError += entry.sumAbsError;
+    if (entry.emaError !== undefined) weightedSum += entry.emaError * entry.count;
   });
   if (count === 0) return null;
-  return { count, avgError: sumAbsError / count };
+  return { count, avgError: weightedSum / count };
 }
 
 // ---- Accuracy over time ----
@@ -1918,20 +2000,11 @@ function accuracyTrendStorageKey(areaCode) {
 }
 
 function loadAccuracyTrendStore(areaCode) {
-  try {
-    const raw = localStorage.getItem(accuracyTrendStorageKey(areaCode));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return cachedLoadStore("accuracyTrend", areaCode, accuracyTrendStorageKey(areaCode));
 }
 
 function saveAccuracyTrendStore(areaCode, store) {
-  try {
-    localStorage.setItem(accuracyTrendStorageKey(areaCode), JSON.stringify(store));
-  } catch {
-    // Storage unavailable — trend history just won't persist between visits.
-  }
+  cachedSaveStore("accuracyTrend", areaCode, accuracyTrendStorageKey(areaCode), store);
 }
 
 // Appends today's snapshot for every condition that has an accuracy
@@ -2024,6 +2097,15 @@ function clampOffset(offset) {
 // correction have done on this one" rather than retroactively applying
 // the final FFV to old data. Scoring only starts once FFV_MIN_SAMPLES is
 // already met, since there's no meaningful correction before that.
+//
+// Both error figures are EMA-tracked (see FFV_EMA_ALPHA), same as the
+// correction itself — this used to be a plain lifetime average, which a
+// 370-day simulation showed was genuinely misleading: a source that had
+// one bad multi-month stretch stayed flagged as underperforming for
+// months after it had gone back to being perfectly fine, since a lifetime
+// sum can't be meaningfully diluted by a comparatively short good streak.
+// An EMA answers "how's it been doing lately", which is what both the
+// Accuracy table and the underperformance check actually want to know.
 function recordFFVSample(store, conditionName, sourceId, day, mean, actual, eligStore, dateKey) {
   if (!mean) return; // guards against divide-by-zero ratios
   if (eligStore) markDateSeen(eligStore, conditionName, sourceId, dateKey);
@@ -2039,14 +2121,17 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
     sumAbsErrorCorrected: 0
   });
   ensureFFVEmaSeeded(entry);
+  ensureAccuracyEmaSeeded(entry);
+
+  const rawError = Math.abs(mean - actual);
+  entry.emaErrorRaw = entry.emaErrorRaw === undefined ? rawError : ACCURACY_EMA_ALPHA * rawError + (1 - ACCURACY_EMA_ALPHA) * entry.emaErrorRaw;
 
   if (entry.count >= FFV_MIN_SAMPLES) {
     const currentFFV = isRatioCondition(conditionName) ? entry.emaRatio : entry.emaOffset;
-    entry.sumAbsErrorCorrected += Math.abs(applyCorrection(mean, currentFFV, conditionName) - actual);
+    const correctedError = Math.abs(applyCorrection(mean, currentFFV, conditionName) - actual);
+    entry.emaErrorCorrected = entry.emaErrorCorrected === undefined ? correctedError : ACCURACY_EMA_ALPHA * correctedError + (1 - ACCURACY_EMA_ALPHA) * entry.emaErrorCorrected;
     entry.scoredCount += 1;
   }
-
-  entry.sumAbsErrorRaw += Math.abs(mean - actual);
 
   const newRatio = clampRatio(actual / mean);
   const newOffset = clampOffset(actual - mean);
@@ -2055,8 +2140,9 @@ function recordFFVSample(store, conditionName, sourceId, day, mean, actual, elig
   entry.emaRatio = entry.count === 0 ? newRatio : FFV_EMA_ALPHA * newRatio + (1 - FFV_EMA_ALPHA) * entry.emaRatio;
   entry.emaOffset = entry.count === 0 ? newOffset : FFV_EMA_ALPHA * newOffset + (1 - FFV_EMA_ALPHA) * entry.emaOffset;
 
-  // Kept for eligibility gating and Raw-accuracy averaging — no longer
-  // used to derive the correction itself, but still needed elsewhere.
+  // Kept for eligibility gating and as the one-time seed for the EMAs
+  // above on an entry recorded before this change — no longer used to
+  // derive either the correction or the accuracy figures directly.
   entry.sumRatio += newRatio;
   entry.sumOffset += newOffset;
   entry.count += 1;
@@ -2160,21 +2246,28 @@ function accuracyStatsFor(source, conditionName) {
   const byDay = store[conditionName]?.[source.id];
   if (!byDay) return null;
 
-  let count = 0, sumAbsErrorRaw = 0, scoredCount = 0, sumAbsErrorCorrected = 0;
+  // Each lead-day (1-7) has its own EMA — combined here as a
+  // count-weighted average across them, same reasoning as
+  // appAccuracyStatsFor: a lead-day with barely any samples yet
+  // shouldn't pull the combined figure as hard as one with a long track
+  // record.
+  let count = 0, weightedRawSum = 0, scoredCount = 0, weightedCorrectedSum = 0;
   Object.values(byDay).forEach(entry => {
+    ensureAccuracyEmaSeeded(entry); // handles an entry untouched since this change
     count += entry.count;
-    sumAbsErrorRaw += entry.sumAbsErrorRaw ?? 0;
-    scoredCount += entry.scoredCount ?? 0;
-    sumAbsErrorCorrected += entry.sumAbsErrorCorrected ?? 0;
+    if (entry.emaErrorRaw !== undefined) weightedRawSum += entry.emaErrorRaw * entry.count;
+    const sCount = entry.scoredCount ?? 0;
+    scoredCount += sCount;
+    if (entry.emaErrorCorrected !== undefined) weightedCorrectedSum += entry.emaErrorCorrected * sCount;
   });
 
   if (count === 0) return null;
 
   return {
     count,
-    avgErrorRaw: sumAbsErrorRaw / count,
+    avgErrorRaw: weightedRawSum / count,
     scoredCount,
-    avgErrorCorrected: scoredCount > 0 ? sumAbsErrorCorrected / scoredCount : null
+    avgErrorCorrected: scoredCount > 0 ? weightedCorrectedSum / scoredCount : null
   };
 }
 
@@ -2300,20 +2393,11 @@ function underperformStorageKey(areaCode) {
 }
 
 function loadUnderperformStore(areaCode) {
-  try {
-    const raw = localStorage.getItem(underperformStorageKey(areaCode));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return cachedLoadStore("underperform", areaCode, underperformStorageKey(areaCode));
 }
 
 function saveUnderperformStore(areaCode, store) {
-  try {
-    localStorage.setItem(underperformStorageKey(areaCode), JSON.stringify(store));
-  } catch {
-    // Storage unavailable — flags just won't persist between visits.
-  }
+  cachedSaveStore("underperform", areaCode, underperformStorageKey(areaCode), store);
 }
 
 function daysSince(dateStr) {
@@ -4724,16 +4808,61 @@ if (headlineSwipeZone) {
   let swipeStartX = null;
   let swipeStartY = null;
   let swiping = false;
+  // The direction is now decided the MOMENT the threshold is first
+  // crossed (see pointermove) and frozen here, rather than recomputed
+  // from scratch at pointerup — see the comment on pointerup below for
+  // why recomputing it there was the actual "moves the wrong way" bug.
+  let swipeDirection = null;
+  // Pointer events only keep targeting the element they started on for
+  // as long as the pointer stays over it — without explicitly capturing
+  // it, a fast real-world flick that drifts even slightly outside the
+  // card's bounds (very easy near a screen edge, or once the finger
+  // moves diagonally enough) silently stops delivering pointermove/
+  // pointerup to this listener entirely. That left swipeStartX stuck
+  // non-null with no pointerup ever arriving to clear it — which is the
+  // actual explanation for BOTH reported symptoms: "unresponsive" was
+  // gestures getting silently dropped this way, and "moves the wrong
+  // way" was the NEXT gesture's dx being measured against that stale,
+  // leftover start position from the dropped one instead of its own.
+  // Capturing the pointer on down guarantees this element keeps
+  // receiving every move/up for that finger regardless of where it
+  // wanders, so a gesture always ends with a real pointerup or
+  // pointercancel to clean up after itself.
+  let swipePointerId = null;
+
+  function resetSwipeTracking() {
+    swipeStartX = null;
+    swipeStartY = null;
+    swiping = false;
+    swipeDirection = null;
+    swipePointerId = null;
+  }
 
   headlineSwipeZone.addEventListener("pointerdown", e => {
     if (e.target.closest(".hour-slider")) return; // the slider owns its own drag entirely
+    // A second finger touching down mid-gesture (very easy to do by
+    // accident while holding a phone) used to silently reset
+    // swipeStartX to the NEW finger's position, corrupting whatever the
+    // first finger's gesture was already tracking. Once a gesture is
+    // underway, only its own pointerId is ever listened to again until
+    // it ends.
+    if (swipePointerId !== null) return;
+    swipePointerId = e.pointerId;
     swipeStartX = e.clientX;
     swipeStartY = e.clientY;
     swiping = false;
+    swipeDirection = null;
+    try {
+      headlineSwipeZone.setPointerCapture(e.pointerId);
+    } catch {
+      // Pointer capture isn't available on every platform — the gesture
+      // still works via normal event delivery, just without the
+      // drift-outside-the-card protection described above.
+    }
   });
 
   headlineSwipeZone.addEventListener("pointermove", e => {
-    if (swipeStartX === null) return;
+    if (swipeStartX === null || e.pointerId !== swipePointerId) return;
     const dx = e.clientX - swipeStartX;
     const dy = e.clientY - swipeStartY;
     // Horizontal has to clearly dominate before this counts as a swipe
@@ -4742,24 +4871,24 @@ if (headlineSwipeZone) {
     // sheet normally — this only intervenes once movement is unambiguous).
     if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
       swiping = true;
+      // Freeze direction right here, at the moment the gesture first
+      // became unambiguous — see the note above on swipeDirection for
+      // why pointerup must NOT recompute this from a fresh dx.
+      swipeDirection = dx < 0 ? 1 : -1;
     }
   });
 
   headlineSwipeZone.addEventListener("pointerup", e => {
-    if (swipeStartX === null) return;
-    const dx = e.clientX - swipeStartX;
-    if (swiping) {
-      swipeToAdjacentPlace(dx < 0 ? 1 : -1);
+    if (swipeStartX === null || e.pointerId !== swipePointerId) return;
+    if (swiping && swipeDirection !== null) {
+      swipeToAdjacentPlace(swipeDirection);
     }
-    swipeStartX = null;
-    swipeStartY = null;
-    swiping = false;
+    resetSwipeTracking();
   });
 
-  headlineSwipeZone.addEventListener("pointercancel", () => {
-    swipeStartX = null;
-    swipeStartY = null;
-    swiping = false;
+  headlineSwipeZone.addEventListener("pointercancel", e => {
+    if (e.pointerId !== swipePointerId) return;
+    resetSwipeTracking();
   });
 }
 
@@ -4854,7 +4983,20 @@ if (placeChip) {
     }
   });
   document.addEventListener("click", event => {
-    if (placeMenu && !placeMenu.hidden && !placeMenu.contains(event.target) && event.target !== placeChip) {
+    // A tap on the chip almost never lands on the <button> element
+    // itself — it lands on the label span or the caret span inside it,
+    // since that's where the visible content (and so the actual tap
+    // target) is. event.target !== placeChip is true for exactly those
+    // taps, since the target is the CHILD span, not the button — so this
+    // "close if the click was outside the chip" check was true for the
+    // very same click that had just opened the menu a moment earlier in
+    // the listener above, closing it again in the same event cycle
+    // before it could ever actually be seen or used. Checking
+    // placeChip.contains(event.target) instead correctly treats a click
+    // anywhere inside the chip (button or either of its child spans) as
+    // "inside", so opening and the outside-close check agree with each
+    // other.
+    if (placeMenu && !placeMenu.hidden && !placeMenu.contains(event.target) && !placeChip.contains(event.target)) {
       closePlaceMenu();
     }
   });
