@@ -1109,7 +1109,7 @@ function moonPhaseSvg(date) {
   const cy = 12;
   const shadowCx = cx + shadowOffset * r;
   return (
-    `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">` +
+    `<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">` +
     `<defs><clipPath id="moonclip-${Math.round(fraction * 1000)}"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath></defs>` +
     `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#cfd8e3"/>` +
     `<circle cx="${shadowCx}" cy="${cy}" r="${r * 0.97}" fill="#1b2430" clip-path="url(#moonclip-${Math.round(fraction * 1000)})"/>` +
@@ -2904,8 +2904,8 @@ function pressureTrendArrowSvg({ delta, hours }) {
   const rotation = per3h >= 0 ? -angle : angle; // negative (CCW) = up-right when rising, positive (CW) = down-right when falling
   return (
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" style="transform: rotate(${rotation}deg)">` +
-    `<line x1="3" y1="12" x2="18" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
-    `<polygon points="18,7.5 24,12 18,16.5" fill="currentColor"/>` +
+    `<line x1="3" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="${weight.toFixed(1)}" stroke-linecap="round"/>` +
+    `<polygon points="19,8.25 24,12 19,15.75" fill="currentColor"/>` +
     `</svg>`
   );
 }
@@ -3129,11 +3129,13 @@ function renderHeadline() {
         // so even a perfectly centered CSS box rotates an off-center
         // picture. This SVG's geometry is centered on the viewBox
         // deliberately, so rotation has no font-rendering ambiguity to
-        // go wrong.
+        // go wrong. A single notched-kite shape (the same family as a
+        // map/compass "current heading" glyph) rather than a plain
+        // line-and-triangle — reads as more considered at a glance while
+        // staying just as plain and legible as before.
         arrow.innerHTML =
           '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">' +
-          '<line x1="12" y1="19" x2="12" y2="5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>' +
-          '<polygon points="12,3 7,9 17,9" fill="currentColor"/>' +
+          '<path d="M12 2.5 L18 20 L12 16 L6 20 Z" fill="currentColor"/>' +
           '</svg>';
         arrow.style.transform = `rotate(${rotation}deg)`;
         arrow.setAttribute("aria-hidden", "true");
