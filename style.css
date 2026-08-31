@@ -190,6 +190,11 @@ header p {
 .headline-value-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* if the arrow+compass genuinely can't fit alongside
+                       the value even after the fixes below, they drop to
+                       their own line rather than the value's own number
+                       ever splitting mid-way through — see .headline-value
+                       white-space below */
   gap: 6px;
   min-height: 31px; /* matches .headline-value's own line height, so the
                         row's height never depends on whether the wind
@@ -205,6 +210,17 @@ header p {
   font-weight: 700;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap; /* a two-part value like "19/32" must never break
+                           between the two numbers — if there's no room,
+                           the row above wraps the arrow+compass instead */
+}
+
+/* Same idea as .sheet-readout-value.is-compact: Wind's "speed/gust" form
+   is more text than a plain single number, and needed a little help to
+   actually fit on one line alongside the direction arrow and compass
+   letters in this cell's half-width column, rather than wrapping. */
+.headline-value.is-compact {
+  font-size: 21px;
 }
 
 .headline-direction {

@@ -3092,7 +3092,15 @@ function renderHeadline() {
       if (!pair) {
         valueEl.textContent = "–";
       } else if (pair.gust !== null && pair.gust > pair.speed + GUST_NOTABLE_MARGIN_MPH) {
-        valueEl.textContent = `${formatValue(pair.speed, "wind")} / ${formatValue(pair.gust, "wind")}`;
+        // No spaces around the slash, and a slightly smaller size (see
+        // .headline-value.is-compact) — the same treatment the hourly
+        // sheet's readout already gives Wind and Dew Point for the exact
+        // same reason: two numbers plus the arrow and compass letters is
+        // more text than this cell's half-width column can fit at the
+        // normal size, and it was wrapping mid-number ("19 /" / "32")
+        // rather than staying on one line.
+        valueEl.textContent = `${formatValue(pair.speed, "wind")}/${formatValue(pair.gust, "wind")}`;
+        valueEl.classList.add("is-compact");
       } else {
         valueEl.textContent = formatValue(pair.speed, "wind");
       }
