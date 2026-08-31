@@ -446,6 +446,8 @@ button {
 }
 
 input[type="text"],
+input[type="number"],
+textarea,
 #postcode,
 select {
   width: 100%;
@@ -489,9 +491,16 @@ fieldset {
   margin: 0;
 }
 
+/* A little extra clearance at the top of every legend — the same
+   iPadOS windowed/Split View window-control overlap documented on
+   .title-bar below can land over whichever legend happens to scroll to
+   the very top of the viewport, not just the page's own title, so this
+   protection needs to be everywhere a legend can appear rather than
+   just the one spot it was first noticed. */
 legend {
   padding: 0;
   margin-bottom: 8px;
+  padding-top: 6px;
 }
 
 .checks {

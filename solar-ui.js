@@ -135,7 +135,22 @@ if (form) {
 
       const tilt = numField("solarTilt", 30);
       const orientation = field("solarOrientation") || "S";
-      const azimuth = AZIMUTH_FOR_COMPASS[orientation] ?? 0;
+      const exactHeadingRaw = field("solarAzimuthExact");
+      let azimuth;
+      if (exactHeadingRaw !== "" && Number.isFinite(parseFloat(exactHeadingRaw))) {
+        // Standard compass bearing (0°=North, 90°=East, 180°=South,
+        // clockwise) converted to Open-Meteo's own azimuth convention
+        // (0°=South, negative=east, positive=west — see the note at the
+        // top of solar.js). A plain 180° offset does the conversion;
+        // normalised back into (-180, 180] afterwards since Open-Meteo's
+        // examples use that range rather than 0-360.
+        let compassBearing = ((parseFloat(exactHeadingRaw) % 360) + 360) % 360;
+        azimuth = compassBearing - 180;
+        if (azimuth > 180) azimuth -= 360;
+        if (azimuth <= -180) azimuth += 360;
+      } else {
+        azimuth = AZIMUTH_FOR_COMPASS[orientation] ?? 0;
+      }
       const systemKw = numField("solarSystemKw", 4);
       const systemLossPct = numField("solarSystemLoss", 14);
       const tempCoeffPctPerC = numField("solarTempCoeff", -0.4);
