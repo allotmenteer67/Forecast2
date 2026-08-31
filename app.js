@@ -3195,6 +3195,27 @@ function formatConverted(displayValue, conditionName) {
   return Math.round(displayValue).toString();
 }
 
+// The four y-axis gridlines on the hourly graphs are spaced by whatever
+// niceStep() comes up with for the data's own range — which, on a very
+// light rain day (or any other unusually flat range), can end up far
+// smaller than the one decimal place formatConverted() normally uses.
+// Two adjacent gridlines (say 0.04mm and 0.06mm) then both round to the
+// same displayed text ("0.0"), which is exactly what showed up as
+// apparently-duplicate labels. This adds decimal places on top of
+// formatConverted's own baseline, but only as many as the step itself
+// actually needs to keep every gridline visually distinct.
+function decimalsNeededForStep(step) {
+  if (!(step > 0)) return 0;
+  return Math.max(0, -Math.floor(Math.log10(step)));
+}
+
+function formatAxisTick(value, conditionName, step) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "–";
+  const baseline = formatConverted(0, conditionName).includes(".") ? formatConverted(0, conditionName).split(".")[1].length : 0;
+  const decimals = Math.min(3, Math.max(baseline, decimalsNeededForStep(step)));
+  return value.toFixed(decimals);
+}
+
 function sheetClockLabel(iso) {
   const d = new Date(iso);
   const time = `${String(d.getHours()).padStart(2, "0")}:00`;
@@ -3275,7 +3296,7 @@ function sheetRenderYAxis(svg, minValue, maxValue, decimals, conditionName, topP
     const y = SHEET_H - SHEET_PAD_B - ((value - minValue) / (topValue - minValue)) * plotH;
     svg.appendChild(sheetSvgEl("line", { x1: SHEET_PAD_L, x2: SHEET_W - 6, y1: y, y2: y, class: "graph-gridline" }));
     const label = sheetSvgEl("text", { x: SHEET_PAD_L - 6, y: y + 3, class: "graph-axis-value", "text-anchor": "end" });
-    label.textContent = formatConverted(value, conditionName);
+    label.textContent = formatAxisTick(value, conditionName, step);
     svg.appendChild(label);
   });
   return { topValue, minValue, plotH };

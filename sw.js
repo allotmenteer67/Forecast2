@@ -17,8 +17,11 @@ const SHELL_FILES = [
   "compare.html",
   "settings.html",
   "help.html",
+  "solar.html",
   "app.js",
   "settings.js",
+  "solar.js",
+  "solar-ui.js",
   "style.css",
   "manifest.json"
 ];

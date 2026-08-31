@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Solar — Cloude</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Solar</h1>
+    <p>What your panels would generate — using real historical or forecast irradiance for your own location, not a generic regional average.</p>
+  </header>
+
+  <form class="controls" id="solarForm">
+    <div class="condition-box">
+      <label for="solarLocation">Location</label>
+      <div class="location-row">
+        <input type="text" id="solarLocation" placeholder="Postcode or place name" autocomplete="off">
+      </div>
+    </div>
+
+    <fieldset>
+      <legend>Look at</legend>
+      <div class="checks">
+        <label class="check"><input type="radio" name="solarMode" id="modeHistorical" checked> Last year (historical)</label>
+        <label class="check"><input type="radio" name="solarMode" id="modeForecast"> Next 7 days (forecast)</label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Your system</legend>
+      <div class="checks">
+        <label>System size (kWp)
+          <input type="number" id="solarSystemKw" value="4" min="0.1" step="0.1">
+        </label>
+        <label>Tilt (degrees from flat)
+          <input type="number" id="solarTilt" value="30" min="0" max="90" step="1">
+        </label>
+        <label>Facing
+          <select id="solarOrientation">
+            <option value="S" selected>South</option>
+            <option value="SW">South-west</option>
+            <option value="SE">South-east</option>
+            <option value="W">West</option>
+            <option value="E">East</option>
+            <option value="NW">North-west</option>
+            <option value="NE">North-east</option>
+            <option value="N">North</option>
+          </select>
+        </label>
+        <label>System losses (%)
+          <input type="number" id="solarSystemLoss" value="14" min="0" max="50" step="1">
+        </label>
+        <label>Temperature coefficient (%/°C)
+          <input type="number" id="solarTempCoeff" value="-0.4" step="0.05">
+        </label>
+        <label>System age (years)
+          <input type="number" id="solarSystemAge" value="0" min="0" step="1">
+        </label>
+        <label>Degradation (%/year)
+          <input type="number" id="solarDegradation" value="0.5" min="0" step="0.05">
+        </label>
+      </div>
+      <p class="note">Defaults are typical rules-of-thumb — all editable if you have better figures from your own installer or panel spec sheet.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Shading (roughly, by season)</legend>
+      <div class="checks">
+        <label>Winter — % of array shaded
+          <input type="number" id="shade_winter_pct" value="0" min="0" max="100" step="5">
+        </label>
+        <label>Winter — hours/day shaded
+          <input type="number" id="shade_winter_hours" value="0" min="0" max="16" step="0.5">
+        </label>
+        <label>Spring — % of array shaded
+          <input type="number" id="shade_spring_pct" value="0" min="0" max="100" step="5">
+        </label>
+        <label>Spring — hours/day shaded
+          <input type="number" id="shade_spring_hours" value="0" min="0" max="16" step="0.5">
+        </label>
+        <label>Summer — % of array shaded
+          <input type="number" id="shade_summer_pct" value="0" min="0" max="100" step="5">
+        </label>
+        <label>Summer — hours/day shaded
+          <input type="number" id="shade_summer_hours" value="0" min="0" max="16" step="0.5">
+        </label>
+        <label>Autumn — % of array shaded
+          <input type="number" id="shade_autumn_pct" value="0" min="0" max="100" step="5">
+        </label>
+        <label>Autumn — hours/day shaded
+          <input type="number" id="shade_autumn_hours" value="0" min="0" max="16" step="0.5">
+        </label>
+      </div>
+      <p class="note">A rough estimate, not a real shadow model — e.g. a tree that shades 50% of the array for 3 hours a day in summer.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Household use &amp; pricing (optional — leave blank to skip the financial estimate)</legend>
+      <div class="checks">
+        <label>Buy price (p/kWh)
+          <input type="number" id="solarBuyPrice" value="0" min="0" step="0.1">
+        </label>
+        <label>Sell price (p/kWh)
+          <input type="number" id="solarSellPrice" value="0" min="0" step="0.1">
+        </label>
+      </div>
+      <div class="checks">
+        <label class="check"><input type="radio" name="consumptionMode" id="consumptionModeSimple" checked> Annual total + rough split</label>
+        <label class="check"><input type="radio" name="consumptionMode" id="consumptionModeCsv"> Paste smart-meter data</label>
+      </div>
+      <div id="simpleConsumptionFields" class="checks">
+        <label>Annual consumption (kWh)
+          <input type="number" id="solarAnnualConsumption" value="3000" min="0" step="50">
+        </label>
+        <label>% used during the day (7am–7pm)
+          <input type="number" id="solarDaytimePct" value="35" min="0" max="100" step="5">
+        </label>
+      </div>
+      <div id="csvConsumptionFields" hidden>
+        <label for="solarConsumptionCsv">Paste half-hourly or hourly readings (timestamp, kWh — one per line)</label>
+        <textarea id="solarConsumptionCsv" class="backup-textarea" placeholder="2025-01-01T00:00,0.18&#10;2025-01-01T00:30,0.15&#10;…"></textarea>
+        <p class="note">For a fair comparison against a historical lookup, use readings from the same calendar year (last year).</p>
+      </div>
+    </fieldset>
+
+    <button type="submit">Calculate</button>
+    <p class="note" id="solarStatus"></p>
+  </form>
+
+  <div class="comparison" id="solarResults" hidden></div>
+
+  <nav class="bottom-nav">
+    <a href="index.html">Cloude</a>
+    <a href="compare.html">Compare</a>
+    <a href="settings.html">Settings</a>
+    <a href="help.html">Help</a>
+  </nav>
+</div>
+
+<script src="app.js"></script>
+<script src="solar.js"></script>
+<script src="solar-ui.js"></script>
+</body>
+</html>
