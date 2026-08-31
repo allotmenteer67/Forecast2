@@ -50,7 +50,9 @@ const THEMES = [
   { id: "gold", name: "Gold" },
   { id: "sand", name: "Sand" },
   { id: "red", name: "Red" },
-  { id: "blue", name: "Blue" }
+  { id: "blue", name: "Blue" },
+  { id: "teal", name: "Teal" },
+  { id: "olive", name: "Olive" }
 ];
 
 function loadTheme() {
@@ -3092,15 +3094,9 @@ function renderHeadline() {
       if (!pair) {
         valueEl.textContent = "–";
       } else if (pair.gust !== null && pair.gust > pair.speed + GUST_NOTABLE_MARGIN_MPH) {
-        // No spaces around the slash, and a slightly smaller size (see
-        // .headline-value.is-compact) — the same treatment the hourly
-        // sheet's readout already gives Wind and Dew Point for the exact
-        // same reason: two numbers plus the arrow and compass letters is
-        // more text than this cell's half-width column can fit at the
-        // normal size, and it was wrapping mid-number ("19 /" / "32")
-        // rather than staying on one line.
+        // No spaces around the slash, so the two numbers read as one
+        // compact figure rather than wrapping mid-number ("19 /" / "32").
         valueEl.textContent = `${formatValue(pair.speed, "wind")}/${formatValue(pair.gust, "wind")}`;
-        valueEl.classList.add("is-compact");
       } else {
         valueEl.textContent = formatValue(pair.speed, "wind");
       }
@@ -3140,15 +3136,14 @@ function renderHeadline() {
         arrow.style.transform = `rotate(${rotation}deg)`;
         arrow.setAttribute("aria-hidden", "true");
 
-        const dirEl = document.createElement("small");
-        dirEl.className = "headline-direction";
-        dirEl.textContent = compass;
-
-        // Same row as the value, not a new line below it — otherwise the
-        // cell's height itself changes depending on whether direction
-        // data happens to be available, causing the whole grid to jump
-        // as the slider moves between states.
-        valueRow.append(arrow, dirEl);
+        // Just the arrow, not the compass letters — the arrow alone
+        // already encodes direction at a glance, and dropping the text
+        // label leaves the value free to sit at full size instead of the
+        // smaller is-compact treatment this cell used to need to fit
+        // everything in. The letters are still available on the hourly
+        // graph's scrubber readout for anyone who wants the precise
+        // heading.
+        valueRow.append(arrow);
       }
     }
 
@@ -3367,11 +3362,21 @@ function sheetRenderWind(hourTimes, speedsDisplay, gustsDisplay, dirs) {
   const { wrap, svg, count } = sheetBaseSvg(hourTimes);
   const { topValue, plotH } = sheetRenderYAxis(svg, 0, Math.max(0.001, ...speedsDisplay, ...gustsDisplay), false, "wind", WIND_TOP_PAD);
 
-  // Gust drawn first (and dashed) so the solid speed line sits visually
-  // on top of it — gust is the secondary/context figure here, speed is
-  // still the primary reading the cell and scrubber dot are built
-  // around. Model gust is itself an hourly figure like everything else
-  // in this graph, so a single sharp convective gust can still get
+  // Speed's own area fill, drawn first so it sits at the back of the
+  // stack — same treatment every other line graph gets (see
+  // sheetRenderLine): a solid fill under the primary line, in its own
+  // colour at low opacity. Filled from speed only, not gust — gust is
+  // the dashed secondary context line, filling under it too would just
+  // muddy the one fill this graph needs.
+  const pts = speedsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
+  const areaPath = `M${pts[0][0]},${SHEET_H - SHEET_PAD_B} ` + pts.map(p => `L${p[0]},${p[1]}`).join(" ") + ` L${pts[pts.length - 1][0]},${SHEET_H - SHEET_PAD_B} Z`;
+  svg.appendChild(sheetSvgEl("path", { d: areaPath, fill: "#4c6a58", opacity: 0.12 }));
+
+  // Gust drawn next (and dashed) so the solid speed line still sits
+  // visually on top of it — gust is the secondary/context figure here,
+  // speed is still the primary reading the cell and scrubber dot are
+  // built around. Model gust is itself an hourly figure like everything
+  // else in this graph, so a single sharp convective gust can still get
   // smoothed into its hour rather than standing out as a spike — worth
   // knowing, not a reason to leave it off.
   const gustPts = gustsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
@@ -3381,7 +3386,6 @@ function sheetRenderWind(hourTimes, speedsDisplay, gustsDisplay, dirs) {
     "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "4 3"
   }));
 
-  const pts = speedsDisplay.map((v, i) => [sheetXFor(i, count), SHEET_H - SHEET_PAD_B - (v / topValue) * plotH]);
   const linePath = "M" + pts.map(p => p.join(",")).join(" L");
   svg.appendChild(sheetSvgEl("path", { d: linePath, fill: "none", stroke: "#4c6a58", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
 

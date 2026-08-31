@@ -72,6 +72,24 @@
   --headline-bg: #cfe0ee;
 }
 
+:root[data-theme="teal"] {
+  background: #eef7f6;
+  --accent: #2b7a78;
+  --accent-dark: #164e4c;
+  --accent-light: #dbeceb;
+  --accent-muted: #3f6f6d;
+  --headline-bg: #bfe0de;
+}
+
+:root[data-theme="olive"] {
+  background: #f6f7ec;
+  --accent: #6f7a3a;
+  --accent-dark: #454e1f;
+  --accent-light: #eaedd6;
+  --accent-muted: #6d7a4a;
+  --headline-bg: #dde3b3;
+}
+
 body {
   margin: 0;
 }
@@ -214,20 +232,7 @@ header p {
   font-variant-numeric: tabular-nums;
   white-space: nowrap; /* a two-part value like "19/32" must never break
                            between the two numbers — if there's no room,
-                           the row above wraps the arrow+compass instead */
-}
-
-/* Same idea as .sheet-readout-value.is-compact: Wind's "speed/gust" form
-   is more text than a plain single number, and needed a little help to
-   actually fit on one line alongside the direction arrow and compass
-   letters in this cell's half-width column, rather than wrapping. */
-.headline-value.is-compact {
-  font-size: 23px;
-}
-
-.headline-direction {
-  color: var(--accent-muted);
-  font-size: 11px;
+                           the row above wraps the arrow instead */
 }
 
 .headline-date {
@@ -1565,3 +1570,5 @@ footer {
 .theme-swatch[data-theme="sand"] { background: #a97142; }
 .theme-swatch[data-theme="red"] { background: #b0463f; }
 .theme-swatch[data-theme="blue"] { background: #3d6d95; }
+.theme-swatch[data-theme="teal"] { background: #2b7a78; }
+.theme-swatch[data-theme="olive"] { background: #6f7a3a; }
