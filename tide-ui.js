@@ -1,0 +1,406 @@
+// Tide UI — DOM, rendering, and the swipe gesture for saved tide
+// locations. Kept separate from tide.js's maths, the same split
+// solar.js/solar-ui.js already use. Loaded after both app.js and
+// tide.js on index.html, so it can call into either freely.
+
+const tideRow = document.getElementById("tideRow");
+const tideDots = document.getElementById("tideDots");
+
+let tideRenderToken = 0; // bumped on every location switch so a
+                          // slow-to-arrive backfill for a PREVIOUS
+                          // location can't overwrite the current one's
+                          // display — the exact "supersession" pattern
+                          // resetForLocationChange already uses for the
+                          // main weather fetch.
+
+function currentTideLocation() {
+  const locations = loadTideLocations();
+  if (!locations.length) return null;
+  const currentId = loadCurrentTideLocationId();
+  return locations.find(l => l.id === currentId) || locations[0];
+}
+
+async function renderTideRow() {
+  if (!tideRow) return;
+  const toggles = loadHeadlineToggles();
+  if (!toggles.tide) {
+    tideRow.hidden = true;
+    return;
+  }
+
+  const location = currentTideLocation();
+  if (!location) {
+    tideRow.hidden = true;
+    return;
+  }
+  tideRow.hidden = false;
+
+  const myToken = ++tideRenderToken;
+  tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><span class="tide-row-value">Loading…</span>`;
+
+  let built;
+  try {
+    built = await getOrBuildTideFit(location.station);
+  } catch {
+    built = null;
+  }
+  if (myToken !== tideRenderToken) return; // superseded by a later switch
+
+  if (!built) {
+    tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><span class="tide-row-value">Not available right now</span>`;
+    return;
+  }
+
+  const fudge = loadTideFudge(location.station.id);
+  const nowHours = (Date.now() - Date.parse(built.epochIso)) / 3600000;
+  const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
+    .filter(e => e.hours >= nowHours)
+    .slice(0, 4);
+
+  const partsHtml = events.map(e => {
+    const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
+    const level = applyTideFudge(e.level, fudge);
+    const timeStr = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${level.toFixed(1)}m</small></span>`;
+  }).join("");
+
+  tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><div class="tide-row-events">${partsHtml}</div>`;
+  renderTideDots();
+}
+
+function renderTideDots() {
+  if (!tideDots) return;
+  tideDots.innerHTML = "";
+  const locations = loadTideLocations();
+  if (locations.length < 2) return;
+  const currentId = loadCurrentTideLocationId();
+  locations.forEach(loc => {
+    const icon = document.createElement("img");
+    icon.src = "icon-192.png";
+    icon.alt = "";
+    icon.className = "place-dot" + (loc.id === currentId ? " is-current" : "");
+    tideDots.appendChild(icon);
+  });
+}
+
+function switchToAdjacentTideLocation(direction) {  const locations = loadTideLocations();
+  if (locations.length < 2) return;
+  const currentId = loadCurrentTideLocationId();
+  const currentIndex = locations.findIndex(l => l.id === currentId);
+  if (currentIndex === -1) return;
+  const nextIndex = (currentIndex + direction + locations.length) % locations.length;
+  saveCurrentTideLocationId(locations[nextIndex].id);
+  renderTideRow();
+}
+
+// ---- Swipe gesture ----
+// A deliberately separate pointer-tracking zone from the weather
+// headline's own swipe (see swipeToAdjacentPlace in app.js) — tide
+// locations are an independent list, so this needs its own
+// start/direction/pointerId state rather than sharing the weather
+// swipe's variables, but otherwise mirrors that implementation exactly
+// (including the pointer-capture and per-finger tracking fixes that
+// swipe needed this session — no reason for this one to start without
+// them and rediscover the same bugs later).
+if (tideRow) {
+  const SWIPE_THRESHOLD_PX = 32;
+  let startX = null, startY = null, swiping = false, direction = null, pointerId = null;
+
+  function reset() {
+    startX = null; startY = null; swiping = false; direction = null; pointerId = null;
+  }
+
+  tideRow.addEventListener("pointerdown", e => {
+    if (pointerId !== null) return;
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    swiping = false;
+    direction = null;
+    try {
+      tideRow.setPointerCapture(e.pointerId);
+    } catch {
+      // still works via normal event delivery without capture
+    }
+  });
+
+  tideRow.addEventListener("pointermove", e => {
+    if (startX === null || e.pointerId !== pointerId) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      swiping = true;
+      direction = dx < 0 ? 1 : -1;
+    }
+  });
+
+  tideRow.addEventListener("pointerup", e => {
+    if (startX === null || e.pointerId !== pointerId) return;
+    if (swiping && direction !== null) {
+      switchToAdjacentTideLocation(direction);
+    } else {
+      openTideSheet();
+    }
+    reset();
+  });
+
+  tideRow.addEventListener("pointercancel", e => {
+    if (e.pointerId !== pointerId) return;
+    reset();
+  });
+}
+
+// ---- Tap-to-open sheet: continuous curve with peak/trough labels ----
+// Reuses the SAME sheet DOM/backdrop/close mechanism as the hourly
+// weather graphs (see openHourlySheet/closeHourlySheet in app.js) —
+// simplest, most consistent option, and closeHourlySheet is already
+// generic enough to close this one too. The rendering itself is
+// separate (openHourlySheet's chain is built entirely around
+// state.hourly, which tide doesn't use at all), so this doesn't touch
+// that function.
+const TIDE_SHEET_WINDOW_PAST_HOURS = 24;
+const TIDE_SHEET_WINDOW_FUTURE_HOURS = 72;
+
+async function openTideSheet() {
+  if (!sheet) return;
+  const location = currentTideLocation();
+  if (!location) return;
+
+  sheetTitle.textContent = `Tide — ${location.label}`;
+  sheetRange.textContent = "";
+  sheetReadout.hidden = true;
+  sheetBody.innerHTML = "";
+  sheetFootnote.textContent = "";
+
+  sheet.hidden = false;
+  requestAnimationFrame(() => {
+    sheetBackdrop.classList.add("is-open");
+    sheet.classList.add("is-open");
+  });
+
+  const loading = document.createElement("p");
+  loading.className = "sheet-empty";
+  loading.textContent = "Loading tide data…";
+  sheetBody.appendChild(loading);
+
+  let built;
+  try {
+    built = await getOrBuildTideFit(location.station);
+  } catch {
+    built = null;
+  }
+  sheetBody.innerHTML = "";
+  if (!built) {
+    const empty = document.createElement("p");
+    empty.className = "sheet-empty";
+    empty.textContent = "Tide data isn't available right now.";
+    sheetBody.appendChild(empty);
+    return;
+  }
+
+  const fudge = loadTideFudge(location.station.id);
+  const nowHours = (Date.now() - Date.parse(built.epochIso)) / 3600000;
+  const startHours = nowHours - TIDE_SHEET_WINDOW_PAST_HOURS;
+  const endHours = nowHours + TIDE_SHEET_WINDOW_FUTURE_HOURS;
+
+  sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours));
+
+  const showBoth = fudge !== null && fudge !== undefined && Math.abs(fudge) > 0.01;
+  sheetFootnote.textContent = showBoth
+    ? `Corrected by ${fudge >= 0 ? "+" : ""}${fudge.toFixed(2)}m (this station's own learned adjustment). Raw prediction shown as the fainter line.`
+    : "Self-derived prediction from this station's own tide-gauge history — see Help for how this compares to an official prediction.";
+}
+
+function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
+  const width = 340, height = 220, padL = 40, padR = 10, padT = 16, padB = 34;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const stepHours = (endHours - startHours) / 200;
+  const rawPts = [];
+  for (let h = startHours; h <= endHours; h += stepHours) {
+    rawPts.push({ hours: h, level: predictTideLevel(fit, h) });
+  }
+  const correctedPts = rawPts.map(p => ({ hours: p.hours, level: applyTideFudge(p.level, fudge) }));
+
+  const allLevels = correctedPts.map(p => p.level).concat(rawPts.map(p => p.level));
+  const minLevel = Math.min(...allLevels), maxLevel = Math.max(...allLevels);
+  const levelRange = Math.max(0.5, maxLevel - minLevel);
+
+  const xFor = h => padL + ((h - startHours) / (endHours - startHours)) * plotW;
+  const yFor = level => padT + plotH - ((level - minLevel) / levelRange) * plotH;
+
+  const svg = sheetSvgEl("svg", { viewBox: `0 0 ${width} ${height}`, class: "graph-svg" });
+
+  [0, 0.5, 1].forEach(frac => {
+    const y = padT + plotH * (1 - frac);
+    svg.appendChild(sheetSvgEl("line", { x1: padL, x2: width - padR, y1: y, y2: y, class: "graph-gridline" }));
+    const label = svg.appendChild(sheetSvgEl("text", { x: padL - 6, y: y + 3, class: "graph-axis-value", "text-anchor": "end" }));
+    label.textContent = (minLevel + levelRange * frac).toFixed(1);
+  });
+  const nowX = xFor(nowHours);
+  svg.appendChild(sheetSvgEl("line", { x1: nowX, x2: nowX, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "3 3" }));
+
+  const rawPath = "M" + rawPts.map(p => `${xFor(p.hours)},${yFor(p.level)}`).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: rawPath, fill: "none", stroke: "#5b6b7a", "stroke-width": 1.5, opacity: 0.4 }));
+
+  const correctedPath = "M" + correctedPts.map(p => `${xFor(p.hours)},${yFor(p.level)}`).join(" L");
+  svg.appendChild(sheetSvgEl("path", { d: correctedPath, fill: "none", stroke: "#2b7a78", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+
+  const events = findTideExtremes(fit, startHours, endHours);
+  events.forEach(e => {
+    const level = applyTideFudge(e.level, fudge);
+    const x = xFor(e.hours);
+    const y = yFor(level);
+    svg.appendChild(sheetSvgEl("circle", { cx: x, cy: y, r: 3.5, fill: "#2b7a78" }));
+    const labelY = e.type === "high" ? y - 10 : y + 18;
+    const label = svg.appendChild(sheetSvgEl("text", {
+      x, y: labelY, class: "graph-axis-value", "text-anchor": "middle"
+    }));
+    label.textContent = `${level.toFixed(1)}m`;
+    const when = new Date(Date.parse(epochIso) + e.hours * 3600000);
+    const timeLabel = svg.appendChild(sheetSvgEl("text", {
+      x, y: labelY + (e.type === "high" ? -11 : 22), class: "graph-axis-label", "text-anchor": "middle"
+    }));
+    timeLabel.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  });
+
+  let lastDay = null;
+  for (let h = startHours; h <= endHours; h += 6) {
+    const when = new Date(Date.parse(epochIso) + h * 3600000);
+    const dayKey = when.toDateString();
+    if (dayKey !== lastDay) {
+      lastDay = dayKey;
+      const x = xFor(h);
+      const label = svg.appendChild(sheetSvgEl("text", { x, y: height - 8, class: "graph-axis-label", "text-anchor": "start" }));
+      label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    }
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap";
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+// ---- Settings page: manage saved tide locations ----
+const tideLocationsList = document.getElementById("tideLocationsList");
+const tideLocationInput = document.getElementById("tideLocationInput");
+const addTideLocationButton = document.getElementById("addTideLocationButton");
+const tideLocationStatus = document.getElementById("tideLocationStatus");
+
+function setTideLocationStatus(message, isError) {
+  if (!tideLocationStatus) return;
+  tideLocationStatus.textContent = message || "";
+  tideLocationStatus.classList.toggle("is-error", !!isError);
+}
+
+function renderTideLocationsList() {
+  if (!tideLocationsList) return;
+  tideLocationsList.innerHTML = "";
+  const locations = loadTideLocations();
+  const currentId = loadCurrentTideLocationId();
+
+  if (!locations.length) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "No saved tide locations yet — add one below.";
+    tideLocationsList.appendChild(empty);
+    return;
+  }
+
+  locations.forEach(loc => {
+    const row = document.createElement("div");
+    row.className = "place-row" + (loc.id === currentId ? " is-current" : "");
+
+    const info = document.createElement("div");
+    info.className = "place-row-info";
+
+    const nameLine = document.createElement("div");
+    nameLine.className = "place-row-name-line";
+
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.className = "place-row-label";
+    labelInput.value = loc.label;
+    labelInput.maxLength = 24;
+    labelInput.setAttribute("aria-label", `Name for ${loc.label}`);
+    labelInput.addEventListener("change", () => {
+      loc.label = labelInput.value.trim() || loc.station.label;
+      labelInput.value = loc.label;
+      saveTideLocations(locations);
+    });
+    nameLine.appendChild(labelInput);
+
+    const stationSub = document.createElement("small");
+    stationSub.className = "place-row-postcode";
+    stationSub.textContent = `nearest gauge: ${loc.station.label} (${loc.station.distanceKm.toFixed(0)}km)`;
+    nameLine.appendChild(stationSub);
+
+    info.appendChild(nameLine);
+    row.appendChild(info);
+
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "place-row-switch";
+    switchBtn.textContent = loc.id === currentId ? "Current" : "Switch";
+    switchBtn.disabled = loc.id === currentId;
+    switchBtn.addEventListener("click", () => {
+      saveCurrentTideLocationId(loc.id);
+      renderTideLocationsList();
+    });
+    row.appendChild(switchBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "place-row-remove";
+    removeBtn.setAttribute("aria-label", `Remove ${loc.label}`);
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => {
+      saveTideLocations(loadTideLocations().filter(saved => saved.id !== loc.id));
+      if (currentId === loc.id) {
+        const remaining = loadTideLocations();
+        saveCurrentTideLocationId(remaining.length ? remaining[0].id : null);
+      }
+      renderTideLocationsList();
+    });
+    row.appendChild(removeBtn);
+
+    tideLocationsList.appendChild(row);
+  });
+}
+
+if (addTideLocationButton) {
+  addTideLocationButton.addEventListener("click", async () => {
+    const input = (tideLocationInput?.value || "").trim();
+    if (!input) {
+      setTideLocationStatus("Enter a postcode or place name first.", true);
+      return;
+    }
+    setTideLocationStatus("Looking up location…", false);
+    try {
+      const resolved = await resolveLocation(input);
+      const station = nearestTideStation(resolved.lat, resolved.lon);
+      const locations = loadTideLocations();
+      const newLocation = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        label: resolved.label || input,
+        station
+      };
+      locations.push(newLocation);
+      saveTideLocations(locations);
+      if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
+      if (tideLocationInput) tideLocationInput.value = "";
+      setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
+      renderTideLocationsList();
+    } catch (err) {
+      if (err && err.name === "AmbiguousLocationError") {
+        setTideLocationStatus(`That place name matches more than one UK location — try adding a county.`, true);
+      } else {
+        setTideLocationStatus(err.message || "Couldn't look up that location.", true);
+      }
+    }
+  });
+}
+
+if (tideLocationsList) renderTideLocationsList();

@@ -22,6 +22,8 @@ const SHELL_FILES = [
   "settings.js",
   "solar.js",
   "solar-ui.js",
+  "tide.js",
+  "tide-ui.js",
   "style.css",
   "manifest.json"
 ];

@@ -168,6 +168,87 @@ header p {
   transition: background-color .15s ease;
 }
 
+/* A single full-width row rather than one of the 2-column headline
+   cells — tide doesn't fit that grid (it's one continuous reading, not
+   a per-condition figure), so it sits underneath the grid instead,
+   spanning the whole card. Shares the tap/hover feel of a headline
+   cell (rounded, subtle hover) since it opens the same kind of sheet. */
+.tide-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 8px;
+  border: 0;
+  border-top: 1px solid rgba(31, 42, 36, .08);
+  background: none;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .15s ease;
+  touch-action: pan-y;
+}
+
+.tide-row:hover,
+.tide-row:active {
+  background: rgba(255, 255, 255, .5);
+}
+
+.tide-row-label {
+  color: var(--accent-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tide-row-value {
+  color: var(--accent-dark);
+  font-size: 14px;
+}
+
+.tide-row-events {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.tide-event {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-dark);
+  font-variant-numeric: tabular-nums;
+}
+
+.tide-event small {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-muted);
+}
+
+.tide-event-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .headline-cell:hover,
 .headline-cell:active {
   background: rgba(255, 255, 255, .5);

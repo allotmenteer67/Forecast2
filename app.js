@@ -30,7 +30,8 @@ const CONFIG = {
     sunshine: { name: "Sunshine", unit: "hrs" },
     uv: { name: "UV", unit: "index" },
     soilTemperature: { name: "Soil Temp", unit: "°C" },
-    dewPoint: { name: "Dew Point", unit: "°C" }
+    dewPoint: { name: "Dew Point", unit: "°C" },
+    tide: { name: "Tide", unit: "m" }
   }
 };
 
@@ -2305,13 +2306,14 @@ function median(values) {
 // lot to a gardener, barely at all to someone else, and there's no
 // reason to force either way.
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint"];
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint", "tide"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
   sunshine: true,
   soilTemperature: false,
-  dewPoint: false
+  dewPoint: false,
+  tide: false
 };
 
 function loadHeadlineToggles() {
@@ -3026,6 +3028,15 @@ function renderHeadline() {
   const night = showHourly && !isDaytime(hourDate);
 
   activeHeadlineConditions().forEach(conditionName => {
+    // Tide doesn't go through this generic per-forecaster cell loop at
+    // all — it has its own data source, own full-width row, and its own
+    // render path (renderTideRow in tide-ui.js, called separately
+    // below). It's still listed in HEADLINE_OPTIONAL_CONDITIONS so it
+    // shares Settings' existing "Front page cells" toggle UI exactly
+    // the way Dew Point and Soil Temp do, rather than needing a
+    // bespoke toggle built from scratch.
+    if (conditionName === "tide") return;
+
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "headline-cell";
@@ -3163,6 +3174,11 @@ function renderHeadline() {
   });
 
   renderUnderperformBanner();
+
+  // Defined in tide-ui.js, loaded after this file — guarded since this
+  // function is also reachable from pages that don't include the tide
+  // scripts at all (compare.html, settings.html).
+  if (typeof renderTideRow === "function") renderTideRow();
 }
 
 // ---- Hourly graph sheet ----

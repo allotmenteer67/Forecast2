@@ -58,6 +58,23 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Tide locations</legend>
+        <p class="note">A separate list from your weather places — a tide spot doesn't have to be the same as where you check the weather. Each one is matched to its nearest real tide gauge.</p>
+        <div id="tideLocationsList" class="places-list"></div>
+
+        <label>
+          Add a location
+          <div class="location-row">
+            <input id="tideLocationInput" placeholder="Postcode or place name" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
+          </div>
+        </label>
+        <button id="addTideLocationButton" type="button">Add</button>
+        <p id="tideLocationStatus" class="actual-status status-error-only"></p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Appearance</legend>
         <div id="themeSwatches" class="theme-swatches"></div>
       </fieldset>
@@ -125,6 +142,8 @@
   </main>
 
   <script src="app.js"></script>
+  <script src="tide.js"></script>
+  <script src="tide-ui.js"></script>
   <script src="settings.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
