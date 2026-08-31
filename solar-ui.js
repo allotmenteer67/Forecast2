@@ -25,6 +25,35 @@ function numField(id, fallback = 0) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+// Remembers the last location this calculator was actually run
+// against — its own small key, not tied into the main app's saved
+// places or FFV-keyed location state, since Solar is deliberately kept
+// separate from the rest of Cloude. Only ever written after a
+// successful lookup, so a typo that failed to resolve never overwrites
+// a location that previously worked.
+const SOLAR_LAST_LOCATION_KEY = "cloude-solar:lastLocation";
+
+function loadLastLocation() {
+  try {
+    return localStorage.getItem(SOLAR_LAST_LOCATION_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLastLocation(value) {
+  try {
+    localStorage.setItem(SOLAR_LAST_LOCATION_KEY, value);
+  } catch {
+    // Storage unavailable — just won't be remembered next time.
+  }
+}
+
+if (locationInput && !locationInput.value) {
+  const last = loadLastLocation();
+  if (last) locationInput.value = last;
+}
+
 [consumptionModeSimple, consumptionModeCsv].forEach(input => {
   if (!input) return;
   input.addEventListener("change", () => {
@@ -132,6 +161,7 @@ if (form) {
 
     try {
       const location = await resolveLocation(locationInput.value);
+      saveLastLocation(locationInput.value);
 
       const tilt = numField("solarTilt", 30);
       const orientation = field("solarOrientation") || "S";
