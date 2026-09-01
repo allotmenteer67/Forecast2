@@ -189,6 +189,7 @@ header p {
   font: inherit;
   color: inherit;
   text-align: left;
+  touch-action: pan-y;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: background-color .15s ease;
