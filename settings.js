@@ -154,9 +154,7 @@ if (importButton) {
 // ---- Per-condition units ----
 // Each condition with a real unit gets its own compact Metric/Imperial
 // toggle (see CONDITION_UNIT_TOGGLES in app.js for which conditions have
-// one — Soil Temp and Dew Point deliberately don't, they follow
-// Temperature's own setting instead, see conditionUnit() in app.js).
-// Laid out as short rows in a 2-column grid rather than a full
+// one). Laid out as short rows in a 2-column grid rather than a full
 // bordered fieldset per condition, so this doesn't turn into a long
 // scroll as more conditions gain a unit choice.
 const unitFieldsets = document.getElementById("conditionUnits");
@@ -206,11 +204,27 @@ if (unitFieldsets) {
 // HEADLINE_OPTIONAL_CONDITIONS, loadHeadlineToggles(), and
 // saveHeadlineToggle() come from app.js. Rain/Temperature/Wind aren't
 // listed here at all — they're not optional (see HEADLINE_CORE_CONDITIONS).
+//
+// Labels come from this explicit map FIRST, falling back to
+// CONFIG.conditions[name].name only for genuine weather conditions.
+// Tide and Fishing aren't weather conditions at all — they were never
+// going to have an entry in forecast-config.json — so relying on
+// CONFIG.conditions for them was always going to throw the moment a
+// new one (fishing) was added without that JSON file being updated too.
+// That thrown error broke this ENTIRE loop partway through, which is
+// why Fishing's checkbox never appeared. This map removes that
+// dependency entirely for anything that isn't actually a weather
+// condition, rather than requiring forecast-config.json to be kept in
+// sync with every future non-weather toggle.
+const HEADLINE_TOGGLE_LABELS = {
+  tide: "Tide",
+  fishing: "Fishing"
+};
+
 const headlineToggleList = document.getElementById("headlineToggles");
 if (headlineToggleList) {
   const toggles = loadHeadlineToggles();
   HEADLINE_OPTIONAL_CONDITIONS.forEach(conditionName => {
-    const conditionData = CONFIG.conditions[conditionName];
     const label = document.createElement("label");
     label.className = "check";
 
@@ -219,10 +233,12 @@ if (headlineToggleList) {
     input.checked = !!toggles[conditionName];
     input.addEventListener("change", () => {
       saveHeadlineToggle(conditionName, input.checked);
+      if (conditionName === "tide" && typeof renderTideRow === "function") renderTideRow();
+      if (conditionName === "fishing" && typeof renderFishingRow === "function") renderFishingRow();
     });
 
     const text = document.createElement("span");
-    text.textContent = conditionData.name;
+    text.textContent = HEADLINE_TOGGLE_LABELS[conditionName] || CONFIG.conditions[conditionName]?.name || conditionName;
 
     label.append(input, text);
     headlineToggleList.appendChild(label);

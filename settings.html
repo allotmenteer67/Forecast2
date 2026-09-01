@@ -58,7 +58,7 @@
 
     <section class="controls">
       <fieldset>
-        <legend>Tide locations</legend>
+        <legend>Tides</legend>
         <p class="note">A separate list from your weather places — a tide spot doesn't have to be the same as where you check the weather. Each one is matched to its nearest real tide gauge.</p>
         <div id="tideLocationsList" class="places-list"></div>
 
@@ -72,12 +72,8 @@
           <button id="addTideLocationButton" type="button">Add</button>
         </div>
         <p id="tideLocationStatus" class="actual-status status-error-only"></p>
-      </fieldset>
-    </section>
 
-    <section class="controls">
-      <fieldset>
-        <legend>Tide card colour</legend>
+        <p class="note">Card colour</p>
         <div id="tideCardColorSwatches" class="theme-swatches"></div>
       </fieldset>
     </section>
@@ -85,7 +81,9 @@
     <section class="controls">
       <fieldset>
         <legend>Fishing</legend>
-        <p class="note">Shares its location with Tide above — set each saved spot as Coastal or Estuary there to control which factors apply. The front-page row and its graph show a rule-of-thumb Poor/Fair/Good/Excellent estimate, not measured science — see Help for exactly how it's worked out.</p>
+        <p class="note">Shares its location with Tide above. The front-page row and its graph show a rule-of-thumb Poor/Fair/Good/Excellent estimate, not measured science — see Help for exactly how it's worked out.</p>
+        <div id="fishingMarkTypeList" class="places-list"></div>
+        <p class="note">Card colour</p>
         <div id="fishingCardColorSwatches" class="theme-swatches"></div>
         <label class="check">
           <input type="checkbox" id="fishingShowRawToggle">

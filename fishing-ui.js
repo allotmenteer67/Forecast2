@@ -48,20 +48,28 @@ applyFishingCardColor(loadFishingCardColor());
 
 let fishingRenderToken = 0;
 
+function setFishingCardVisible(visible) {
+  const card = document.querySelector(".fishing-card");
+  if (card) card.hidden = !visible;
+}
+
 async function renderFishingRow() {
   if (!fishingRow) return;
   const toggles = loadHeadlineToggles();
   if (!toggles.fishing) {
     fishingRow.hidden = true;
+    setFishingCardVisible(false);
     return;
   }
 
   const location = currentTideLocation(); // shared with tide — see file header
   if (!location) {
     fishingRow.hidden = true;
+    setFishingCardVisible(false);
     return;
   }
   fishingRow.hidden = false;
+  setFishingCardVisible(true);
 
   const myToken = ++fishingRenderToken;
   const labelHtml = `FISHING — ${location.label}${tideDateQualifier()}`;
@@ -362,6 +370,65 @@ function renderFishingRawFactors(point, markType) {
 
   return wrap;
 }
+
+// ---- Settings page: fishing mark type (Coastal/Estuary) per location ----
+// Lives in its own Fishing-section list rather than inside tide's own
+// location rows — it's a fishing-specific concern about a shared
+// location, not something that belongs in tide's own list.
+const fishingMarkTypeList = document.getElementById("fishingMarkTypeList");
+
+function renderFishingMarkTypeList() {
+  if (!fishingMarkTypeList) return;
+  fishingMarkTypeList.innerHTML = "";
+  const locations = loadTideLocations();
+  const currentId = loadCurrentTideLocationId();
+
+  if (!locations.length) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "No saved locations yet — add one under Tides above.";
+    fishingMarkTypeList.appendChild(empty);
+    return;
+  }
+
+  locations.forEach(loc => {
+    const row = document.createElement("div");
+    row.className = "unit-row";
+
+    const name = document.createElement("span");
+    name.className = "unit-row-name";
+    name.textContent = loc.label;
+    row.appendChild(name);
+
+    const toggle = document.createElement("div");
+    toggle.className = "unit-row-toggle";
+    [
+      { value: "coastal", text: "Coastal" },
+      { value: "estuary", text: "Estuary" }
+    ].forEach(opt => {
+      const pillLabel = document.createElement("label");
+      pillLabel.className = "unit-pill";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `markType-${loc.id}`;
+      input.value = opt.value;
+      input.checked = fishingMarkType(loc) === opt.value;
+      input.addEventListener("change", () => {
+        loc.markType = opt.value;
+        saveTideLocations(locations);
+        if (loc.id === currentId) renderFishingRow();
+      });
+      const text = document.createElement("span");
+      text.textContent = opt.text;
+      pillLabel.append(input, text);
+      toggle.appendChild(pillLabel);
+    });
+    row.appendChild(toggle);
+    fishingMarkTypeList.appendChild(row);
+  });
+}
+
+renderFishingMarkTypeList();
 
 // ---- Settings page: fishing card colour ----
 const fishingCardColorSwatches = document.getElementById("fishingCardColorSwatches");

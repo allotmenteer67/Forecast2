@@ -557,6 +557,22 @@ async function nearestDiscoveryStation(lat, lon, apiKey) {
   return best ? { ...best, distanceKm: bestDist } : null;
 }
 
+// Admiralty's own FAQ is explicit: "Is British Summer Time applied to
+// predictions? No. All predicted height times are shown at Greenwich
+// Mean Time (GMT)" — never adjusted for BST, even in summer. Their own
+// published schema never shows an explicit UTC marker on the DateTime
+// string, though ("DateTime": "string" is the whole example). If their
+// real response omits one too, plain Date.parse() would treat it as
+// LOCAL time per the ES2015+ spec for a timezone-less ISO datetime —
+// which during BST silently shifts every Admiralty event an hour
+// early, systematically. This forces UTC whenever the string doesn't
+// already specify its own timezone, rather than trusting that default.
+function parseAdmiraltyDateTime(raw) {
+  if (!raw) return NaN;
+  const hasTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(raw);
+  return Date.parse(hasTimezone ? raw : `${raw}Z`);
+}
+
 async function fetchDiscoveryEvents(stationId, apiKey, durationDays) {
   const duration = Math.max(1, Math.min(7, durationDays || 7));
   const res = await fetchDiscovery(`/Stations/${stationId}/TidalEvents?duration=${duration}`, apiKey);
@@ -568,7 +584,7 @@ async function fetchDiscoveryEvents(stationId, apiKey, durationDays) {
     .filter(e => !e.Filtered && typeof e.Height === "number")
     .map(e => ({
       type: e.EventType === "HighWater" ? "high" : "low",
-      time: Date.parse(e.DateTime),
+      time: parseAdmiraltyDateTime(e.DateTime),
       heightCD: e.Height
     }))
     .filter(e => !Number.isNaN(e.time))
