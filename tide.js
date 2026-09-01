@@ -1,243 +1,203 @@
-// Tide prediction engine — the pure-maths half of the tide feature.
-// Kept separate from tide-ui.js (DOM/fetch/rendering) so the harmonic
-// analysis itself can be tested and reasoned about on its own, the same
-// separation solar.js/solar-ui.js already use.
-//
-// APPROACH: this is the same technique every official tide-table
-// authority uses (UKHO included) — fit a handful of known astronomical
-// cycles (the "constituents" below) to a station's own historical
-// water-level record via least squares, then the fitted curve predicts
-// forward indefinitely. The difference from an official prediction is
-// purely how much history and how many constituents go into the fit —
-// see the accuracy discussion from when this was scoped: expect decent
-// timing, softer height/shape accuracy, and correspondingly it should
-// keep improving as TFV (below) absorbs whatever systematic error is
-// left over from a necessarily shorter, smaller-constituent-set fit
-// than an official one.
-//
-// VALIDATION NOTE: this file's maths is verified against synthetic
-// data shaped like a real, large-range, shallow-water estuary tide
-// (Bristol Channel scale) — see the accompanying test script mentioned
-// in the build notes. It has NOT been run against genuine EA readings
-// in this session (the readings endpoint couldn't be fetched live from
-// here — only the station list and current-reading snapshot could).
-// The first real run against actual Hinkley Point history is the real
-// test; if predictions look implausible, check here first.
+// Tide maths — harmonic fit, FFV-equivalent correction (TFV), and the
+// EA Tide Gauge API backfill. Kept separate from tide-ui.js's DOM code,
+// the same split solar.js/solar-ui.js already use.
 
-// Period in hours for each constituent. The four semidiurnal + four
-// diurnal are the standard "major eight" behind most tide tables; M4
-// and MS4 are shallow-water overtides of M2 — these matter more here
-// than on an open coastline, since the Bristol Channel's huge range and
-// shallow mudflats distort the tide away from a clean sine wave (faster
-// rise than fall, or vice versa) more than most places in the world.
+const MIN_FIT_READINGS = 500; // roughly a week of 15-min data — below
+                               // this a harmonic fit is too noisy to trust
+
+// ---- Harmonic constituents ----
+// Standard semidiurnal/diurnal constituents plus two shallow-water terms
+// (M4/MS4), fit by least-squares against a station's own historical
+// readings — see the session addendum for the full decision trail
+// (dropped UKHO's paid tier in favour of this, self-derived approach).
 const TIDE_CONSTITUENTS = [
-  { name: "M2", periodHours: 12.4206012 },
-  { name: "S2", periodHours: 12.0 },
-  { name: "N2", periodHours: 12.6583482 },
-  { name: "K2", periodHours: 11.9672348 },
-  { name: "K1", periodHours: 23.9344696 },
-  { name: "O1", periodHours: 25.8193387 },
-  { name: "P1", periodHours: 24.0658902 },
-  { name: "Q1", periodHours: 26.8683567 },
-  { name: "M4", periodHours: 6.2103006 },
-  { name: "MS4", periodHours: 6.1033393 }
+  { name: "M2", speed: 28.9841042 },
+  { name: "S2", speed: 30.0000000 },
+  { name: "N2", speed: 28.4397295 },
+  { name: "K2", speed: 30.0821373 },
+  { name: "K1", speed: 15.0410686 },
+  { name: "O1", speed: 13.9430356 },
+  { name: "P1", speed: 14.9589314 },
+  { name: "Q1", speed: 13.3986609 },
+  { name: "M4", speed: 57.9682084 },
+  { name: "MS4", speed: 58.9841042 }
 ];
-
-// ---- Small linear algebra: Gaussian elimination with partial pivoting
-// ---- for a square system A x = b. Kept local rather than pulling in a
-// matrix library — the system here is at most ~21x21 (10 constituents *
-// 2 + 1 mean), well within what a plain elimination handles cleanly.
-function solveLinearSystem(A, b) {
-  const n = b.length;
-  const M = A.map((row, i) => [...row, b[i]]);
-
-  for (let col = 0; col < n; col++) {
-    let pivotRow = col;
-    for (let row = col + 1; row < n; row++) {
-      if (Math.abs(M[row][col]) > Math.abs(M[pivotRow][col])) pivotRow = row;
-    }
-    [M[col], M[pivotRow]] = [M[pivotRow], M[col]];
-    if (Math.abs(M[col][col]) < 1e-12) continue; // singular direction — leave as 0, see below
-
-    for (let row = 0; row < n; row++) {
-      if (row === col) continue;
-      const factor = M[row][col] / M[col][col];
-      for (let k = col; k <= n; k++) M[row][k] -= factor * M[col][k];
-    }
-  }
-
-  return M.map((row, i) => (Math.abs(row[i]) < 1e-12 ? 0 : row[n] / row[i]));
-}
-
-// Fits mean level + amplitude/phase (as cos/sin coefficient pairs) for
-// every constituent in TIDE_CONSTITUENTS against a set of real
-// readings. Returns null if there isn't enough data to fit meaningfully
-// — see MIN_FIT_READINGS below.
-const MIN_FIT_READINGS = 200; // a little over 2 days of 15-min readings;
-                               // far short of what a good fit actually
-                               // wants (see file header), but enough to
-                               // not blow up the linear algebra
 
 function fitTideHarmonics(readings) {
   if (!readings || readings.length < MIN_FIT_READINGS) return null;
+  const n = readings.length;
+  const cols = 1 + TIDE_CONSTITUENTS.length * 2; // mean level + (cos,sin) per constituent
+  // Build the normal equations (X^T X) and (X^T y) directly rather than
+  // holding the full design matrix in memory — thousands of readings is
+  // fine either way, but this is the standard approach and avoids a
+  // large intermediate array.
+  const XtX = Array.from({ length: cols }, () => new Array(cols).fill(0));
+  const Xty = new Array(cols).fill(0);
 
-  const paramCount = 1 + TIDE_CONSTITUENTS.length * 2;
-  const omegas = TIDE_CONSTITUENTS.map(c => (2 * Math.PI) / c.periodHours);
-
-  // Design matrix columns: [1, cos(w1 t), sin(w1 t), cos(w2 t), sin(w2 t), ...]
-  const rows = readings.map(r => {
-    const row = [1];
-    omegas.forEach(w => {
-      row.push(Math.cos(w * r.hours), Math.sin(w * r.hours));
-    });
-    return row;
-  });
-
-  // Normal equations: (X^T X) a = X^T y
-  const XtX = Array.from({ length: paramCount }, () => new Array(paramCount).fill(0));
-  const Xty = new Array(paramCount).fill(0);
-  rows.forEach((row, i) => {
+  const row = new Array(cols);
+  for (let i = 0; i < n; i++) {
+    const t = readings[i].hours;
     const y = readings[i].level;
-    for (let a = 0; a < paramCount; a++) {
+    row[0] = 1;
+    TIDE_CONSTITUENTS.forEach((c, k) => {
+      const theta = ((c.speed * t) % 360) * (Math.PI / 180);
+      row[1 + k * 2] = Math.cos(theta);
+      row[2 + k * 2] = Math.sin(theta);
+    });
+    for (let a = 0; a < cols; a++) {
       Xty[a] += row[a] * y;
-      for (let b = 0; b < paramCount; b++) {
+      for (let b = a; b < cols; b++) {
         XtX[a][b] += row[a] * row[b];
       }
     }
-  });
+  }
+  for (let a = 0; a < cols; a++) {
+    for (let b = 0; b < a; b++) XtX[a][b] = XtX[b][a];
+  }
 
   const coeffs = solveLinearSystem(XtX, Xty);
-  return { meanLevel: coeffs[0], omegas, pairs: TIDE_CONSTITUENTS.map((c, i) => ({
-    name: c.name,
-    cos: coeffs[1 + i * 2],
-    sin: coeffs[2 + i * 2]
-  })) };
+  if (!coeffs) return null;
+  return { coeffs };
 }
 
-// Predicts water level at a given time (hours, same epoch/units the fit
-// was built from) from a fitted model.
+// Plain Gaussian elimination with partial pivoting — the matrix here is
+// at most 21x21 (1 + 10 constituents * 2), so nothing fancier is needed.
+function solveLinearSystem(A, b) {
+  const n = b.length;
+  const M = A.map(row => row.slice());
+  const v = b.slice();
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    }
+    if (Math.abs(M[pivot][col]) < 1e-9) return null; // singular — not enough data variety to fit
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    [v[col], v[pivot]] = [v[pivot], v[col]];
+    for (let r = col + 1; r < n; r++) {
+      const factor = M[r][col] / M[col][col];
+      for (let c = col; c < n; c++) M[r][c] -= factor * M[col][c];
+      v[r] -= factor * v[col];
+    }
+  }
+  const x = new Array(n).fill(0);
+  for (let i = n - 1; i >= 0; i--) {
+    let sum = v[i];
+    for (let j = i + 1; j < n; j++) sum -= M[i][j] * x[j];
+    x[i] = sum / M[i][i];
+  }
+  return x;
+}
+
 function predictTideLevel(fit, hours) {
-  let level = fit.meanLevel;
-  fit.pairs.forEach((p, i) => {
-    const w = fit.omegas[i];
-    level += p.cos * Math.cos(w * hours) + p.sin * Math.sin(w * hours);
+  if (!fit) return null;
+  const { coeffs } = fit;
+  let level = coeffs[0];
+  TIDE_CONSTITUENTS.forEach((c, k) => {
+    const theta = ((c.speed * hours) % 360) * (Math.PI / 180);
+    level += coeffs[1 + k * 2] * Math.cos(theta) + coeffs[2 + k * 2] * Math.sin(theta);
   });
   return level;
 }
 
-// Finds high/low water events between startHours and endHours by
-// evaluating the fitted curve at a fine step and locating local
-// extrema — simpler and more robust than solving for the curve's
-// derivative roots analytically, and plenty precise at a 3-minute step
-// (tide curves are slow-moving; a genuine extremum is never missed
-// between two samples 3 minutes apart).
-const TIDE_EXTREMA_STEP_HOURS = 3 / 60;
-
+// Finds local highs/lows by sampling densely and keeping sign changes in
+// the slope — plenty precise for a semidiurnal signal at this sample
+// rate, no need for anything more exact than that.
 function findTideExtremes(fit, startHours, endHours) {
+  const stepHours = 1 / 30; // 2-minute steps
   const events = [];
-  let prev = predictTideLevel(fit, startHours);
-  let prevPrev = null;
-  for (let h = startHours + TIDE_EXTREMA_STEP_HOURS; h <= endHours; h += TIDE_EXTREMA_STEP_HOURS) {
+  let prevLevel = predictTideLevel(fit, startHours);
+  let prevSlope = null;
+  for (let h = startHours + stepHours; h <= endHours; h += stepHours) {
     const level = predictTideLevel(fit, h);
-    if (prevPrev !== null) {
-      const risingBefore = prev > prevPrev;
-      const risingAfter = level > prev;
-      if (risingBefore && !risingAfter) {
-        events.push({ hours: h - TIDE_EXTREMA_STEP_HOURS, level: prev, type: "high" });
-      } else if (!risingBefore && risingAfter) {
-        events.push({ hours: h - TIDE_EXTREMA_STEP_HOURS, level: prev, type: "low" });
-      }
+    const slope = level - prevLevel;
+    if (prevSlope !== null && slope !== 0 && prevSlope !== 0 && (slope > 0) !== (prevSlope > 0)) {
+      events.push({
+        hours: h - stepHours / 2,
+        level: predictTideLevel(fit, h - stepHours / 2),
+        type: prevSlope > 0 ? "high" : "low"
+      });
     }
-    prevPrev = prev;
-    prev = level;
+    prevLevel = level;
+    prevSlope = slope;
   }
   return events;
 }
 
-// ---- TFV (Tidal Fudge Factor) ----
-// Same idea as the weather side's FFV: a recency-weighted running
-// correction, learned from comparing this station's own self-derived
-// prediction against its own EA-observed reading — not a different
-// station's prediction, which is what makes this a genuine model-error
-// correction rather than papering over a station mismatch.
+// ---- TFV (Tidal Fudge Value) — learned correction against this
+// station's OWN observed reading, recency-weighted the same way FFV is
+// (~30-day effective memory) — see the session addendum for the bug
+// found and fixed in this session (reused FFV's daily-sample alpha
+// unchanged, which gave TFV a real memory of ~8 hours instead of 30
+// days at tide's 15-minute sampling rate).
+const TIDE_FUDGE_ALPHA = 2 / (30 * 96 + 1); // 30 days at 15-min samples
+
+function applyTideFudge(level, fudge) {
+  if (fudge === null || fudge === undefined || Number.isNaN(fudge)) return level;
+  return level + fudge;
+}
+
+// ---- EA Tide Gauge Network — real, no-key station list ----
+// id/measureId let this reuse the exact same EA Tide Gauge API this
+// project already depends on elsewhere; lat/lon are each station's own
+// published position, used only to find the nearest one to a resolved
+// location (see nearestTideStation below).
 //
-// The alpha is NOT the same constant FFV uses elsewhere in the app —
-// FFV updates once per day, so 2/31 gives it a ~30-day memory measured
-// in samples. Tide readings arrive every 15 minutes (96/day), so the
-// same alpha value would give a real memory of only ~8 hours, not 30
-// days — confirmed as a genuine bug during testing (a fake 36-hour
-// surge pushed the fudge to within a few cm of the surge's full size,
-// when a real 30-day memory should barely register it). This alpha is
-// calculated for a 30-day memory at 96 samples/day instead.
-const TIDE_READINGS_PER_DAY = 96; // 15-minute readings
-const TIDE_TFV_MEMORY_DAYS = 30;
-const TIDE_TFV_EMA_ALPHA = 2 / (TIDE_TFV_MEMORY_DAYS * TIDE_READINGS_PER_DAY + 1);
-
-function updateTideFudge(previousFudge, predictedLevel, actualLevel) {
-  const residual = actualLevel - predictedLevel;
-  if (previousFudge === null || previousFudge === undefined) return residual;
-  return previousFudge + TIDE_TFV_EMA_ALPHA * (residual - previousFudge);
-}
-
-function applyTideFudge(predictedLevel, fudge) {
-  return predictedLevel + (fudge || 0);
-}
-
-// ---- EA Tide Gauge stations ----
-// Bundled rather than fetched on every use — there are only a few dozen
-// of them, they change rarely, and this list was pulled live from
-// https://environment.data.gov.uk/flood-monitoring/id/stations?type=TideGauge
-// during this feature's build, using each station's mAOD (Ordnance
-// Datum) measure where one exists, since that's directly comparable
-// across stations rather than each one's own arbitrary local datum.
-// EA's own documentation describes the network as "44 locations"; only
-// 43 distinct stations came back in the actual response fetched here —
-// worth a re-check against a fresh station list occasionally in case
-// one was missed or the network has changed since.
+// cdOffsetOD: each station's Chart Datum height relative to Ordnance
+// Datum Newlyn (metres), published by the National Tidal and Sea Level
+// Facility (https://ntslf.org/tides/datum). CD height = OD height minus
+// this value. Confident matches only — omitted (undefined) for stations
+// NTSLF doesn't publish a value for, and for the handful that use a
+// LOCAL Ordnance Datum rather than ODN (St Mary's, Port Erin, Stornoway,
+// Lerwick, Jersey/St Helier — flagged individually below), since it's
+// not yet confirmed whether this station's own EA mAOD readings share
+// that same local reference or the national one. Any code using this
+// value must treat its absence as "no CD conversion available" rather
+// than assume 0.
 const EA_TIDE_STATIONS = [
-  { id: "E70039", measureId: "E70039-level-tidal_level-Mean-15_min-mAOD", label: "Lowestoft", lat: 52.473075, lon: 1.750085 },
-  { id: "E72639", measureId: "E72639-level-tidal_level-Mean-15_min-mAOD", label: "Avonmouth Portbury", lat: 51.49999, lon: -2.728468 },
-  { id: "E71539", measureId: "E71539-level-tidal_level-Mean-15_min-mAOD", label: "Sheerness", lat: 51.445627, lon: 0.743415 },
-  { id: "E71939", measureId: "E71939-level-tidal_level-Mean-15_min-mAOD", label: "Bournemouth", lat: 50.714331, lon: -1.874873 },
-  { id: "E71239", measureId: "E71239-level-tidal_level-Mean-15_min-mAOD", label: "Cromer", lat: 52.934316, lon: 1.301623 },
-  { id: "E72039", measureId: "E72039-level-tidal_level-Mean-15_min-mAOD", label: "Weymouth", lat: 50.608501, lon: -2.447945 },
-  { id: "E71639", measureId: "E71639-level-tidal_level-Mean-15_min-mAOD", label: "Dover", lat: 51.114372, lon: 1.322641 },
-  { id: "E73439-anglian", measureId: "E73439-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Heysham", lat: 54.031798, lon: -2.920253 },
-  { id: "E72439", measureId: "E72439-level-tidal_level-Mean-15_min-mAOD", label: "Ilfracombe", lat: 51.211131, lon: -4.112362 },
-  { id: "E70939", measureId: "E70939-level-tidal_level-Mean-15_min-mAOD", label: "North Shields", lat: 55.007415, lon: -1.439769 },
-  { id: "E73639-anglian", measureId: "E73639-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Workington", lat: 54.650691, lon: -3.56717 },
-  { id: "E72139", measureId: "E72139-level-tidal_level-Mean-15_min-mAOD", label: "Plymouth", lat: 50.368401, lon: -4.185217 },
-  { id: "E71739", measureId: "E71739-level-tidal_level-Mean-15_min-mAOD", label: "Newhaven", lat: 50.781775, lon: 0.057004 },
-  { id: "E71039", measureId: "E71039-level-tidal_level-Mean-15_min-mAOD", label: "Whitby", lat: 54.489967, lon: -0.614597 },
-  { id: "E70139-anglian", measureId: "E70139-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Liverpool", lat: 53.44967, lon: -3.01815 },
-  { id: "E72539", measureId: "E72539-level-tidal_level-Mean-15_min-mAOD", label: "Hinkley Point", lat: 51.210605, lon: -3.131326 },
-  { id: "E71439", measureId: "E71439-level-tidal_level-Mean-15_min-mAOD", label: "Harwich", lat: 51.947978, lon: 1.292108 },
-  { id: "E72239", measureId: "E72239-level-tidal_level-Mean-15_min-mAOD", label: "Newlyn", lat: 50.103007, lon: -5.542779 },
-  { id: "E71839", measureId: "E71839-level-tidal_level-Mean-15_min-mAOD", label: "Portsmouth", lat: 50.80229, lon: -1.11119 },
-  { id: "E71139", measureId: "E71139-level-tidal_level-Mean-15_min-mAOD", label: "Immingham", lat: 53.63018, lon: -0.18742 },
-  { id: "E71339", measureId: "E71339-level-tidal_level-Mean-15_min-mAOD", label: "Washpile", lat: 52.875861, lon: 0.218395 },
-  { id: "E72339", measureId: "E72339-level-tidal_level-Mean-15_min-m", label: "St Marys", lat: 49.91786, lon: -6.31722 },
-  { id: "E73939", measureId: "E73939-level-tidal_level-Mean-15_min-mAOD", label: "Portrush", lat: 55.20108, lon: -6.65123 },
-  { id: "E70539", measureId: "E70539-level-tidal_level-Mean-15_min-mAOD", label: "Holyhead", lat: 53.31394, lon: -4.62043 },
-  { id: "E73139", measureId: "E73139-level-tidal_level-Mean-15_min-mAOD", label: "Fishguard", lat: 52.01321, lon: -4.98371 },
-  { id: "E70439", measureId: "E70439-level-tidal_level-Mean-15_min-mAOD", label: "Ullapool", lat: 57.89527, lon: -5.15789 },
-  { id: "E70839", measureId: "E70839-level-tidal_level-Mean-15_min-mAOD", label: "Leith", lat: 55.98983, lon: -3.18168 },
-  { id: "E72939", measureId: "E72939-level-tidal_level-Mean-15_min-mAOD", label: "Mumbles", lat: 51.57, lon: -3.97544 },
-  { id: "E72839", measureId: "E72839-level-tidal_level-Mean-15_min-mAOD", label: "Newport", lat: 51.55001, lon: -2.98743 },
-  { id: "E70739", measureId: "E70739-level-tidal_level-Mean-15_min-mAOD", label: "Aberdeen", lat: 57.14406, lon: -2.08013 },
-  { id: "E73039", measureId: "E73039-level-tidal_level-Mean-15_min-mAOD", label: "Milford Haven", lat: 51.70738, lon: -5.05184 },
-  { id: "E74039", measureId: "E74039-level-tidal_level-Mean-15_min-mAOD", label: "Millport", lat: 55.7498, lon: -4.90634 },
-  { id: "E73839", measureId: "E73839-level-tidal_level-Mean-15_min-mAOD", label: "Bangor", lat: 54.66518, lon: -5.67045 },
-  { id: "E70639", measureId: "E70639-level-tidal_level-Mean-15_min-mAOD", label: "Wick", lat: 58.44098, lon: -3.08631 },
-  { id: "E73539", measureId: "E73539-level-tidal_level-Mean-15_min-mAOD", label: "Port Erin", lat: 54.08538, lon: -4.76807 },
-  { id: "E70339", measureId: "E70339-level-tidal_level-Mean-15_min-mAOD", label: "Kinlochbervie", lat: 58.45673, lon: -5.05018 },
-  { id: "E74239", measureId: "E74239-level-tidal_level-Mean-15_min-mAOD", label: "Tobermory", lat: 56.62314, lon: -6.06424 },
-  { id: "E73739", measureId: "E73739-level-tidal_level-Mean-15_min-mAOD", label: "Portpatrick", lat: 54.84254, lon: -5.12004 },
-  { id: "E74339", measureId: "E74339-level-tidal_level-Mean-15_min-mAOD", label: "Stornoway", lat: 58.20781, lon: -6.38897 },
-  { id: "E70239", measureId: "E70239-level-tidal_level-Mean-15_min-mAOD", label: "Jersey", lat: 49.18333, lon: -2.11667 },
-  { id: "E73239", measureId: "E73239-level-tidal_level-Mean-15_min-mAOD", label: "Barmouth", lat: 52.71931, lon: -4.04503 },
-  { id: "E74439", measureId: "E74439-level-tidal_level-Mean-15_min-mAOD", label: "Lerwick", lat: 60.15402, lon: -1.1403 },
-  { id: "E73339", measureId: "E73339-level-tidal_level-Mean-15_min-mAOD", label: "Llandudno", lat: 53.33164, lon: -3.82521 }
+  { id: "E70039", measureId: "E70039-level-tidal_level-Mean-15_min-mAOD", label: "Lowestoft", lat: 52.473075, lon: 1.750085, cdOffsetOD: -1.50 },
+  { id: "E72639", measureId: "E72639-level-tidal_level-Mean-15_min-mAOD", label: "Avonmouth Portbury", lat: 51.49999, lon: -2.728468, cdOffsetOD: -6.50 }, // NTSLF publishes "Avonmouth" — likely the same tidal regime as this Portbury gauge, not individually confirmed as the identical physical station
+  { id: "E71539", measureId: "E71539-level-tidal_level-Mean-15_min-mAOD", label: "Sheerness", lat: 51.445627, lon: 0.743415, cdOffsetOD: -2.90 },
+  { id: "E71939", measureId: "E71939-level-tidal_level-Mean-15_min-mAOD", label: "Bournemouth", lat: 50.714331, lon: -1.874873, cdOffsetOD: -1.40 },
+  { id: "E71239", measureId: "E71239-level-tidal_level-Mean-15_min-mAOD", label: "Cromer", lat: 52.934316, lon: 1.301623, cdOffsetOD: -2.75 },
+  { id: "E72039", measureId: "E72039-level-tidal_level-Mean-15_min-mAOD", label: "Weymouth", lat: 50.608501, lon: -2.447945, cdOffsetOD: -0.93 },
+  { id: "E71639", measureId: "E71639-level-tidal_level-Mean-15_min-mAOD", label: "Dover", lat: 51.114372, lon: 1.322641, cdOffsetOD: -3.67 },
+  { id: "E73439-anglian", measureId: "E73439-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Heysham", lat: 54.031798, lon: -2.920253, cdOffsetOD: -4.90 },
+  { id: "E72439", measureId: "E72439-level-tidal_level-Mean-15_min-mAOD", label: "Ilfracombe", lat: 51.211131, lon: -4.112362, cdOffsetOD: -4.80 },
+  { id: "E70939", measureId: "E70939-level-tidal_level-Mean-15_min-mAOD", label: "North Shields", lat: 55.007415, lon: -1.439769, cdOffsetOD: -2.60 },
+  { id: "E73639-anglian", measureId: "E73639-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Workington", lat: 54.650691, lon: -3.56717, cdOffsetOD: -4.20 },
+  { id: "E72139", measureId: "E72139-level-tidal_level-Mean-15_min-mAOD", label: "Plymouth", lat: 50.368401, lon: -4.185217, cdOffsetOD: -3.22 }, // NTSLF's own network listing names this station "Plymouth (Devonport)" — confirmed same station, not a guess
+  { id: "E71739", measureId: "E71739-level-tidal_level-Mean-15_min-mAOD", label: "Newhaven", lat: 50.781775, lon: 0.057004, cdOffsetOD: -3.52 },
+  { id: "E71039", measureId: "E71039-level-tidal_level-Mean-15_min-mAOD", label: "Whitby", lat: 54.489967, lon: -0.614597, cdOffsetOD: -3.00 },
+  { id: "E70139-anglian", measureId: "E70139-anglian-level-tidal_level-Mean-15_min-mAOD", label: "Liverpool", lat: 53.44967, lon: -3.01815, cdOffsetOD: -4.93 },
+  { id: "E72539", measureId: "E72539-level-tidal_level-Mean-15_min-mAOD", label: "Hinkley Point", lat: 51.210605, lon: -3.131326, cdOffsetOD: -5.90 },
+  { id: "E71439", measureId: "E71439-level-tidal_level-Mean-15_min-mAOD", label: "Harwich", lat: 51.947978, lon: 1.292108 }, // no published NTSLF offset found
+  { id: "E72239", measureId: "E72239-level-tidal_level-Mean-15_min-mAOD", label: "Newlyn", lat: 50.103007, lon: -5.542779, cdOffsetOD: -3.05 },
+  { id: "E71839", measureId: "E71839-level-tidal_level-Mean-15_min-mAOD", label: "Portsmouth", lat: 50.80229, lon: -1.11119, cdOffsetOD: -2.73 },
+  { id: "E71139", measureId: "E71139-level-tidal_level-Mean-15_min-mAOD", label: "Immingham", lat: 53.63018, lon: -0.18742, cdOffsetOD: -3.90 },
+  { id: "E71339", measureId: "E71339-level-tidal_level-Mean-15_min-mAOD", label: "Washpile", lat: 52.875861, lon: 0.218395 }, // no published NTSLF offset found
+  { id: "E72339", measureId: "E72339-level-tidal_level-Mean-15_min-m", label: "St Marys", lat: 49.91786, lon: -6.31722 }, // NTSLF value (-2.91m) is against a LOCAL OD, not confirmed to match this station's own mAOD reference — omitted rather than risk a wrong conversion
+  { id: "E73939", measureId: "E73939-level-tidal_level-Mean-15_min-mAOD", label: "Portrush", lat: 55.20108, lon: -6.65123, cdOffsetOD: -1.24 },
+  { id: "E70539", measureId: "E70539-level-tidal_level-Mean-15_min-mAOD", label: "Holyhead", lat: 53.31394, lon: -4.62043, cdOffsetOD: -3.05 },
+  { id: "E73139", measureId: "E73139-level-tidal_level-Mean-15_min-mAOD", label: "Fishguard", lat: 52.01321, lon: -4.98371, cdOffsetOD: -2.44 },
+  { id: "E70439", measureId: "E70439-level-tidal_level-Mean-15_min-mAOD", label: "Ullapool", lat: 57.89527, lon: -5.15789, cdOffsetOD: -2.75 },
+  { id: "E70839", measureId: "E70839-level-tidal_level-Mean-15_min-mAOD", label: "Leith", lat: 55.98983, lon: -3.18168, cdOffsetOD: -2.90 },
+  { id: "E72939", measureId: "E72939-level-tidal_level-Mean-15_min-mAOD", label: "Mumbles", lat: 51.57, lon: -3.97544, cdOffsetOD: -5.00 },
+  { id: "E72839", measureId: "E72839-level-tidal_level-Mean-15_min-mAOD", label: "Newport", lat: 51.55001, lon: -2.98743, cdOffsetOD: -5.81 },
+  { id: "E70739", measureId: "E70739-level-tidal_level-Mean-15_min-mAOD", label: "Aberdeen", lat: 57.14406, lon: -2.08013, cdOffsetOD: -2.25 },
+  { id: "E73039", measureId: "E73039-level-tidal_level-Mean-15_min-mAOD", label: "Milford Haven", lat: 51.70738, lon: -5.05184, cdOffsetOD: -3.71 },
+  { id: "E74039", measureId: "E74039-level-tidal_level-Mean-15_min-mAOD", label: "Millport", lat: 55.7498, lon: -4.90634, cdOffsetOD: -1.62 },
+  { id: "E73839", measureId: "E73839-level-tidal_level-Mean-15_min-mAOD", label: "Bangor", lat: 54.66518, lon: -5.67045, cdOffsetOD: -2.01 },
+  { id: "E70639", measureId: "E70639-level-tidal_level-Mean-15_min-mAOD", label: "Wick", lat: 58.44098, lon: -3.08631, cdOffsetOD: -1.71 },
+  { id: "E73539", measureId: "E73539-level-tidal_level-Mean-15_min-mAOD", label: "Port Erin", lat: 54.08538, lon: -4.76807 }, // NTSLF value is against a LOCAL OD — omitted, see St Marys note above
+  { id: "E70339", measureId: "E70339-level-tidal_level-Mean-15_min-mAOD", label: "Kinlochbervie", lat: 58.45673, lon: -5.05018, cdOffsetOD: -2.50 },
+  { id: "E74239", measureId: "E74239-level-tidal_level-Mean-15_min-mAOD", label: "Tobermory", lat: 56.62314, lon: -6.06424, cdOffsetOD: -2.39 },
+  { id: "E73739", measureId: "E73739-level-tidal_level-Mean-15_min-mAOD", label: "Portpatrick", lat: 54.84254, lon: -5.12004, cdOffsetOD: -1.80 },
+  { id: "E74339", measureId: "E74339-level-tidal_level-Mean-15_min-mAOD", label: "Stornoway", lat: 58.20781, lon: -6.38897 }, // NTSLF value is against a LOCAL OD — omitted, see St Marys note above
+  { id: "E70239", measureId: "E70239-level-tidal_level-Mean-15_min-mAOD", label: "Jersey", lat: 49.18333, lon: -2.11667 }, // NTSLF's St Helier value is against a LOCAL OD — omitted, see St Marys note above
+  { id: "E73239", measureId: "E73239-level-tidal_level-Mean-15_min-mAOD", label: "Barmouth", lat: 52.71931, lon: -4.04503, cdOffsetOD: -2.44 },
+  { id: "E74439", measureId: "E74439-level-tidal_level-Mean-15_min-mAOD", label: "Lerwick", lat: 60.15402, lon: -1.1403 }, // NTSLF value is against a LOCAL OD — omitted, see St Marys note above
+  { id: "E73339", measureId: "E73339-level-tidal_level-Mean-15_min-mAOD", label: "Llandudno", lat: 53.33164, lon: -3.82521, cdOffsetOD: -3.85 }
 ];
 
 const EA_STATIONS_URL = "https://environment.data.gov.uk/flood-monitoring/id/stations?type=TideGauge";
@@ -379,4 +339,271 @@ async function getOrBuildTideFit(station) {
   const result = { fit, epochIso: backfill.epochIso, latestReadings: backfill.readings.slice(-400) };
   tideFitCache.set(station.id, result);
   return result;
+}
+
+// ==== Admiralty Discovery API — secondary-port correction ====
+//
+// The 44 EA stations above are real gauges, but most saved locations
+// are inevitably SOME distance from the nearest one — Teignmouth is
+// ~52km from Plymouth, for example. That distance is a genuine source
+// of error distinct from anything TFV can fix: TFV corrects Plymouth's
+// own model against Plymouth's own gauge, so it can only ever make
+// Plymouth's prediction more accurate FOR Plymouth. It has no way to
+// know Teignmouth exists, let alone that its tide runs ~35-40 minutes
+// and the better part of a metre different from Plymouth's.
+//
+// UKHO's free Discovery tier of the Admiralty Tidal API covers 607
+// named UK tidal stations — standard AND secondary ports — so it very
+// likely has a REAL station for wherever the nearest EA gauge is only
+// an approximation for. This section: (1) finds the nearest of those
+// 607 stations to a saved location, (2) pulls its real ~6-day
+// high/low predictions, (3) compares them against what our own
+// EA-station-based model would have predicted for the same moments,
+// and (4) stores the learned time/height difference so it can be
+// applied going forward — including for dates well outside that 6-day
+// window, and without needing to keep calling the API.
+//
+// This is a genuinely different kind of correction to TFV: it's a
+// fixed geographic offset between two real places, not a drifting model
+// error, so it doesn't need TFV's 30-day rolling memory — a single
+// ~6-day sample (roughly a dozen tidal events) should already land
+// close to a stable value. It's user-triggered (see "Check against
+// Admiralty" in Settings) rather than automatic, matching this app's
+// existing convention for anything that spends an external API's rate
+// limit (see the Compare page's "Backfill 1 year of real data" button).
+
+const DISCOVERY_KEY_STORAGE = "cloude-tide:discoveryKey";
+const DISCOVERY_STATIONS_CACHE_KEY = "cloude-tide:discoveryStations";
+const DISCOVERY_STATIONS_CACHE_MAX_AGE_MS = 30 * 24 * 3600000; // 30 days — this list barely ever changes
+const DISCOVERY_BASE = "https://admiraltyapi.azure-api.net/uktidalapi/api/V1";
+
+function loadDiscoveryKey() {
+  try {
+    return localStorage.getItem(DISCOVERY_KEY_STORAGE) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveDiscoveryKey(key) {
+  try {
+    if (key) localStorage.setItem(DISCOVERY_KEY_STORAGE, key);
+    else localStorage.removeItem(DISCOVERY_KEY_STORAGE);
+  } catch {
+    // Storage unavailable — key just won't persist between visits.
+  }
+}
+
+// Fetches and caches the full 607-station list. GeoJSON: each feature's
+// coordinates are [lon, lat] (GeoJSON's own convention, the opposite
+// order to everywhere else in this codebase — deliberately converted
+// back to {lat, lon} immediately here so nothing downstream has to
+// remember which order this one source uses).
+async function loadDiscoveryStations(apiKey) {
+  try {
+    const raw = localStorage.getItem(DISCOVERY_STATIONS_CACHE_KEY);
+    if (raw) {
+      const cached = JSON.parse(raw);
+      if (cached.fetchedAt && Date.now() - cached.fetchedAt < DISCOVERY_STATIONS_CACHE_MAX_AGE_MS) {
+        return cached.stations;
+      }
+    }
+  } catch {
+    // fall through to a fresh fetch
+  }
+
+  const res = await fetchWithTimeout(`${DISCOVERY_BASE}/Stations/`, {
+    headers: { "Ocp-Apim-Subscription-Key": apiKey }
+  }, 30000);
+  if (!res.ok) throw new Error(`Admiralty station list fetch failed: ${res.status}`);
+  const geojson = await res.json();
+  const stations = (geojson.features || [])
+    .map(f => ({
+      id: f.properties?.Id,
+      name: f.properties?.Name,
+      lat: f.geometry?.coordinates?.[1],
+      lon: f.geometry?.coordinates?.[0]
+    }))
+    .filter(s => s.id && typeof s.lat === "number" && typeof s.lon === "number");
+
+  try {
+    localStorage.setItem(DISCOVERY_STATIONS_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), stations }));
+  } catch {
+    // Cache write failing just means a slower re-fetch next time — not fatal.
+  }
+  return stations;
+}
+
+async function nearestDiscoveryStation(lat, lon, apiKey) {
+  const stations = await loadDiscoveryStations(apiKey);
+  let best = null, bestDist = Infinity;
+  stations.forEach(station => {
+    const dist = haversineKm(lat, lon, station.lat, station.lon);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = station;
+    }
+  });
+  return best ? { ...best, distanceKm: bestDist } : null;
+}
+
+async function fetchDiscoveryEvents(stationId, apiKey, durationDays) {
+  const duration = Math.max(1, Math.min(7, durationDays || 7));
+  const res = await fetchWithTimeout(
+    `${DISCOVERY_BASE}/Stations/${stationId}/TidalEvents?duration=${duration}`,
+    { headers: { "Ocp-Apim-Subscription-Key": apiKey } },
+    30000
+  );
+  if (!res.ok) throw new Error(`Admiralty tidal events fetch failed: ${res.status}`);
+  const data = await res.json();
+  // Admiralty's own predictions are always Chart-Datum-referenced — no
+  // conversion needed on this side.
+  return data
+    .filter(e => !e.Filtered && typeof e.Height === "number")
+    .map(e => ({
+      type: e.EventType === "HighWater" ? "high" : "low",
+      time: Date.parse(e.DateTime),
+      heightCD: e.Height
+    }))
+    .filter(e => !Number.isNaN(e.time))
+    .sort((a, b) => a.time - b.time);
+}
+
+// ---- Learned secondary-port offset storage ----
+// Keyed by the DISCOVERY station id (not the saved location's own id),
+// mirroring how TFV is keyed by EA station id — two saved locations
+// that share a nearest Discovery station share the same real-world
+// geographic offset, since it's the same two physical places being
+// compared either way.
+function secondaryOffsetKey(discoveryStationId) {
+  return `cloude-tide:secondary:${discoveryStationId}`;
+}
+
+function loadSecondaryOffset(discoveryStationId) {
+  try {
+    const raw = localStorage.getItem(secondaryOffsetKey(discoveryStationId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSecondaryOffset(discoveryStationId, offset) {
+  try {
+    localStorage.setItem(secondaryOffsetKey(discoveryStationId), JSON.stringify(offset));
+  } catch {
+    // Storage unavailable — learned offset just won't persist between visits.
+  }
+}
+
+// Runs the full learn: fetch Discovery's real events, compare each
+// against our own EA-station model's nearest same-type prediction (in
+// Chart Datum terms, via the EA station's own cdOffsetOD — comparing
+// before that conversion would just measure the OD/CD gap between the
+// two data sources, not the real geographic difference between the two
+// places), and average the differences separately for highs and lows.
+//
+// Returns null (and stores nothing) if the EA station has no confident
+// cdOffsetOD — proceeding without it would silently produce a "learned
+// offset" that's actually just measuring the wrong thing.
+async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit, epochIso }) {
+  if (typeof eaStation.cdOffsetOD !== "number") {
+    throw new Error("This location's nearest EA station has no confirmed Chart Datum offset yet, so a learned correction against it wouldn't be trustworthy.");
+  }
+
+  const discoveryEvents = await fetchDiscoveryEvents(discoveryStationId, apiKey, 7);
+  if (discoveryEvents.length < 4) {
+    throw new Error("Admiralty didn't return enough tidal events to learn from — try again later.");
+  }
+
+  const fudge = loadTideFudge(eaStation.id);
+  const windowStartHours = (discoveryEvents[0].time - Date.parse(epochIso)) / 3600000 - 12;
+  const windowEndHours = (discoveryEvents[discoveryEvents.length - 1].time - Date.parse(epochIso)) / 3600000 + 12;
+  const modelEvents = findTideExtremes(fit, windowStartHours, windowEndHours).map(e => ({
+    type: e.type,
+    time: Date.parse(epochIso) + e.hours * 3600000,
+    // OD (mAOD-consistent, since the model was fit to EA's own mAOD
+    // readings) → Chart Datum, so this is comparable to Discovery's
+    // own CD-referenced heights.
+    heightCD: applyTideFudge(e.level, fudge) - eaStation.cdOffsetOD
+  }));
+
+  const diffsByType = { high: { time: [], height: [] }, low: { time: [], height: [] } };
+  discoveryEvents.forEach(dEvent => {
+    let nearest = null, nearestGap = Infinity;
+    modelEvents.forEach(mEvent => {
+      if (mEvent.type !== dEvent.type) return;
+      const gap = Math.abs(mEvent.time - dEvent.time);
+      if (gap < nearestGap) {
+        nearestGap = gap;
+        nearest = mEvent;
+      }
+    });
+    // A match more than 4 hours off is almost certainly the wrong cycle
+    // (e.g. comparing against a neighbouring day's event rather than
+    // the corresponding one) — skip rather than pollute the average.
+    if (nearest && nearestGap <= 4 * 3600000) {
+      diffsByType[dEvent.type].time.push((dEvent.time - nearest.time) / 60000); // minutes
+      diffsByType[dEvent.type].height.push(dEvent.heightCD - nearest.heightCD); // metres
+    }
+  });
+
+  const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const offset = {
+    highTimeMin: mean(diffsByType.high.time),
+    highHeightM: mean(diffsByType.high.height),
+    lowTimeMin: mean(diffsByType.low.time),
+    lowHeightM: mean(diffsByType.low.height),
+    sampleCount: diffsByType.high.time.length + diffsByType.low.time.length,
+    learnedAt: new Date().toISOString()
+  };
+  if (offset.highTimeMin === null && offset.lowTimeMin === null) {
+    throw new Error("Couldn't match up enough events between Admiralty and this station's own model to learn from — try again later.");
+  }
+
+  saveSecondaryOffset(discoveryStationId, offset);
+  return offset;
+}
+
+// Applies a learned secondary-port offset to a single hours/OD-level
+// pair, returning a Chart-Datum-referenced result. Blends between the
+// high-tide offset and the low-tide offset by how far through the
+// current half-cycle the given hour sits, rather than snapping straight
+// from one to the other at each event — real secondary-port tide tables
+// interpolate between reference points the same way, so a smooth blend
+// is the standard approach here, not a simplification of it.
+//
+// Returns null if there's no usable offset, or if eaStation has no
+// confirmed cdOffsetOD (the learned offset is itself CD-referenced,
+// since that's what Admiralty's own data uses — applying it to an
+// unconverted OD level would silently mix two different height
+// references, which is exactly the mismatch this function exists to
+// avoid rather than reproduce).
+function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
+  if (!offset || typeof eaStation.cdOffsetOD !== "number") return null;
+  const nearbyEvents = findTideExtremes(fit, hours - 8, hours + 8);
+  if (nearbyEvents.length < 2) return null;
+
+  let before = null, after = null;
+  for (const e of nearbyEvents) {
+    if (e.hours <= hours) before = e;
+    if (e.hours > hours && !after) after = e;
+  }
+  if (!before || !after) return null;
+
+  const offsetFor = type => ({
+    timeMin: type === "high" ? offset.highTimeMin : offset.lowTimeMin,
+    heightM: type === "high" ? offset.highHeightM : offset.lowHeightM
+  });
+  const beforeOffset = offsetFor(before.type);
+  const afterOffset = offsetFor(after.type);
+  if (beforeOffset.timeMin === null || afterOffset.timeMin === null) return null;
+
+  const span = after.hours - before.hours;
+  const frac = span > 0 ? (hours - before.hours) / span : 0;
+  const timeMin = beforeOffset.timeMin + (afterOffset.timeMin - beforeOffset.timeMin) * frac;
+  const heightM = beforeOffset.heightM + (afterOffset.heightM - beforeOffset.heightM) * frac;
+
+  const levelCD = (odLevel - eaStation.cdOffsetOD) + heightM;
+  return { hours: hours + timeMin / 60, levelCD };
 }

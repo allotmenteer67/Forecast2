@@ -1441,6 +1441,30 @@ footer {
   background: #f3d9bd;
 }
 
+.place-row-admiralty {
+  margin-top: 6px;
+}
+
+.place-row-admiralty-check {
+  margin-top: 4px;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.place-row-admiralty-check:hover {
+  filter: brightness(0.96);
+}
+
+.place-row-admiralty-status {
+  margin-top: 3px;
+}
+.place-row-admiralty-status:not(:empty) {
+  color: var(--amber);
+}
+
 /* ---- Bottom nav (replaces the old footer links on every page) ---- */
 
 .bottom-nav {

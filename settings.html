@@ -77,6 +77,23 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Admiralty accuracy (optional)</legend>
+        <p class="note">A saved tide location often sits some real distance from its nearest gauge above — Teignmouth, for example, is matched to Plymouth, over 50km away, and can genuinely run 35-40 minutes and the best part of a metre different at high tide. A free Admiralty Discovery API key lets each location learn its own real correction against Admiralty's own data for that exact spot, rather than relying on the nearest gauge unmodified. Get a free key at admiraltyapi.portal.azure-api.net (Products → UK Tidal API → Discovery tier).</p>
+        <label>
+          API key
+          <div class="location-row">
+            <input id="discoveryApiKeyInput" type="text" placeholder="Paste your Discovery subscription key" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+        </label>
+        <div class="location-actions">
+          <button id="saveDiscoveryKeyButton" type="button">Save key</button>
+        </div>
+        <p id="discoveryKeyStatus" class="actual-status status-error-only"></p>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Appearance</legend>
         <div id="themeSwatches" class="theme-swatches"></div>
       </fieldset>

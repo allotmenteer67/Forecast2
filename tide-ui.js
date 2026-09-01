@@ -42,6 +42,20 @@ function tideDateQualifier() {
   return ` · ${formatDateLong(targetDateForRollback(rollbackDays))}`;
 }
 
+// Applies a location's learned Admiralty correction (if any) to a single
+// hours/OD-level pair. Falls back to the plain (TFV-corrected, OD/mAOD)
+// value when there's no secondary offset for this location — which is
+// every location until it's been checked against Admiralty at least
+// once. Centralised here so the row and the sheet apply it identically.
+function applyLocationCorrection(location, fit, hours, odLevel) {
+  const secondary = location.discoveryStation ? loadSecondaryOffset(location.discoveryStation.id) : null;
+  if (secondary) {
+    const result = applySecondaryOffset(fit, hours, odLevel, location.station, secondary);
+    if (result) return { hours: result.hours, level: result.levelCD, isCD: true };
+  }
+  return { hours, level: odLevel, isCD: false };
+}
+
 async function renderTideRow() {
   if (!tideRow) return;
   const toggles = loadHeadlineToggles();
@@ -76,18 +90,27 @@ async function renderTideRow() {
 
   const fudge = loadTideFudge(location.station.id);
   const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
-  const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
+  const rawEvents = findTideExtremes(built.fit, nowHours - 1, nowHours + 30);
+  const corrected = rawEvents
+    .map(e => {
+      const odLevel = applyTideFudge(e.level, fudge);
+      const result = applyLocationCorrection(location, built.fit, e.hours, odLevel);
+      return { type: e.type, hours: result.hours, level: result.level, isCD: result.isCD };
+    })
+    .sort((a, b) => a.hours - b.hours)
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
 
-  const partsHtml = events.map(e => {
+  const isCorrected = corrected.some(e => e.isCD);
+  const finalLabelHtml = `TIDE — ${location.label}${tideDateQualifier()}${isCorrected ? " · Admiralty-corrected" : ""}`;
+
+  const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
-    const level = applyTideFudge(e.level, fudge);
     const timeStr = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${level.toFixed(1)}m</small></span>`;
+    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${e.level.toFixed(1)}m</small></span>`;
   }).join("");
 
-  tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><div class="tide-row-events">${partsHtml}</div>`;
+  tideRow.innerHTML = `<span class="tide-row-label">${finalLabelHtml}</span><div class="tide-row-events">${partsHtml}</div>`;
   renderTideDots();
 }
 
@@ -250,8 +273,12 @@ async function openTideSheet() {
   const startHours = nowHours - TIDE_SHEET_WINDOW_PAST_HOURS;
   const endHours = nowHours + TIDE_SHEET_WINDOW_FUTURE_HOURS;
 
-  sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours));
-  sheetFootnote.textContent = "";
+  sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours, location));
+
+  const hasSecondaryOffset = location.discoveryStation && loadSecondaryOffset(location.discoveryStation.id);
+  sheetFootnote.textContent = hasSecondaryOffset
+    ? `The marked highs/lows are corrected for this exact location using its own learned Admiralty offset, in Chart Datum. The curve's shape still follows ${location.station.label}'s own model.`
+    : "";
 }
 
 // Pixels of horizontal room per hour of tide data. At the old fixed
@@ -263,7 +290,7 @@ async function openTideSheet() {
 // scrolls to, rather than squashing everything into one screen's width.
 const TIDE_GRAPH_PX_PER_HOUR = 10;
 
-function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
+function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, location) {
   const totalHours = endHours - startHours;
   const padL = 44, padR = 16, padT = 50, padB = 46;
   // Never narrower than a phone screen even for a short window — only
@@ -334,8 +361,11 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
 
   const events = findTideExtremes(fit, startHours, endHours);
   events.forEach(e => {
-    const level = applyTideFudge(e.level, fudge);
-    const x = xFor(e.hours);
+    const odLevel = applyTideFudge(e.level, fudge);
+    const result = location ? applyLocationCorrection(location, fit, e.hours, odLevel) : null;
+    const eventHours = result ? result.hours : e.hours;
+    const level = result ? result.level : odLevel;
+    const x = xFor(eventHours);
     const y = yFor(level);
     svg.appendChild(sheetSvgEl("circle", { cx: x, cy: y, r: 3.5, fill: "#2b7a78" }));
     const labelY = e.type === "high" ? y - 12 : y + 18;
@@ -343,7 +373,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
       x, y: labelY, class: "graph-axis-value", "text-anchor": "middle"
     }));
     label.textContent = `${level.toFixed(1)}m`;
-    const when = new Date(Date.parse(epochIso) + e.hours * 3600000);
+    const when = new Date(Date.parse(epochIso) + eventHours * 3600000);
     const timeLabel = svg.appendChild(sheetSvgEl("text", {
       x, y: labelY + (e.type === "high" ? -14 : 15), class: "graph-axis-label", "text-anchor": "middle"
     }));
@@ -394,6 +424,119 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
   const wrap = document.createElement("div");
   wrap.className = "graph-wrap tide-graph-wrap";
   wrap.appendChild(svg);
+  return wrap;
+}
+
+// ---- Settings page: Admiralty Discovery API key ----
+const discoveryApiKeyInput = document.getElementById("discoveryApiKeyInput");
+const saveDiscoveryKeyButton = document.getElementById("saveDiscoveryKeyButton");
+const discoveryKeyStatus = document.getElementById("discoveryKeyStatus");
+
+function setDiscoveryKeyStatus(message, isError) {
+  if (!discoveryKeyStatus) return;
+  discoveryKeyStatus.textContent = message || "";
+  discoveryKeyStatus.classList.toggle("is-error", !!isError);
+}
+
+if (discoveryApiKeyInput) {
+  const existing = loadDiscoveryKey();
+  if (existing) discoveryApiKeyInput.value = existing;
+}
+
+if (saveDiscoveryKeyButton) {
+  saveDiscoveryKeyButton.addEventListener("click", () => {
+    const key = (discoveryApiKeyInput?.value || "").trim();
+    saveDiscoveryKey(key);
+    setDiscoveryKeyStatus(key ? "Saved." : "Removed — locations will use their nearest gauge unmodified.", false);
+    renderTideLocationsList(); // re-render so each location's Admiralty row reflects the new key
+  });
+}
+
+// Builds the "Admiralty accuracy" sub-row for one saved location: the
+// learned offset if there is one, or a plain explanation of why
+// checking isn't available yet, plus the check/re-check button itself.
+// A fresh function per render (not cached) since it needs to reflect
+// whatever the current key and this location's own state are right now.
+function renderAdmiraltyRow(loc, allLocations) {
+  const wrap = document.createElement("div");
+  wrap.className = "place-row-admiralty";
+
+  const summary = document.createElement("small");
+  summary.className = "place-row-sub";
+  wrap.appendChild(summary);
+
+  const apiKey = loadDiscoveryKey();
+  const hasCdOffset = typeof loc.station.cdOffsetOD === "number";
+
+  function renderSummary() {
+    if (!apiKey) {
+      summary.textContent = "Admiralty: add a free API key above to check this location's real accuracy.";
+      return;
+    }
+    if (!hasCdOffset) {
+      summary.textContent = "Admiralty: not available — this location's nearest gauge has no confirmed Chart Datum reference yet.";
+      return;
+    }
+    const offset = loc.discoveryStation ? loadSecondaryOffset(loc.discoveryStation.id) : null;
+    if (!offset) {
+      summary.textContent = "Admiralty: not checked yet.";
+      return;
+    }
+    const parts = [];
+    if (offset.highTimeMin !== null) {
+      const sign = offset.highTimeMin >= 0 ? "+" : "";
+      parts.push(`high ${sign}${Math.round(offset.highTimeMin)}min / ${offset.highHeightM >= 0 ? "+" : ""}${offset.highHeightM.toFixed(1)}m`);
+    }
+    if (offset.lowTimeMin !== null) {
+      const sign = offset.lowTimeMin >= 0 ? "+" : "";
+      parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${offset.lowHeightM >= 0 ? "+" : ""}${offset.lowHeightM.toFixed(1)}m`);
+    }
+    summary.textContent = `Admiralty: learned ${parts.join(", ")} vs ${loc.station.label} (${offset.sampleCount} events, ${formatDateLong(new Date(offset.learnedAt))}).`;
+  }
+  renderSummary();
+
+  if (apiKey && hasCdOffset) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "place-row-admiralty-check";
+    button.textContent = loc.discoveryStation ? "Re-check against Admiralty" : "Check against Admiralty";
+    const status = document.createElement("small");
+    status.className = "place-row-sub place-row-admiralty-status";
+
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      status.textContent = "Checking…";
+      try {
+        let discoveryStation = loc.discoveryStation;
+        if (!discoveryStation) {
+          discoveryStation = await nearestDiscoveryStation(loc.station.lat, loc.station.lon, apiKey);
+          if (!discoveryStation) throw new Error("No Admiralty station found nearby.");
+          loc.discoveryStation = { id: discoveryStation.id, name: discoveryStation.name, distanceKm: discoveryStation.distanceKm };
+          saveTideLocations(allLocations);
+        }
+        const built = await getOrBuildTideFit(loc.station);
+        if (!built) throw new Error("This location's own tide model isn't ready yet — try again shortly.");
+        await learnSecondaryOffset({
+          eaStation: loc.station,
+          discoveryStationId: discoveryStation.id,
+          apiKey,
+          fit: built.fit,
+          epochIso: built.epochIso
+        });
+        status.textContent = "";
+        renderSummary();
+        renderTideRow(); // reflect the new correction immediately if this is the current location
+      } catch (err) {
+        status.textContent = err.message || "Couldn't check against Admiralty right now.";
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(status);
+  }
+
   return wrap;
 }
 
@@ -452,6 +595,7 @@ function renderTideLocationsList() {
 
     info.appendChild(nameLine);
     info.appendChild(stationSub);
+    info.appendChild(renderAdmiraltyRow(loc, locations));
     row.appendChild(info);
 
     const switchBtn = document.createElement("button");
