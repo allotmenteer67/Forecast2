@@ -138,34 +138,30 @@ function switchToAdjacentTideLocation(direction) {  const locations = loadTideLo
   renderTideRow();
 }
 
-// ---- Swipe gesture ----
-// A deliberately separate pointer-tracking zone from the weather
-// headline's own swipe (see swipeToAdjacentPlace in app.js) — tide
-// locations are an independent list, so this needs its own
-// start/direction/pointerId state rather than sharing the weather
-// swipe's variables, but otherwise mirrors that implementation exactly
-// (including the pointer-capture and per-finger tracking fixes that
-// swipe needed this session — no reason for this one to start without
-// them and rediscover the same bugs later).
+// ---- Swipe-to-switch-location + tap-to-open ----
+// Three previous attempts at disambiguating tap-vs-swipe entirely
+// within our own pointerdown/pointermove/pointerup/pointercancel
+// tracking kept failing on real hardware despite checking out fine in
+// every test that could actually be run against this code (no browser
+// access here — see the session's own back-and-forth on this). Rather
+// than keep patching that approach, this now leans on the one thing
+// already proven reliable elsewhere in this exact app: every OTHER
+// headline cell opens its sheet with a plain "click" listener and none
+// of them have ever needed a swipe/tap fix. Pointer tracking here is
+// now used for ONLY ONE thing — detecting a genuine swipe — and a
+// completed swipe sets a flag to swallow the click event that follows
+// it (both fire from the same gesture); everything else just falls
+// through to the native click, letting the browser's own tap-vs-drag
+// disambiguation do the job instead of a hand-rolled threshold.
 if (tideRow) {
   const SWIPE_THRESHOLD_PX = 32;
-  const CANCEL_TAP_TOLERANCE_PX = 10;
-  let startX = null, startY = null, lastX = null, lastY = null, swiping = false, direction = null, pointerId = null;
-
-  function reset() {
-    startX = null; startY = null; lastX = null; lastY = null;
-    swiping = false; direction = null; pointerId = null;
-  }
+  let startX = null, startY = null, pointerId = null, swiped = false;
 
   tideRow.addEventListener("pointerdown", e => {
     if (pointerId !== null) return;
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
-    lastX = e.clientX;
-    lastY = e.clientY;
-    swiping = false;
-    direction = null;
     try {
       tideRow.setPointerCapture(e.pointerId);
     } catch {
@@ -175,42 +171,25 @@ if (tideRow) {
 
   tideRow.addEventListener("pointermove", e => {
     if (startX === null || e.pointerId !== pointerId) return;
-    lastX = e.clientX;
-    lastY = e.clientY;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
-    if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      swiping = true;
-      direction = dx < 0 ? 1 : -1;
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      switchToAdjacentTideLocation(dx < 0 ? 1 : -1);
+      swiped = true;
+      startX = null; startY = null; pointerId = null; // one switch per gesture — don't re-trigger on further movement
     }
   });
 
   tideRow.addEventListener("pointerup", e => {
-    if (startX === null || e.pointerId !== pointerId) return;
-    if (swiping && direction !== null) {
-      switchToAdjacentTideLocation(direction);
-    } else {
-      openTideSheet();
-    }
-    reset();
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
+  });
+  tideRow.addEventListener("pointercancel", e => {
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
   });
 
-  tideRow.addEventListener("pointercancel", e => {
-    if (e.pointerId !== pointerId) return;
-    // The browser can cancel a touch the moment it decides to start its
-    // own native scroll (touch-action: pan-y grants it that right on any
-    // vertical movement) — including a real tap's few pixels of
-    // incidental jitter. If we never crossed the swipe threshold and
-    // barely moved at all, this was meant as a tap, so honour it as one
-    // rather than silently dropping it.
-    if (!swiping && startX !== null && lastX !== null) {
-      const dx = lastX - startX;
-      const dy = lastY - startY;
-      if (Math.abs(dx) <= CANCEL_TAP_TOLERANCE_PX && Math.abs(dy) <= CANCEL_TAP_TOLERANCE_PX) {
-        openTideSheet();
-      }
-    }
-    reset();
+  tideRow.addEventListener("click", () => {
+    if (swiped) { swiped = false; return; } // this click belongs to the swipe gesture that just ran — not a tap
+    openTideSheet();
   });
 }
 

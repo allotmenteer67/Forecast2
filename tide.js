@@ -324,21 +324,88 @@ function saveTideFudge(stationId, fudge) {
   }
 }
 
-// Cached fit per station, kept in memory only (not persisted) — refit
-// happens once per page load per station rather than on every render,
-// the same "don't redo expensive work every render" principle behind
-// this session's in-memory FFV cache fix for the main app.
+// Cached fit per station — an in-memory layer for the current page load
+// (fastest, no I/O at all), backed by a persisted copy in localStorage
+// so a location that's already been fitted once stays instant across
+// page loads and app restarts too, not just within one session.
+//
+// Tides are astronomically stable — the constituents underlying a
+// harmonic fit don't meaningfully drift over a week — so there's no
+// need to hold up a location switch on a fresh multi-second rebuild
+// just to keep the model current. TIDE_FIT_MAX_AGE_MS instead triggers
+// a QUIET background refresh once a persisted fit is old enough, using
+// whatever's already cached in the meantime rather than making the
+// person wait for it — the same stale-while-revalidate approach the
+// service worker (sw.js) already uses for the app shell.
 const tideFitCache = new Map();
+const tideFitRefreshing = new Set(); // stationIds with a background refresh already in flight — avoids piling up duplicate refreshes on repeat visits while one's still running
+const TIDE_FIT_MAX_AGE_MS = 7 * 24 * 3600000; // a week
 
-async function getOrBuildTideFit(station) {
-  if (tideFitCache.has(station.id)) return tideFitCache.get(station.id);
+function tideFitStorageKey(stationId) {
+  return `cloude-tide:fit:${stationId}`;
+}
+
+function loadPersistedTideFit(stationId) {
+  try {
+    const raw = localStorage.getItem(tideFitStorageKey(stationId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedTideFit(stationId, result) {
+  try {
+    localStorage.setItem(tideFitStorageKey(stationId), JSON.stringify({
+      fit: result.fit,
+      epochIso: result.epochIso,
+      builtAt: Date.now()
+    }));
+  } catch {
+    // Storage unavailable — just won't persist between visits; falls
+    // back to a live rebuild each time, same as before this change.
+  }
+}
+
+// Does the actual live fetch + fit — the one genuinely slow path,
+// now only ever hit for a station that's never been fitted before, or
+// during a quiet background refresh of a week-old one.
+async function buildAndCacheTideFit(station) {
   const backfill = await backfillTideStation(station);
   if (!backfill || backfill.readings.length < MIN_FIT_READINGS) return null;
   const fit = fitTideHarmonics(backfill.readings);
   if (!fit) return null;
-  const result = { fit, epochIso: backfill.epochIso, latestReadings: backfill.readings.slice(-400) };
+  const result = { fit, epochIso: backfill.epochIso };
   tideFitCache.set(station.id, result);
+  savePersistedTideFit(station.id, result);
   return result;
+}
+
+function refreshTideFitInBackground(station) {
+  if (tideFitRefreshing.has(station.id)) return;
+  tideFitRefreshing.add(station.id);
+  buildAndCacheTideFit(station)
+    .catch(() => {
+      // A failed background refresh just means the existing (still
+      // perfectly usable) cached fit keeps being used until one succeeds.
+    })
+    .finally(() => tideFitRefreshing.delete(station.id));
+}
+
+async function getOrBuildTideFit(station) {
+  if (tideFitCache.has(station.id)) return tideFitCache.get(station.id);
+
+  const persisted = loadPersistedTideFit(station.id);
+  if (persisted && persisted.fit && persisted.epochIso) {
+    const result = { fit: persisted.fit, epochIso: persisted.epochIso };
+    tideFitCache.set(station.id, result);
+    if (!persisted.builtAt || Date.now() - persisted.builtAt > TIDE_FIT_MAX_AGE_MS) {
+      refreshTideFitInBackground(station); // don't await — use what's cached now, improve it quietly for next time
+    }
+    return result;
+  }
+
+  return buildAndCacheTideFit(station); // never built before — this one genuinely has to wait
 }
 
 // ==== Admiralty Discovery API — secondary-port correction ====
