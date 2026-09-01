@@ -24,6 +24,8 @@ const SHELL_FILES = [
   "solar-ui.js",
   "tide.js",
   "tide-ui.js",
+  "fishing.js",
+  "fishing-ui.js",
   "style.css",
   "manifest.json"
 ];

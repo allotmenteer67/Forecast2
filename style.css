@@ -187,6 +187,61 @@ header p {
 .tide-card[data-color="lavender"] { background: #eae6f5; }
 .tide-card[data-color="white"] { background: #ffffff; }
 
+.fishing-card {
+  background: #eef6ea;
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
+  border: 1px solid #e7ede6;
+}
+
+.fishing-row-value {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fishing-band {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fishing-band-poor { background: #f6dad4; color: #9c3b2c; }
+.fishing-band-fair { background: #faedc7; color: #8a6d1f; }
+.fishing-band-good { background: #dcefe0; color: #2f6f4f; }
+.fishing-band-excellent { background: #cdeadb; color: #1f5c3d; }
+
+.fishing-factor-group {
+  margin-top: 10px;
+}
+.fishing-factor-group:first-child {
+  margin-top: 0;
+}
+.fishing-group-label {
+  display: block;
+  color: #6b7d70;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.fishing-factor-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--accent-dark);
+  padding: 3px 0;
+}
+.fishing-factor-row.fishing-factor-folklore {
+  color: var(--accent-muted);
+}
+
 .tide-row {
   display: flex;
   align-items: center;
@@ -1462,6 +1517,10 @@ footer {
 
 .place-row-remove:hover {
   background: #f3d9bd;
+}
+
+.place-row-marktype {
+  margin-top: 8px;
 }
 
 .place-row-admiralty {

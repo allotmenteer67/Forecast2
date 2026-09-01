@@ -84,6 +84,17 @@
 
     <section class="controls">
       <fieldset>
+        <legend>Fishing</legend>
+        <p class="note">Shares its location with Tide above — set each saved spot as Coastal or Estuary there to control which factors apply. The front-page row and its graph show a rule-of-thumb Poor/Fair/Good/Excellent estimate, not measured science — see Help for exactly how it's worked out.</p>
+        <label class="check">
+          <input type="checkbox" id="fishingShowRawToggle">
+          <span>Show raw factors on the fishing graph</span>
+        </label>
+      </fieldset>
+    </section>
+
+    <section class="controls">
+      <fieldset>
         <legend>Appearance</legend>
         <div id="themeSwatches" class="theme-swatches"></div>
       </fieldset>
@@ -177,6 +188,8 @@
   <script src="app.js"></script>
   <script src="tide.js"></script>
   <script src="tide-ui.js"></script>
+  <script src="fishing.js"></script>
+  <script src="fishing-ui.js"></script>
   <script src="settings.js"></script>
   <script>
     if ("serviceWorker" in navigator) {

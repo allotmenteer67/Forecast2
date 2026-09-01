@@ -2313,14 +2313,15 @@ function median(values) {
 // lot to a gardener, barely at all to someone else, and there's no
 // reason to force either way.
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint", "tide"];
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
   sunshine: true,
   soilTemperature: false,
   dewPoint: false,
-  tide: false
+  tide: false,
+  fishing: false
 };
 
 function loadHeadlineToggles() {

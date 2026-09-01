@@ -184,6 +184,7 @@ function renderTideDots() {
       if (loc.id === currentId) return;
       saveCurrentTideLocationId(loc.id);
       renderTideRow();
+      if (typeof renderFishingRow === "function") renderFishingRow();
     });
     tideDots.appendChild(button);
   });
@@ -197,6 +198,7 @@ function switchToAdjacentTideLocation(direction) {  const locations = loadTideLo
   const nextIndex = (currentIndex + direction + locations.length) % locations.length;
   saveCurrentTideLocationId(locations[nextIndex].id);
   renderTideRow();
+  if (typeof renderFishingRow === "function") renderFishingRow();
 }
 
 // ---- Swipe-to-switch-location + tap-to-open ----
@@ -739,8 +741,40 @@ function renderTideLocationsList() {
     stationSub.className = "place-row-sub";
     stationSub.textContent = `nearest gauge: ${loc.station.label} (${loc.station.distanceKm.toFixed(0)}km)`;
 
+    const markTypeRow = document.createElement("div");
+    markTypeRow.className = "unit-row place-row-marktype";
+    const markTypeLabel = document.createElement("span");
+    markTypeLabel.className = "unit-row-name";
+    markTypeLabel.textContent = "Fishing mark";
+    markTypeRow.appendChild(markTypeLabel);
+    const markTypeToggle = document.createElement("div");
+    markTypeToggle.className = "unit-row-toggle";
+    [
+      { value: "coastal", text: "Coastal" },
+      { value: "estuary", text: "Estuary" }
+    ].forEach(opt => {
+      const pillLabel = document.createElement("label");
+      pillLabel.className = "unit-pill";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `markType-${loc.id}`;
+      input.value = opt.value;
+      input.checked = (loc.markType === "estuary" ? "estuary" : "coastal") === opt.value;
+      input.addEventListener("change", () => {
+        loc.markType = opt.value;
+        saveTideLocations(locations);
+        if (loc.id === currentId && typeof renderFishingRow === "function") renderFishingRow();
+      });
+      const text = document.createElement("span");
+      text.textContent = opt.text;
+      pillLabel.append(input, text);
+      markTypeToggle.appendChild(pillLabel);
+    });
+    markTypeRow.appendChild(markTypeToggle);
+
     info.appendChild(nameLine);
     info.appendChild(stationSub);
+    info.appendChild(markTypeRow);
     info.appendChild(renderAdmiraltyRow(loc, locations));
     row.appendChild(info);
 
@@ -752,6 +786,7 @@ function renderTideLocationsList() {
     switchBtn.addEventListener("click", () => {
       saveCurrentTideLocationId(loc.id);
       renderTideLocationsList();
+      if (typeof renderFishingRow === "function") renderFishingRow();
     });
     row.appendChild(switchBtn);
 
@@ -818,5 +853,6 @@ if (tideLocationsList) renderTideLocationsList();
 if (rollback) {
   rollback.addEventListener("input", () => {
     renderTideRow();
+    if (typeof renderFishingRow === "function") renderFishingRow();
   });
 }
