@@ -211,12 +211,26 @@ async function openTideSheet() {
     : "Self-derived prediction from this station's own tide-gauge history — see Help for how this compares to an official prediction.";
 }
 
-function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
-  const width = 340, height = 220, padL = 40, padR = 10, padT = 16, padB = 34;
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
+// Pixels of horizontal room per hour of tide data. At the old fixed
+// 340-unit width stretched to fit the screen, ~96 hours of data packed
+// consecutive highs/lows roughly 35-40px apart — nowhere near enough
+// room for a value label plus a time label under each one, which is
+// what caused the overlapping mess. This constant instead drives a
+// genuinely wider SVG (see width calculation below) that the wrapper
+// scrolls to, rather than squashing everything into one screen's width.
+const TIDE_GRAPH_PX_PER_HOUR = 10;
 
-  const stepHours = (endHours - startHours) / 200;
+function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
+  const totalHours = endHours - startHours;
+  const padL = 40, padR = 16, padT = 26, padB = 46;
+  // Never narrower than a phone screen even for a short window — only
+  // grows wider (and scrolls) once there's enough data to need it.
+  const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
+  const plotH = 148;
+  const width = plotW + padL + padR;
+  const height = plotH + padT + padB;
+
+  const stepHours = totalHours / 200;
   const rawPts = [];
   for (let h = startHours; h <= endHours; h += stepHours) {
     rawPts.push({ hours: h, level: predictTideLevel(fit, h) });
@@ -227,10 +241,19 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
   const minLevel = Math.min(...allLevels), maxLevel = Math.max(...allLevels);
   const levelRange = Math.max(0.5, maxLevel - minLevel);
 
-  const xFor = h => padL + ((h - startHours) / (endHours - startHours)) * plotW;
+  const xFor = h => padL + ((h - startHours) / totalHours) * plotW;
   const yFor = level => padT + plotH - ((level - minLevel) / levelRange) * plotH;
 
-  const svg = sheetSvgEl("svg", { viewBox: `0 0 ${width} ${height}`, class: "graph-svg" });
+  // Explicit pixel width/height (not just viewBox) so the SVG renders at
+  // its true intrinsic size inside the scrolling wrapper below, instead
+  // of being stretched down to the container's width like the other
+  // (single-screen) sheet graphs deliberately are.
+  const svg = sheetSvgEl("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    width: String(width),
+    height: String(height),
+    class: "graph-svg tide-graph-svg"
+  });
 
   [0, 0.5, 1].forEach(frac => {
     const y = padT + plotH * (1 - frac);
@@ -238,6 +261,25 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
     const label = svg.appendChild(sheetSvgEl("text", { x: padL - 6, y: y + 3, class: "graph-axis-value", "text-anchor": "end" }));
     label.textContent = (minLevel + levelRange * frac).toFixed(1);
   });
+
+  // Day boundaries as dashed vertical gridlines with the date at the
+  // TOP of the chart — kept well away from the tide-event labels below,
+  // which already occupy the bottom band (troughs) and just above the
+  // curve (peaks). Putting both sets of labels at the bottom was the
+  // other half of the original overlap.
+  let lastDay = null;
+  for (let h = startHours; h <= endHours; h += 1) {
+    const when = new Date(Date.parse(epochIso) + h * 3600000);
+    const dayKey = when.toDateString();
+    if (dayKey !== lastDay) {
+      lastDay = dayKey;
+      const x = xFor(h);
+      svg.appendChild(sheetSvgEl("line", { x1: x, x2: x, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "2 3" }));
+      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: padT - 10, class: "graph-axis-label", "text-anchor": "start" }));
+      label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    }
+  }
+
   const nowX = xFor(nowHours);
   svg.appendChild(sheetSvgEl("line", { x1: nowX, x2: nowX, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "3 3" }));
 
@@ -260,25 +302,13 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
     label.textContent = `${level.toFixed(1)}m`;
     const when = new Date(Date.parse(epochIso) + e.hours * 3600000);
     const timeLabel = svg.appendChild(sheetSvgEl("text", {
-      x, y: labelY + (e.type === "high" ? -11 : 22), class: "graph-axis-label", "text-anchor": "middle"
+      x, y: labelY + (e.type === "high" ? -11 : 15), class: "graph-axis-label", "text-anchor": "middle"
     }));
     timeLabel.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   });
 
-  let lastDay = null;
-  for (let h = startHours; h <= endHours; h += 6) {
-    const when = new Date(Date.parse(epochIso) + h * 3600000);
-    const dayKey = when.toDateString();
-    if (dayKey !== lastDay) {
-      lastDay = dayKey;
-      const x = xFor(h);
-      const label = svg.appendChild(sheetSvgEl("text", { x, y: height - 8, class: "graph-axis-label", "text-anchor": "start" }));
-      label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
-    }
-  }
-
   const wrap = document.createElement("div");
-  wrap.className = "graph-wrap";
+  wrap.className = "graph-wrap tide-graph-wrap";
   wrap.appendChild(svg);
   return wrap;
 }

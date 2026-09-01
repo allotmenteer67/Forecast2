@@ -1556,6 +1556,21 @@ footer {
   border-radius: 2px;
 }
 .graph-svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* Tide's graph is intentionally wider than the screen (see
+   TIDE_GRAPH_PX_PER_HOUR in tide-ui.js) so multi-day highs/lows have
+   room to breathe — this wrapper is what actually scrolls to reveal
+   it, and the width:auto below stops the general .graph-svg rule above
+   from squashing it back down to fit, which is what silently made the
+   "scrollable" wrapper never need to scroll in the first place. */
+.tide-graph-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tide-graph-wrap .tide-graph-svg {
+  width: auto;
+  max-width: none;
+}
 .graph-axis-label { font-size: 10px; fill: #6b7d70; }
 .graph-value-label { font-size: 10px; fill: var(--accent-dark); font-weight: 700; }
 .graph-gridline { stroke: #e4e9e4; stroke-width: 1; }

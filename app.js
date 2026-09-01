@@ -819,7 +819,12 @@ async function resolveLocation(input) {
 
   const match = results[0];
 
-  const label = [...new Set([match.name, match.admin2, match.admin1, match.country].filter(Boolean))].join(", ");
+  // Deliberately just name + county (admin2) — admin1/country ("England,
+  // United Kingdom") add nothing for a UK-only app and were overflowing
+  // tight spots like the tide row on the front page. The disambiguation
+  // picker above still shows the fuller [name, admin2, admin1, country]
+  // form, since that context genuinely needs it to tell places apart.
+  const label = [...new Set([match.name, match.admin2].filter(Boolean))].join(", ");
   // A place name has no natural short "area code" the way a postcode
   // does — coordinates rounded to ~11km (matching the weather models'
   // own resolution, so anything finer would be false precision anyway)
