@@ -174,13 +174,18 @@ header p {
    spanning the whole card. Shares the tap/hover feel of a headline
    cell (rounded, subtle hover) since it opens the same kind of sheet. */
 .tide-card {
-  background: white;
+  background: #e3f0f8;
   border-radius: 14px;
   padding: 14px 16px;
   margin-bottom: 18px;
   box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
   border: 1px solid #e7ede6;
 }
+.tide-card[data-color="teal"] { background: #dcefec; }
+.tide-card[data-color="mint"] { background: #e1f0e4; }
+.tide-card[data-color="sand"] { background: #f5ead9; }
+.tide-card[data-color="lavender"] { background: #eae6f5; }
+.tide-card[data-color="white"] { background: #ffffff; }
 
 .tide-row {
   display: flex;
@@ -1789,3 +1794,10 @@ footer {
 .theme-swatch[data-theme="blue"] { background: #3d6d95; }
 .theme-swatch[data-theme="teal"] { background: #2b7a78; }
 .theme-swatch[data-theme="olive"] { background: #6f7a3a; }
+
+.theme-swatch[data-tide-color="blue"] { background: #a9cfe8; }
+.theme-swatch[data-tide-color="teal"] { background: #8fc3bd; }
+.theme-swatch[data-tide-color="mint"] { background: #9bcaa4; }
+.theme-swatch[data-tide-color="sand"] { background: #e0bd8c; }
+.theme-swatch[data-tide-color="lavender"] { background: #c3b8e0; }
+.theme-swatch[data-tide-color="white"] { background: #ffffff; border-color: #dfe7e1; }
