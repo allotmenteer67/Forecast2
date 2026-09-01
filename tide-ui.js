@@ -55,7 +55,7 @@ async function renderTideRow() {
   const nowHours = (Date.now() - Date.parse(built.epochIso)) / 3600000;
   const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
     .filter(e => e.hours >= nowHours)
-    .slice(0, 4);
+    .slice(0, 2);
 
   const partsHtml = events.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
@@ -222,7 +222,7 @@ const TIDE_GRAPH_PX_PER_HOUR = 10;
 
 function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
   const totalHours = endHours - startHours;
-  const padL = 40, padR = 16, padT = 26, padB = 46;
+  const padL = 44, padR = 16, padT = 26, padB = 46;
   // Never narrower than a phone screen even for a short window — only
   // grows wider (and scrolls) once there's enough data to need it.
   const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
@@ -363,11 +363,11 @@ function renderTideLocationsList() {
     nameLine.appendChild(labelInput);
 
     const stationSub = document.createElement("small");
-    stationSub.className = "place-row-postcode";
+    stationSub.className = "place-row-sub";
     stationSub.textContent = `nearest gauge: ${loc.station.label} (${loc.station.distanceKm.toFixed(0)}km)`;
-    nameLine.appendChild(stationSub);
 
     info.appendChild(nameLine);
+    info.appendChild(stationSub);
     row.appendChild(info);
 
     const switchBtn = document.createElement("button");

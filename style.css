@@ -216,22 +216,23 @@ header p {
 
 .tide-row-events {
   display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
+  gap: 18px;
+  flex-wrap: nowrap;
 }
 
 .tide-event {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
-  font-size: 14px;
+  gap: 5px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--accent-dark);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .tide-event small {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--accent-muted);
 }
@@ -1391,6 +1392,15 @@ footer {
   white-space: nowrap;
 }
 
+.place-row-sub {
+  display: block;
+  color: #6b7d70;
+  font-size: 11px;
+  margin-top: 3px;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .place-row-switch {
   flex: 0 0 auto;
   width: 76px;
@@ -1483,14 +1493,19 @@ footer {
   border-radius: 20px 20px 0 0;
   box-shadow: 0 -8px 30px rgba(20,30,24,.22);
   transform: translateY(100%);
-  transition: transform .28s cubic-bezier(.32,.72,0,1);
+  visibility: hidden;
+  transition: transform .28s cubic-bezier(.32,.72,0,1), visibility 0s linear .28s;
   z-index: 11;
   padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
   max-height: 78vh;
   overflow-y: auto;
 }
 .sheet[hidden] { display: block; } /* transform handles hiding, so it can transition; hidden just removes from a11y tree via JS toggle instead */
-.sheet.is-open { transform: translateY(0); }
+.sheet.is-open {
+  transform: translateY(0);
+  visibility: visible;
+  transition: transform .28s cubic-bezier(.32,.72,0,1);
+}
 
 .sheet-handle {
   width: 36px; height: 4px;
@@ -1565,7 +1580,14 @@ footer {
    "scrollable" wrapper never need to scroll in the first place. */
 .tide-graph-wrap {
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+.tide-graph-wrap .graph-axis-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tide-graph-wrap .graph-axis-label {
+  font-size: 12px;
 }
 .tide-graph-wrap .tide-graph-svg {
   width: auto;
