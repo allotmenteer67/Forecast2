@@ -474,7 +474,7 @@ input[type="range"]:active::-moz-range-thumb {
   padding: 10px 12px 12px;
 }
 
-.rollback {
+.rollback:not(:first-child) {
   margin-top: 16px;
 }
 

@@ -101,8 +101,7 @@ async function renderTideRow() {
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
 
-  const isCorrected = corrected.some(e => e.isCD);
-  const finalLabelHtml = `TIDE — ${location.label}${tideDateQualifier()}${isCorrected ? " · Admiralty-corrected" : ""}`;
+  const finalLabelHtml = `TIDE — ${location.label}${tideDateQualifier()}`;
 
   const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
