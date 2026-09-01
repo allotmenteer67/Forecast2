@@ -204,11 +204,7 @@ async function openTideSheet() {
   const endHours = nowHours + TIDE_SHEET_WINDOW_FUTURE_HOURS;
 
   sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours));
-
-  const showBoth = fudge !== null && fudge !== undefined && Math.abs(fudge) > 0.01;
-  sheetFootnote.textContent = showBoth
-    ? `Corrected by ${fudge >= 0 ? "+" : ""}${fudge.toFixed(2)}m (this station's own learned adjustment). Raw prediction shown as the fainter line.`
-    : "Self-derived prediction from this station's own tide-gauge history — see Help for how this compares to an official prediction.";
+  sheetFootnote.textContent = "";
 }
 
 // Pixels of horizontal room per hour of tide data. At the old fixed
@@ -222,7 +218,7 @@ const TIDE_GRAPH_PX_PER_HOUR = 10;
 
 function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
   const totalHours = endHours - startHours;
-  const padL = 44, padR = 16, padT = 26, padB = 46;
+  const padL = 44, padR = 16, padT = 50, padB = 46;
   // Never narrower than a phone screen even for a short window — only
   // grows wider (and scrolls) once there's enough data to need it.
   const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
@@ -275,7 +271,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
       lastDay = dayKey;
       const x = xFor(h);
       svg.appendChild(sheetSvgEl("line", { x1: x, x2: x, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "2 3" }));
-      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: padT - 10, class: "graph-axis-label", "text-anchor": "start" }));
+      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: 14, class: "graph-axis-label", "text-anchor": "start" }));
       label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
     }
   }
@@ -295,14 +291,14 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
     const x = xFor(e.hours);
     const y = yFor(level);
     svg.appendChild(sheetSvgEl("circle", { cx: x, cy: y, r: 3.5, fill: "#2b7a78" }));
-    const labelY = e.type === "high" ? y - 10 : y + 18;
+    const labelY = e.type === "high" ? y - 12 : y + 18;
     const label = svg.appendChild(sheetSvgEl("text", {
       x, y: labelY, class: "graph-axis-value", "text-anchor": "middle"
     }));
     label.textContent = `${level.toFixed(1)}m`;
     const when = new Date(Date.parse(epochIso) + e.hours * 3600000);
     const timeLabel = svg.appendChild(sheetSvgEl("text", {
-      x, y: labelY + (e.type === "high" ? -11 : 15), class: "graph-axis-label", "text-anchor": "middle"
+      x, y: labelY + (e.type === "high" ? -14 : 15), class: "graph-axis-label", "text-anchor": "middle"
     }));
     timeLabel.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   });

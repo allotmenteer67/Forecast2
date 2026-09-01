@@ -1050,6 +1050,16 @@ tbody tr:last-child td {
   display: none;
 }
 
+/* Same specificity-tie fix as headline-status-block above — .tide-row's
+   own "display: flex" was beating the browser's built-in [hidden] rule,
+   so tideRow.hidden = true in JS did nothing: the row stayed rendered
+   as an empty flex box, still taking up its margin/padding/border-top
+   space between Dew Point and the Today slider even with tide switched
+   off or no tide location saved. */
+.tide-row[hidden] {
+  display: none;
+}
+
 /* Front-page escalation banner — a calm, informational green rather than
    the amber "something's wrong" tone of the weather-load error above,
    since this is an FYI worth a glance, not a problem needing action. */
