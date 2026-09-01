@@ -373,9 +373,10 @@ async function getOrBuildTideFit(station) {
 // limit (see the Compare page's "Backfill 1 year of real data" button).
 
 const DISCOVERY_KEY_STORAGE = "cloude-tide:discoveryKey";
+const DISCOVERY_PROXY_STORAGE = "cloude-tide:discoveryProxyUrl";
 const DISCOVERY_STATIONS_CACHE_KEY = "cloude-tide:discoveryStations";
 const DISCOVERY_STATIONS_CACHE_MAX_AGE_MS = 30 * 24 * 3600000; // 30 days — this list barely ever changes
-const DISCOVERY_BASE = "https://admiraltyapi.azure-api.net/uktidalapi/api/V1";
+const DISCOVERY_DIRECT_HOST = "https://admiraltyapi.azure-api.net"; // Admiralty's own docs confirm this can't be called directly from a browser — no CORS header on their side — so this is only ever used as a fallback label, not expected to actually succeed from here
 
 function loadDiscoveryKey() {
   try {
@@ -391,6 +392,50 @@ function saveDiscoveryKey(key) {
     else localStorage.removeItem(DISCOVERY_KEY_STORAGE);
   } catch {
     // Storage unavailable — key just won't persist between visits.
+  }
+}
+
+function loadDiscoveryProxyUrl() {
+  try {
+    return (localStorage.getItem(DISCOVERY_PROXY_STORAGE) || "").replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function saveDiscoveryProxyUrl(url) {
+  try {
+    const trimmed = (url || "").replace(/\/+$/, "");
+    if (trimmed) localStorage.setItem(DISCOVERY_PROXY_STORAGE, trimmed);
+    else localStorage.removeItem(DISCOVERY_PROXY_STORAGE);
+  } catch {
+    // Storage unavailable — proxy URL just won't persist between visits.
+  }
+}
+
+// The proxy forwards whatever path/query it receives straight on to
+// Admiralty (see admiralty-proxy-worker.js), so the client-side path
+// structure stays identical either way — only the host changes.
+function discoveryApiBase() {
+  const proxy = loadDiscoveryProxyUrl();
+  return `${proxy || DISCOVERY_DIRECT_HOST}/uktidalapi/api/V1`;
+}
+
+// Wraps a Discovery fetch so a raw network-level failure (TypeError,
+// "Load failed", "Failed to fetch" — exactly what a CORS block looks
+// like from fetch()'s perspective) gets a clear, actionable message
+// when there's no proxy configured yet, rather than a cryptic browser
+// error with no indication of what to actually do about it.
+async function fetchDiscovery(path, apiKey) {
+  try {
+    return await fetchWithTimeout(`${discoveryApiBase()}${path}`, {
+      headers: { "Ocp-Apim-Subscription-Key": apiKey }
+    }, 30000);
+  } catch (err) {
+    if (!loadDiscoveryProxyUrl()) {
+      throw new Error("Couldn't reach Admiralty directly — browsers can't call their API without a small relay in between. Set a Discovery proxy URL in Settings (see admiralty-proxy-worker.js in the project files).");
+    }
+    throw err;
   }
 }
 
@@ -412,9 +457,7 @@ async function loadDiscoveryStations(apiKey) {
     // fall through to a fresh fetch
   }
 
-  const res = await fetchWithTimeout(`${DISCOVERY_BASE}/Stations/`, {
-    headers: { "Ocp-Apim-Subscription-Key": apiKey }
-  }, 30000);
+  const res = await fetchDiscovery("/Stations/", apiKey);
   if (!res.ok) throw new Error(`Admiralty station list fetch failed: ${res.status}`);
   const geojson = await res.json();
   const stations = (geojson.features || [])
@@ -449,11 +492,7 @@ async function nearestDiscoveryStation(lat, lon, apiKey) {
 
 async function fetchDiscoveryEvents(stationId, apiKey, durationDays) {
   const duration = Math.max(1, Math.min(7, durationDays || 7));
-  const res = await fetchWithTimeout(
-    `${DISCOVERY_BASE}/Stations/${stationId}/TidalEvents?duration=${duration}`,
-    { headers: { "Ocp-Apim-Subscription-Key": apiKey } },
-    30000
-  );
+  const res = await fetchDiscovery(`/Stations/${stationId}/TidalEvents?duration=${duration}`, apiKey);
   if (!res.ok) throw new Error(`Admiralty tidal events fetch failed: ${res.status}`);
   const data = await res.json();
   // Admiralty's own predictions are always Chart-Datum-referenced — no

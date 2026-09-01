@@ -79,14 +79,21 @@
       <fieldset>
         <legend>Admiralty accuracy (optional)</legend>
         <p class="note">A saved tide location often sits some real distance from its nearest gauge above — Teignmouth, for example, is matched to Plymouth, over 50km away, and can genuinely run 35-40 minutes and the best part of a metre different at high tide. A free Admiralty Discovery API key lets each location learn its own real correction against Admiralty's own data for that exact spot, rather than relying on the nearest gauge unmodified. Get a free key at admiraltyapi.portal.azure-api.net (Products → UK Tidal API → Discovery tier).</p>
+        <p class="note">Admiralty's API can't be called directly from a browser (their own docs confirm this — no CORS support on their side), so this also needs a small relay in between. See admiralty-proxy-worker.js in the project files — it deploys free on Cloudflare Workers in a few minutes and doesn't store or need to know anyone's key.</p>
         <label>
           API key
           <div class="location-row">
             <input id="discoveryApiKeyInput" type="text" placeholder="Paste your Discovery subscription key" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false">
           </div>
         </label>
+        <label>
+          Discovery proxy URL
+          <div class="location-row">
+            <input id="discoveryProxyUrlInput" type="text" placeholder="https://your-worker.your-subdomain.workers.dev" maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+        </label>
         <div class="location-actions">
-          <button id="saveDiscoveryKeyButton" type="button">Save key</button>
+          <button id="saveDiscoveryKeyButton" type="button">Save</button>
         </div>
         <p id="discoveryKeyStatus" class="actual-status status-error-only"></p>
       </fieldset>

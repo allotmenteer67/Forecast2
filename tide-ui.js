@@ -427,8 +427,9 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   return wrap;
 }
 
-// ---- Settings page: Admiralty Discovery API key ----
+// ---- Settings page: Admiralty Discovery API key + proxy URL ----
 const discoveryApiKeyInput = document.getElementById("discoveryApiKeyInput");
+const discoveryProxyUrlInput = document.getElementById("discoveryProxyUrlInput");
 const saveDiscoveryKeyButton = document.getElementById("saveDiscoveryKeyButton");
 const discoveryKeyStatus = document.getElementById("discoveryKeyStatus");
 
@@ -442,13 +443,25 @@ if (discoveryApiKeyInput) {
   const existing = loadDiscoveryKey();
   if (existing) discoveryApiKeyInput.value = existing;
 }
+if (discoveryProxyUrlInput) {
+  const existingProxy = loadDiscoveryProxyUrl();
+  if (existingProxy) discoveryProxyUrlInput.value = existingProxy;
+}
 
 if (saveDiscoveryKeyButton) {
   saveDiscoveryKeyButton.addEventListener("click", () => {
     const key = (discoveryApiKeyInput?.value || "").trim();
+    const proxyUrl = (discoveryProxyUrlInput?.value || "").trim();
     saveDiscoveryKey(key);
-    setDiscoveryKeyStatus(key ? "Saved." : "Removed — locations will use their nearest gauge unmodified.", false);
-    renderTideLocationsList(); // re-render so each location's Admiralty row reflects the new key
+    saveDiscoveryProxyUrl(proxyUrl);
+    if (!key) {
+      setDiscoveryKeyStatus("Removed — locations will use their nearest gauge unmodified.", false);
+    } else if (!proxyUrl) {
+      setDiscoveryKeyStatus("Key saved, but a proxy URL is needed too — Admiralty can't be called directly from a browser (see the note above).", true);
+    } else {
+      setDiscoveryKeyStatus("Saved.", false);
+    }
+    renderTideLocationsList(); // re-render so each location's Admiralty row reflects the new key/proxy
   });
 }
 
