@@ -206,7 +206,7 @@ header p {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .tide-row-value {
@@ -1613,6 +1613,17 @@ footer {
 .scrub-line { stroke: var(--accent-dark); stroke-width: 1.5; pointer-events: none; }
 .scrub-dot { fill: var(--accent-dark); stroke: white; stroke-width: 1.5; pointer-events: none; }
 .graph-touch-area { fill: transparent; touch-action: pan-y; }
+
+/* Tide's own tap-to-read-off touch area — deliberately NOT
+   touch-action: pan-y like graph-touch-area above. That's correct for
+   the other (fixed-width, non-scrolling) sheet graphs, which use it to
+   block horizontal touch so JS can own a drag-based scrubber instead.
+   Tide's chart is wider than the screen and relies on native horizontal
+   scroll (see .tide-graph-wrap), and only ever responds to a tap/click
+   rather than a drag — so touch-action stays at its default (auto),
+   letting both vertical page scroll and the wrapper's horizontal scroll
+   pass through untouched. */
+.tide-touch-area { fill: transparent; }
 
 .sun-strip { display: flex; margin-top: 14px; gap: 2px; overflow-x: auto; }
 .sun-cell { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; gap: 4px; }

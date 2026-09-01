@@ -20,6 +20,28 @@ function currentTideLocation() {
   return locations.find(l => l.id === currentId) || locations[0];
 }
 
+// Ties tide predictions to the SAME "Date" rollback slider the rest of
+// the front page already uses (state.rollback: positive = days into the
+// past, negative = days into the future — see targetDateForRollback in
+// app.js). Unlike weather's forecasts, the tide fit is one continuous
+// harmonic function of time with no separate past/future data source or
+// 14-day eligibility gate, so "what's the reference moment" is the only
+// thing that needs to move — everything downstream (which events are
+// "next", the sheet's window) just recentres on it.
+function tideReferenceNow() {
+  const rollbackDays = (typeof state !== "undefined" && state.rollback) ? state.rollback : 0;
+  return Date.now() - rollbackDays * 86400000;
+}
+
+// A short qualifier appended to the tide row/sheet titles whenever the
+// Date slider isn't on "today" — without it, tides for a rolled-back
+// date would look identical to today's and be easy to misread as live.
+function tideDateQualifier() {
+  const rollbackDays = (typeof state !== "undefined" && state.rollback) ? state.rollback : 0;
+  if (!rollbackDays) return "";
+  return ` · ${formatDateLong(targetDateForRollback(rollbackDays))}`;
+}
+
 async function renderTideRow() {
   if (!tideRow) return;
   const toggles = loadHeadlineToggles();
@@ -36,7 +58,8 @@ async function renderTideRow() {
   tideRow.hidden = false;
 
   const myToken = ++tideRenderToken;
-  tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><span class="tide-row-value">Loading…</span>`;
+  const labelHtml = `TIDE — ${location.label}${tideDateQualifier()}`;
+  tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
 
   let built;
   try {
@@ -47,12 +70,12 @@ async function renderTideRow() {
   if (myToken !== tideRenderToken) return; // superseded by a later switch
 
   if (!built) {
-    tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><span class="tide-row-value">Not available right now</span>`;
+    tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available right now</span>`;
     return;
   }
 
   const fudge = loadTideFudge(location.station.id);
-  const nowHours = (Date.now() - Date.parse(built.epochIso)) / 3600000;
+  const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
   const events = findTideExtremes(built.fit, nowHours - 1, nowHours + 30)
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
@@ -64,7 +87,7 @@ async function renderTideRow() {
     return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${level.toFixed(1)}m</small></span>`;
   }).join("");
 
-  tideRow.innerHTML = `<span class="tide-row-label">TIDE — ${location.label}</span><div class="tide-row-events">${partsHtml}</div>`;
+  tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><div class="tide-row-events">${partsHtml}</div>`;
   renderTideDots();
 }
 
@@ -104,10 +127,12 @@ function switchToAdjacentTideLocation(direction) {  const locations = loadTideLo
 // them and rediscover the same bugs later).
 if (tideRow) {
   const SWIPE_THRESHOLD_PX = 32;
-  let startX = null, startY = null, swiping = false, direction = null, pointerId = null;
+  const CANCEL_TAP_TOLERANCE_PX = 10;
+  let startX = null, startY = null, lastX = null, lastY = null, swiping = false, direction = null, pointerId = null;
 
   function reset() {
-    startX = null; startY = null; swiping = false; direction = null; pointerId = null;
+    startX = null; startY = null; lastX = null; lastY = null;
+    swiping = false; direction = null; pointerId = null;
   }
 
   tideRow.addEventListener("pointerdown", e => {
@@ -115,6 +140,8 @@ if (tideRow) {
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
+    lastX = e.clientX;
+    lastY = e.clientY;
     swiping = false;
     direction = null;
     try {
@@ -126,6 +153,8 @@ if (tideRow) {
 
   tideRow.addEventListener("pointermove", e => {
     if (startX === null || e.pointerId !== pointerId) return;
+    lastX = e.clientX;
+    lastY = e.clientY;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
     if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
@@ -146,6 +175,19 @@ if (tideRow) {
 
   tideRow.addEventListener("pointercancel", e => {
     if (e.pointerId !== pointerId) return;
+    // The browser can cancel a touch the moment it decides to start its
+    // own native scroll (touch-action: pan-y grants it that right on any
+    // vertical movement) — including a real tap's few pixels of
+    // incidental jitter. If we never crossed the swipe threshold and
+    // barely moved at all, this was meant as a tap, so honour it as one
+    // rather than silently dropping it.
+    if (!swiping && startX !== null && lastX !== null) {
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      if (Math.abs(dx) <= CANCEL_TAP_TOLERANCE_PX && Math.abs(dy) <= CANCEL_TAP_TOLERANCE_PX) {
+        openTideSheet();
+      }
+    }
     reset();
   });
 }
@@ -161,14 +203,18 @@ if (tideRow) {
 const TIDE_SHEET_WINDOW_PAST_HOURS = 24;
 const TIDE_SHEET_WINDOW_FUTURE_HOURS = 72;
 
+let openTideSheetToken = 0;
+
 async function openTideSheet() {
   if (!sheet) return;
   const location = currentTideLocation();
   if (!location) return;
+  const myToken = ++openTideSheetToken;
 
   sheetTitle.textContent = `Tide — ${location.label}`;
-  sheetRange.textContent = "";
-  sheetReadout.hidden = true;
+  sheetRange.textContent = tideDateQualifier().replace(/^ · /, "");
+  sheetReadout.hidden = false;
+  readoutValue.classList.remove("is-compact");
   sheetBody.innerHTML = "";
   sheetFootnote.textContent = "";
 
@@ -189,6 +235,7 @@ async function openTideSheet() {
   } catch {
     built = null;
   }
+  if (myToken !== openTideSheetToken) return; // superseded by a later open
   sheetBody.innerHTML = "";
   if (!built) {
     const empty = document.createElement("p");
@@ -199,7 +246,7 @@ async function openTideSheet() {
   }
 
   const fudge = loadTideFudge(location.station.id);
-  const nowHours = (Date.now() - Date.parse(built.epochIso)) / 3600000;
+  const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
   const startHours = nowHours - TIDE_SHEET_WINDOW_PAST_HOURS;
   const endHours = nowHours + TIDE_SHEET_WINDOW_FUTURE_HOURS;
 
@@ -302,6 +349,47 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours) {
     }));
     timeLabel.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   });
+
+  // ---- Tap anywhere on the curve to read off the predicted height at
+  // that exact moment — the harmonic fit is a continuous function of
+  // time, so a point between a high and a low is just as genuinely
+  // predicted as the marked extremes themselves, this just gives a way
+  // to read one off. A tap (click), not a pointermove drag: the chart is
+  // already a native horizontal-scroll area (see .tide-graph-wrap), and
+  // a drag-based scrubber would fight that same gesture. A tap never
+  // fires from a scroll drag, so the two coexist without conflict.
+  const touchArea = sheetSvgEl("rect", { x: 0, y: 0, width, height, class: "tide-touch-area" });
+  svg.appendChild(touchArea);
+
+  const crosshair = sheetSvgEl("line", { x1: 0, x2: 0, y1: padT, y2: padT + plotH, class: "scrub-line" });
+  const dot = sheetSvgEl("circle", { r: 4.5, class: "scrub-dot" });
+  svg.appendChild(crosshair);
+  svg.appendChild(dot);
+
+  function showReadoutAt(hours) {
+    const clamped = Math.max(startHours, Math.min(endHours, hours));
+    const level = applyTideFudge(predictTideLevel(fit, clamped), fudge);
+    const x = xFor(clamped);
+    const y = yFor(level);
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    dot.setAttribute("cx", x);
+    dot.setAttribute("cy", y);
+    const when = new Date(Date.parse(epochIso) + clamped * 3600000);
+    readoutTime.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    readoutValue.textContent = `${level.toFixed(2)}m`;
+  }
+
+  touchArea.addEventListener("click", e => {
+    const rect = svg.getBoundingClientRect();
+    const localX = ((e.clientX - rect.left) / rect.width) * width;
+    const ratio = (localX - padL) / plotW;
+    showReadoutAt(startHours + ratio * totalHours);
+  });
+
+  // Defaults to "now" (or the rolled-back reference moment) so the
+  // readout bar always shows something sensible before the first tap.
+  showReadoutAt(nowHours);
 
   const wrap = document.createElement("div");
   wrap.className = "graph-wrap tide-graph-wrap";
@@ -430,3 +518,15 @@ if (addTideLocationButton) {
 }
 
 if (tideLocationsList) renderTideLocationsList();
+
+// renderHeadline() (app.js) already calls renderTideRow() at its end,
+// but it has early-return paths for weather data that's still mid-fetch
+// — which would silently delay tide's own update on a slider drag until
+// whatever weather refresh happens to be running finishes. Tide has no
+// such loading state of its own to wait on, so it gets this direct,
+// unconditional hook instead of depending on weather's render path.
+if (rollback) {
+  rollback.addEventListener("input", () => {
+    renderTideRow();
+  });
+}
