@@ -107,14 +107,26 @@ async function fetchFishingForecast(lat, lon, markType) {
 // Finds the hourly index nearest a given epoch-ms timestamp — every
 // Open-Meteo hourly series here shares the same "times" shape, so one
 // lookup function covers all of them.
+// Returns -1 (no usable data) rather than silently clamping to the
+// nearest hour when the target is too far outside the series' own
+// coverage. This matters specifically for rolled-back PAST dates:
+// Open-Meteo's plain forecast endpoint only ever covers from the real
+// current moment forward, with no historical days in it at all — so a
+// date a few days in the past falls entirely outside every hourly
+// series here. Without this check, every such point silently reused
+// whichever hour happened to be nearest (today's live reading), which
+// looked like the factor had frozen rather than genuinely having no
+// data for that date.
+const FISHING_HOURLY_MATCH_TOLERANCE_MS = 90 * 60000; // 90 minutes
+
 function fishingHourlyIndexFor(times, epochMs) {
   if (!times || !times.length) return -1;
   let best = 0, bestGap = Infinity;
   for (let i = 0; i < times.length; i++) {
-    const gap = Math.abs(Date.parse(times[i]) - epochMs);
+    const gap = Math.abs(times[i] - epochMs);
     if (gap < bestGap) { bestGap = gap; best = i; }
   }
-  return best;
+  return bestGap <= FISHING_HOURLY_MATCH_TOLERANCE_MS ? best : -1;
 }
 
 // ---- Individual factor scores, each 0 (worst) to 1 (best) ----
@@ -249,12 +261,21 @@ function fishingBandRank(band) {
 // under-counting.
 function blendFishingFactors(factors) {
   const weights = { ...FISHING_WEIGHTS };
-  if (factors.wave === null || factors.wave === undefined) {
-    const waveWeight = weights.wave;
-    delete weights.wave;
-    const totalRemaining = Object.values(weights).reduce((a, b) => a + b, 0);
-    Object.keys(weights).forEach(k => { weights[k] += waveWeight * (weights[k] / totalRemaining); });
-  }
+  // Redistribute the weight of ANY missing factor proportionally across
+  // the rest, rather than just silently dropping it (which would let
+  // the remaining factors under-count) or — worse — filling it with a
+  // fake neutral score that pretends to be real evidence.
+  Object.keys(FISHING_WEIGHTS).forEach(key => {
+    const value = factors[key];
+    if (value === null || value === undefined) {
+      const missingWeight = weights[key];
+      delete weights[key];
+      const totalRemaining = Object.values(weights).reduce((a, b) => a + b, 0);
+      if (totalRemaining > 0) {
+        Object.keys(weights).forEach(k => { weights[k] += missingWeight * (weights[k] / totalRemaining); });
+      }
+    }
+  });
   let score = 0, totalWeight = 0;
   Object.entries(weights).forEach(([key, weight]) => {
     const value = factors[key];
@@ -289,8 +310,8 @@ function computeFishingAt({ fit, epochIso, hours, weatherHourly, weatherTimesEpo
   const factors = {
     tideMovement: fishingTideMovementScore(fit, hours),
     tidalRange: fishingTidalRangeScore(fit, hours),
-    pressureTrend: windIdx >= 0 ? fishingPressureTrendScore(weatherHourly.pressure_msl, pressureIdx) : 0.5,
-    wind: typeof windMph === "number" ? fishingWindScore(windMph) : 0.5,
+    pressureTrend: windIdx >= 0 ? fishingPressureTrendScore(weatherHourly.pressure_msl, pressureIdx) : null,
+    wind: typeof windMph === "number" ? fishingWindScore(windMph) : null,
     wave: typeof waveHeightM === "number" ? fishingWaveScore(waveHeightM) : null
   };
 

@@ -355,7 +355,11 @@ function renderFishingRawFactors(point, markType) {
     evidence.appendChild(row("Swell period", typeof point.swellPeriodS === "number" ? `${point.swellPeriodS.toFixed(0)}s` : "–", "evidence"));
     evidence.appendChild(row("Sea temperature", typeof point.seaTempC === "number" ? `${point.seaTempC.toFixed(1)}°C` : "–", "evidence"));
   }
-  evidence.appendChild(row("Tide movement", fishingBandForScore(point.factors.tideMovement), "evidence"));
+  function factorLabel(value) {
+    return typeof value === "number" ? fishingBandForScore(value) : "–";
+  }
+
+  evidence.appendChild(row("Tide movement", factorLabel(point.factors.tideMovement), "evidence"));
   wrap.appendChild(evidence);
 
   const folklore = document.createElement("div");
@@ -364,8 +368,8 @@ function renderFishingRawFactors(point, markType) {
   folkloreLabel.className = "fishing-group-label";
   folkloreLabel.textContent = "Traditional (softer evidence)";
   folklore.appendChild(folkloreLabel);
-  folklore.appendChild(row("Tidal range (springs/neaps)", fishingBandForScore(point.factors.tidalRange), "folklore"));
-  folklore.appendChild(row("Pressure trend", fishingBandForScore(point.factors.pressureTrend), "folklore"));
+  folklore.appendChild(row("Tidal range (springs/neaps)", factorLabel(point.factors.tidalRange), "folklore"));
+  folklore.appendChild(row("Pressure trend", factorLabel(point.factors.pressureTrend), "folklore"));
   wrap.appendChild(folklore);
 
   return wrap;

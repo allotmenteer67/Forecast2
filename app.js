@@ -3036,14 +3036,17 @@ function renderHeadline() {
   const night = showHourly && !isDaytime(hourDate);
 
   activeHeadlineConditions().forEach(conditionName => {
-    // Tide doesn't go through this generic per-forecaster cell loop at
-    // all — it has its own data source, own full-width row, and its own
-    // render path (renderTideRow in tide-ui.js, called separately
-    // below). It's still listed in HEADLINE_OPTIONAL_CONDITIONS so it
-    // shares Settings' existing "Front page cells" toggle UI exactly
-    // the way Dew Point and Soil Temp do, rather than needing a
-    // bespoke toggle built from scratch.
-    if (conditionName === "tide") return;
+    // Tide and Fishing don't go through this generic per-forecaster cell
+    // loop at all — each has its own data source, own full-width card,
+    // and its own render path (renderTideRow/renderFishingRow, called
+    // separately below). They're still listed in
+    // HEADLINE_OPTIONAL_CONDITIONS so they share Settings' existing
+    // "Front page cells" toggle UI exactly the way Dew Point and Soil
+    // Temp do, rather than needing a bespoke toggle built from scratch —
+    // but neither is a real weather condition, so CONFIG.conditions has
+    // no entry for either one, and reaching the CONFIG.conditions[...]
+    // lookup below for either would throw and break this entire loop.
+    if (conditionName === "tide" || conditionName === "fishing") return;
 
     const cell = document.createElement("button");
     cell.type = "button";
