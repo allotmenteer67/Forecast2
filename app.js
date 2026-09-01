@@ -102,17 +102,19 @@ applyTheme(loadTheme());
 // the theme choice, all of it — lives only in this browser's localStorage
 // on this one device. Clearing Safari's site data, or moving to a new
 // phone, silently loses all of it with no warning. This is a plain
-// key/value dump of every "forecast-compare:" prefixed key rather than a
-// hand-maintained list of specific keys — new features that add their
-// own storage key (like accuracy-trend above did) are included
-// automatically without this needing to be updated to know about them.
-const BACKUP_KEY_PREFIX = "forecast-compare:";
+// key/value dump of every prefixed key rather than a hand-maintained
+// list of specific keys — new features that add their own storage key
+// (like accuracy-trend above did) are included automatically without
+// this needing to be updated to know about them. Two prefixes: the
+// original weather-side storage, and tide's own (added later, under its
+// own prefix since it's a genuinely separate feature — see tide.js).
+const BACKUP_KEY_PREFIXES = ["forecast-compare:", "cloude-tide:"];
 
 function exportAppData() {
   const data = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith(BACKUP_KEY_PREFIX)) {
+    if (key && BACKUP_KEY_PREFIXES.some(prefix => key.startsWith(prefix))) {
       data[key] = localStorage.getItem(key);
     }
   }
@@ -133,7 +135,7 @@ function importAppData(jsonText) {
     return { ok: false, error: "That text isn't a Cloude backup (missing expected data)." };
   }
 
-  const entries = Object.entries(parsed.data).filter(([key]) => key.startsWith(BACKUP_KEY_PREFIX));
+  const entries = Object.entries(parsed.data).filter(([key]) => BACKUP_KEY_PREFIXES.some(prefix => key.startsWith(prefix)));
   if (!entries.length) {
     return { ok: false, error: "That backup doesn't contain any Cloude data to restore." };
   }

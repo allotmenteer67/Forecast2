@@ -521,20 +521,39 @@ function renderAdmiraltyRow(loc, allLocations) {
       try {
         let discoveryStation = loc.discoveryStation;
         if (!discoveryStation) {
-          discoveryStation = await nearestDiscoveryStation(loc.station.lat, loc.station.lon, apiKey);
+          status.textContent = "Checking… (looking up nearest Admiralty station)";
+          try {
+            discoveryStation = await nearestDiscoveryStation(loc.station.lat, loc.station.lon, apiKey);
+          } catch (err) {
+            throw new Error(`Failed looking up the nearest Admiralty station: ${err.message || err}`);
+          }
           if (!discoveryStation) throw new Error("No Admiralty station found nearby.");
           loc.discoveryStation = { id: discoveryStation.id, name: discoveryStation.name, distanceKm: discoveryStation.distanceKm };
           saveTideLocations(allLocations);
         }
-        const built = await getOrBuildTideFit(loc.station);
+
+        status.textContent = "Checking… (building this location's own tide model)";
+        let built;
+        try {
+          built = await getOrBuildTideFit(loc.station);
+        } catch (err) {
+          throw new Error(`Failed fetching this location's own gauge data (EA, not Admiralty): ${err.message || err}`);
+        }
         if (!built) throw new Error("This location's own tide model isn't ready yet — try again shortly.");
-        await learnSecondaryOffset({
-          eaStation: loc.station,
-          discoveryStationId: discoveryStation.id,
-          apiKey,
-          fit: built.fit,
-          epochIso: built.epochIso
-        });
+
+        status.textContent = "Checking… (fetching Admiralty's real tide predictions)";
+        try {
+          await learnSecondaryOffset({
+            eaStation: loc.station,
+            discoveryStationId: discoveryStation.id,
+            apiKey,
+            fit: built.fit,
+            epochIso: built.epochIso
+          });
+        } catch (err) {
+          throw new Error(`Failed fetching from Admiralty: ${err.message || err}`);
+        }
+
         status.textContent = "";
         renderSummary();
         renderTideRow(); // reflect the new correction immediately if this is the current location
