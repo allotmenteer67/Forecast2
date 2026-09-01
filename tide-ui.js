@@ -578,33 +578,57 @@ function renderAdmiraltyRow(loc, allLocations) {
   summary.className = "place-row-sub";
   wrap.appendChild(summary);
 
+  const notesEl = document.createElement("div");
+  notesEl.className = "place-row-admiralty-notes";
+  wrap.appendChild(notesEl);
+
   const apiKey = loadDiscoveryKey();
   const hasCdOffset = typeof loc.station.cdOffsetOD === "number";
+
+  function renderNotes(offset) {
+    notesEl.innerHTML = "";
+    if (!offset) return;
+    const notes = assessSecondaryOffsetReliability(loc.station, offset);
+    notes.forEach(text => {
+      const note = document.createElement("small");
+      note.className = "place-row-sub place-row-admiralty-note";
+      note.textContent = `⚠ ${text}`;
+      notesEl.appendChild(note);
+    });
+  }
 
   function renderSummary() {
     if (!apiKey) {
       summary.textContent = "Admiralty: add a free API key above to check this location's real accuracy.";
+      notesEl.innerHTML = "";
       return;
     }
     if (!hasCdOffset) {
       summary.textContent = "Admiralty: not available — this location's nearest gauge has no confirmed Chart Datum reference yet.";
+      notesEl.innerHTML = "";
       return;
     }
     const offset = loc.discoveryStation ? loadSecondaryOffset(loc.discoveryStation.id) : null;
-    if (!offset) {
+    if (!offset || (typeof offset.highHeightRatio !== "number" && typeof offset.lowHeightRatio !== "number")) {
       summary.textContent = "Admiralty: not checked yet.";
+      notesEl.innerHTML = "";
       return;
     }
+    const ratioText = ratio => {
+      const pct = (ratio - 1) * 100;
+      return `${pct >= 0 ? "+" : ""}${pct.toFixed(0)}%`;
+    };
     const parts = [];
-    if (offset.highTimeMin !== null) {
+    if (offset.highTimeMin !== null && typeof offset.highHeightRatio === "number") {
       const sign = offset.highTimeMin >= 0 ? "+" : "";
-      parts.push(`high ${sign}${Math.round(offset.highTimeMin)}min / ${offset.highHeightM >= 0 ? "+" : ""}${offset.highHeightM.toFixed(1)}m`);
+      parts.push(`high ${sign}${Math.round(offset.highTimeMin)}min / ${ratioText(offset.highHeightRatio)}`);
     }
-    if (offset.lowTimeMin !== null) {
+    if (offset.lowTimeMin !== null && typeof offset.lowHeightRatio === "number") {
       const sign = offset.lowTimeMin >= 0 ? "+" : "";
-      parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${offset.lowHeightM >= 0 ? "+" : ""}${offset.lowHeightM.toFixed(1)}m`);
+      parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${ratioText(offset.lowHeightRatio)}`);
     }
     summary.textContent = `Admiralty: learned ${parts.join(", ")} vs ${loc.station.label} (${offset.sampleCount} events, ${formatDateLong(new Date(offset.learnedAt))}).`;
+    renderNotes(offset);
   }
   renderSummary();
 

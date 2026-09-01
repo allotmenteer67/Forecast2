@@ -1532,6 +1532,15 @@ footer {
   margin-top: 6px;
 }
 
+.place-row-admiralty-notes {
+  margin-top: 4px;
+}
+.place-row-admiralty-note {
+  display: block;
+  color: var(--amber);
+  margin-top: 2px;
+}
+
 .place-row-admiralty-check {
   margin-top: 4px;
   font-size: 12px;

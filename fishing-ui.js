@@ -223,9 +223,9 @@ async function openFishingSheet() {
 // rather than a height in metres.
 function renderFishingCurve(points, epochIso, nowHours, startHours, endHours) {
   const totalHours = endHours - startHours;
-  const padL = 66, padR = 16, padT = 26, padB = 46;
+  const padL = 66, padR = 16, padT = 16, padB = 34;
   const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
-  const plotH = 148;
+  const plotH = 210;
   const width = plotW + padL + padR;
   const height = plotH + padT + padB;
 
@@ -255,7 +255,7 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours) {
       lastDay = dayKey;
       const x = xFor(h);
       svg.appendChild(sheetSvgEl("line", { x1: x, x2: x, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "2 3" }));
-      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: 14, class: "graph-axis-label", "text-anchor": "start" }));
+      const label = svg.appendChild(sheetSvgEl("text", { x: x + 4, y: padT + plotH + 20, class: "graph-axis-label", "text-anchor": "start" }));
       label.textContent = when.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
     }
   }
