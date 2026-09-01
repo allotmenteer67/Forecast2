@@ -8,6 +8,44 @@
 
 const fishingRow = document.getElementById("fishingRow");
 
+// ---- Fishing card colour ----
+// Mirrors tide's own card colour picker exactly (see TIDE_CARD_COLORS
+// in tide-ui.js) — its own storage key and swatch list, since the two
+// cards are visually separate and someone might reasonably want them
+// distinguishable at a glance.
+const FISHING_CARD_COLOR_KEY = "cloude-fishing:cardColor";
+const FISHING_CARD_COLORS = [
+  { id: "mint", name: "Mint" },
+  { id: "blue", name: "Light blue" },
+  { id: "teal", name: "Teal" },
+  { id: "sand", name: "Sand" },
+  { id: "lavender", name: "Lavender" },
+  { id: "white", name: "Plain white" }
+];
+
+function loadFishingCardColor() {
+  try {
+    return localStorage.getItem(FISHING_CARD_COLOR_KEY) || "mint";
+  } catch {
+    return "mint";
+  }
+}
+
+function saveFishingCardColor(id) {
+  try {
+    localStorage.setItem(FISHING_CARD_COLOR_KEY, id);
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+}
+
+function applyFishingCardColor(id) {
+  const fishingCard = document.querySelector(".fishing-card");
+  if (fishingCard) fishingCard.dataset.color = id; // no-op on pages with no fishing card, e.g. Settings
+}
+
+applyFishingCardColor(loadFishingCardColor());
+
 let fishingRenderToken = 0;
 
 async function renderFishingRow() {
@@ -323,6 +361,31 @@ function renderFishingRawFactors(point, markType) {
   wrap.appendChild(folklore);
 
   return wrap;
+}
+
+// ---- Settings page: fishing card colour ----
+const fishingCardColorSwatches = document.getElementById("fishingCardColorSwatches");
+if (fishingCardColorSwatches) {
+  const current = loadFishingCardColor();
+  FISHING_CARD_COLORS.forEach(color => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "theme-swatch" + (color.id === current ? " is-selected" : "");
+    button.dataset.fishingColor = color.id;
+    button.setAttribute("aria-pressed", color.id === current ? "true" : "false");
+    button.setAttribute("aria-label", color.name);
+    button.title = color.name;
+    button.addEventListener("click", () => {
+      saveFishingCardColor(color.id);
+      applyFishingCardColor(color.id);
+      [...fishingCardColorSwatches.children].forEach(el => {
+        const selected = el === button;
+        el.classList.toggle("is-selected", selected);
+        el.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+    });
+    fishingCardColorSwatches.appendChild(button);
+  });
 }
 
 // ---- Settings page: show/hide raw factors ----

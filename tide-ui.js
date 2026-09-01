@@ -313,59 +313,17 @@ async function openTideSheet() {
   const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
   const startHours = nowHours - TIDE_SHEET_WINDOW_PAST_HOURS;
   const endHours = nowHours + TIDE_SHEET_WINDOW_FUTURE_HOURS;
-  const cdOffsetOD = location.station.cdOffsetOD; // undefined for the handful of stations with no confirmed offset — renderTideCurve falls back to the raw gauge reading in that case
 
-  sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours, cdOffsetOD));
+  sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours, location));
 
   const secondary = location.discoveryStation && loadSecondaryOffset(location.discoveryStation.id);
   if (secondary) {
-    sheetBody.appendChild(renderAdmiraltyEventsSummary(built.fit, fudge, built.epochIso, nowHours, location, secondary));
-    sheetFootnote.textContent = `The curve above uses ${location.station.label}'s own Chart Datum reference — the list above refines this further using this location's own learned Admiralty correction, which is why the two numbers differ slightly for the same moments.`;
-  } else if (typeof cdOffsetOD !== "number") {
+    sheetFootnote.textContent = `Corrected for ${location.label} specifically, using its own learned Admiralty offset — this is no longer just ${location.station.label}'s own curve.`;
+  } else if (typeof location.station.cdOffsetOD !== "number") {
     sheetFootnote.textContent = `${location.station.label} doesn't have a confirmed Chart Datum reference yet, so heights above are shown as measured by the gauge (Ordnance Datum) rather than Chart Datum.`;
   } else {
     sheetFootnote.textContent = "";
   }
-}
-
-// A plain text list of upcoming highs/lows corrected for this exact
-// location via its learned Admiralty offset, in Chart Datum — kept
-// entirely separate from the curve above rather than plotted on it.
-// The curve's own axis is scaled for the nearest gauge's plain
-// (Ordnance Datum) model; Chart Datum sits a real, station-specific
-// distance from that (often the best part of a metre), so plotting a
-// Chart-Datum height against an Ordnance-Datum axis put dots nowhere
-// near the actual curve — a genuine datum mismatch, not a rounding
-// difference. Two different reference frames can't honestly share one
-// axis, so this shows the corrected numbers as what they are: a
-// separate, more accurate answer for this specific location, not a
-// point on the graph above.
-function renderAdmiraltyEventsSummary(fit, fudge, epochIso, nowHours, location, secondary) {
-  const wrap = document.createElement("div");
-  wrap.className = "admiralty-events-summary";
-
-  const heading = document.createElement("h3");
-  heading.className = "admiralty-events-heading";
-  heading.textContent = "Corrected for this location (Chart Datum)";
-  wrap.appendChild(heading);
-
-  const events = findTideExtremes(fit, nowHours - 1, nowHours + 48).filter(e => e.hours >= nowHours - 1);
-  const list = document.createElement("div");
-  list.className = "admiralty-events-list";
-  events.slice(0, 6).forEach(e => {
-    const odLevel = applyTideFudge(e.level, fudge);
-    const result = applyLocationCorrection(location, fit, e.hours, odLevel);
-    if (!result.isCD) return; // shouldn't happen given secondary is present, but never show an uncorrected figure mislabelled as one
-    const when = new Date(Date.parse(epochIso) + result.hours * 3600000);
-    const row = document.createElement("div");
-    row.className = "admiralty-event-row";
-    row.innerHTML = `<span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>` +
-      `<span>${when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>` +
-      `<strong>${result.level.toFixed(2)}m</strong>`;
-    list.appendChild(row);
-  });
-  wrap.appendChild(list);
-  return wrap;
 }
 
 // Pixels of horizontal room per hour of tide data. At the old fixed
@@ -377,7 +335,7 @@ function renderAdmiraltyEventsSummary(fit, fudge, epochIso, nowHours, location, 
 // scrolls to, rather than squashing everything into one screen's width.
 const TIDE_GRAPH_PX_PER_HOUR = 10;
 
-function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, cdOffsetOD) {
+function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, location) {
   const totalHours = endHours - startHours;
   const padL = 44, padR = 16, padT = 50, padB = 46;
   // Never narrower than a phone screen even for a short window — only
@@ -387,19 +345,33 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, c
   const width = plotW + padL + padR;
   const height = plotH + padT + padB;
 
-  // A single conversion point for every level this function displays —
-  // Chart Datum when this station has a confirmed offset (see
-  // EA_TIDE_STATIONS in tide.js), otherwise the gauge's own raw reading
-  // as a last resort (openTideSheet's footnote says so explicitly when
-  // that happens, so it's never silently mislabelled).
-  const toDisplay = odLevel => typeof cdOffsetOD === "number" ? odLevel - cdOffsetOD : odLevel;
+  // Every point on the curve — not just the marked highs/lows — now
+  // goes through the SAME location correction (Chart Datum, plus this
+  // location's own learned Admiralty time/height offset when there is
+  // one). Earlier this only applied to the discrete events, with the
+  // curve itself left showing the nearest gauge's raw, unwarped shape —
+  // technically defensible (a constant Chart Datum shift is safe to
+  // apply everywhere, but a per-phase time+height blend felt riskier to
+  // apply across a whole curve), but it meant the graph and the numbers
+  // elsewhere on the page told two different stories for the same
+  // moments — confusing in practice, not just in theory. The blend in
+  // applySecondaryOffset changes smoothly across each tidal half-cycle
+  // (tens of minutes at most), so warping every sampled point by it
+  // doesn't introduce any visible distortion — it just makes the whole
+  // curve genuinely about the selected location, not its nearest gauge.
+  const toDisplay = (h, odLevel) => applyLocationCorrection(location, fit, h, odLevel);
 
   const stepHours = totalHours / 200;
   const rawPts = [];
   for (let h = startHours; h <= endHours; h += stepHours) {
-    rawPts.push({ hours: h, level: toDisplay(predictTideLevel(fit, h)) });
+    const r = toDisplay(h, predictTideLevel(fit, h));
+    rawPts.push({ hours: r.hours, level: r.level });
   }
-  const correctedPts = rawPts.map(p => ({ hours: p.hours, level: toDisplay(applyTideFudge(predictTideLevel(fit, p.hours), fudge)) }));
+  const correctedPts = [];
+  for (let h = startHours; h <= endHours; h += stepHours) {
+    const r = toDisplay(h, applyTideFudge(predictTideLevel(fit, h), fudge));
+    correctedPts.push({ hours: r.hours, level: r.level });
+  }
 
   const allLevels = correctedPts.map(p => p.level).concat(rawPts.map(p => p.level));
   const minLevel = Math.min(...allLevels), maxLevel = Math.max(...allLevels);
@@ -430,7 +402,9 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, c
   // TOP of the chart — kept well away from the tide-event labels below,
   // which already occupy the bottom band (troughs) and just above the
   // curve (peaks). Putting both sets of labels at the bottom was the
-  // other half of the original overlap.
+  // other half of the original overlap. Drawn at plain calendar time
+  // (not warped) — the correction shifts things by at most tens of
+  // minutes, an imperceptible difference at this chart's scale.
   let lastDay = null;
   for (let h = startHours; h <= endHours; h += 1) {
     const when = new Date(Date.parse(epochIso) + h * 3600000);
@@ -455,8 +429,10 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, c
 
   const events = findTideExtremes(fit, startHours, endHours);
   events.forEach(e => {
-    const level = toDisplay(applyTideFudge(e.level, fudge));
-    const x = xFor(e.hours);
+    const odLevel = applyTideFudge(e.level, fudge);
+    const result = toDisplay(e.hours, odLevel);
+    const level = result.level;
+    const x = xFor(result.hours);
     const y = yFor(level);
     svg.appendChild(sheetSvgEl("circle", { cx: x, cy: y, r: 3.5, fill: "#2b7a78" }));
     const labelY = e.type === "high" ? y - 12 : y + 18;
@@ -464,7 +440,7 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, c
       x, y: labelY, class: "graph-axis-value", "text-anchor": "middle"
     }));
     label.textContent = `${level.toFixed(1)}m`;
-    const when = new Date(Date.parse(epochIso) + e.hours * 3600000);
+    const when = new Date(Date.parse(epochIso) + result.hours * 3600000);
     const timeLabel = svg.appendChild(sheetSvgEl("text", {
       x, y: labelY + (e.type === "high" ? -14 : 15), class: "graph-axis-label", "text-anchor": "middle"
     }));
@@ -489,16 +465,16 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, c
 
   function showReadoutAt(hours) {
     const clamped = Math.max(startHours, Math.min(endHours, hours));
-    const level = toDisplay(applyTideFudge(predictTideLevel(fit, clamped), fudge));
-    const x = xFor(clamped);
-    const y = yFor(level);
+    const result = toDisplay(clamped, applyTideFudge(predictTideLevel(fit, clamped), fudge));
+    const x = xFor(result.hours);
+    const y = yFor(result.level);
     crosshair.setAttribute("x1", x);
     crosshair.setAttribute("x2", x);
     dot.setAttribute("cx", x);
     dot.setAttribute("cy", y);
-    const when = new Date(Date.parse(epochIso) + clamped * 3600000);
+    const when = new Date(Date.parse(epochIso) + result.hours * 3600000);
     readoutTime.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    readoutValue.textContent = `${level.toFixed(2)}m`;
+    readoutValue.textContent = `${result.level.toFixed(2)}m`;
   }
 
   touchArea.addEventListener("click", e => {

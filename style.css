@@ -195,6 +195,11 @@ header p {
   box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
   border: 1px solid #e7ede6;
 }
+.fishing-card[data-color="blue"] { background: #e3f0f8; }
+.fishing-card[data-color="teal"] { background: #dcefec; }
+.fishing-card[data-color="sand"] { background: #f5ead9; }
+.fishing-card[data-color="lavender"] { background: #eae6f5; }
+.fishing-card[data-color="white"] { background: #ffffff; }
 
 .fishing-row-value {
   display: flex;
@@ -1860,3 +1865,10 @@ footer {
 .theme-swatch[data-tide-color="sand"] { background: #e0bd8c; }
 .theme-swatch[data-tide-color="lavender"] { background: #c3b8e0; }
 .theme-swatch[data-tide-color="white"] { background: #ffffff; border-color: #dfe7e1; }
+
+.theme-swatch[data-fishing-color="mint"] { background: #9bcaa4; }
+.theme-swatch[data-fishing-color="blue"] { background: #a9cfe8; }
+.theme-swatch[data-fishing-color="teal"] { background: #8fc3bd; }
+.theme-swatch[data-fishing-color="sand"] { background: #e0bd8c; }
+.theme-swatch[data-fishing-color="lavender"] { background: #c3b8e0; }
+.theme-swatch[data-fishing-color="white"] { background: #ffffff; border-color: #dfe7e1; }
