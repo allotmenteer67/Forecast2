@@ -650,7 +650,7 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
     heightCD: applyTideFudge(e.level, fudge) - eaStation.cdOffsetOD
   }));
 
-  const diffsByType = { high: { time: [], height: [] }, low: { time: [], height: [] } };
+  const diffsByType = { high: { time: [], heightRatio: [] }, low: { time: [], heightRatio: [] } };
   discoveryEvents.forEach(dEvent => {
     let nearest = null, nearestGap = Infinity;
     modelEvents.forEach(mEvent => {
@@ -664,18 +664,39 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
     // A match more than 4 hours off is almost certainly the wrong cycle
     // (e.g. comparing against a neighbouring day's event rather than
     // the corresponding one) — skip rather than pollute the average.
-    if (nearest && nearestGap <= 4 * 3600000) {
+    // Also requires nearest.heightCD to be a real, meaningfully positive
+    // Chart Datum height (not near zero) before dividing by it — Chart
+    // Datum heights are heights above LAT, so this should almost always
+    // hold for a genuine tidal extreme; skip rather than risk an
+    // unstable ratio if it doesn't.
+    if (nearest && nearestGap <= 4 * 3600000 && nearest.heightCD > 0.15) {
       diffsByType[dEvent.type].time.push((dEvent.time - nearest.time) / 60000); // minutes
-      diffsByType[dEvent.type].height.push(dEvent.heightCD - nearest.heightCD); // metres
+      diffsByType[dEvent.type].heightRatio.push(dEvent.heightCD / nearest.heightCD);
     }
   });
+
+  // Standard deviation of an array — used below to see how much the
+  // individual per-event samples disagree with each other, not just
+  // their average. With typically only 6-14 samples in a week this is
+  // a noisy estimate, not a precise figure — treated as a rough flag
+  // in the UI, never as a confident diagnosis.
+  const stdDev = arr => {
+    if (arr.length < 2) return null;
+    const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const variance = arr.reduce((a, b) => a + (b - m) ** 2, 0) / (arr.length - 1);
+    return Math.sqrt(variance);
+  };
 
   const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
   const offset = {
     highTimeMin: mean(diffsByType.high.time),
-    highHeightM: mean(diffsByType.high.height),
+    highHeightRatio: mean(diffsByType.high.heightRatio),
+    highHeightRatioSpread: stdDev(diffsByType.high.heightRatio),
+    highTimeSpread: stdDev(diffsByType.high.time),
     lowTimeMin: mean(diffsByType.low.time),
-    lowHeightM: mean(diffsByType.low.height),
+    lowHeightRatio: mean(diffsByType.low.heightRatio),
+    lowHeightRatioSpread: stdDev(diffsByType.low.heightRatio),
+    lowTimeSpread: stdDev(diffsByType.low.time),
     sampleCount: diffsByType.high.time.length + diffsByType.low.time.length,
     learnedAt: new Date().toISOString()
   };
@@ -685,6 +706,48 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
 
   saveSecondaryOffset(discoveryStationId, offset);
   return offset;
+}
+
+// Rough, best-effort read on whether a location's learned correction
+// looks trustworthy — three checks, none of them a confident diagnosis
+// on their own, but together a useful flag for "look more closely here":
+//
+// 1. Plain distance from the nearest EA gauge — the further away, the
+//    more this location depends on the correction actually being good,
+//    since the uncorrected model itself is weaker here than usual.
+// 2. The SIZE of the learned ratio — a ratio far from 1.0 means a real
+//    amplitude mismatch (Weymouth vs Lyme Regis is the known example).
+//    This is exactly what the ratio correction is FOR, so a big ratio
+//    isn't itself a problem — just worth knowing how much correcting
+//    is happening.
+// 3. The CONSISTENCY of the individual samples — this is the one that
+//    can catch a genuine SHAPE mismatch (Southampton's double high
+//    water is the known example), which no single ratio or time shift
+//    can properly fix. If the real per-event samples disagree with each
+//    other by a lot, no single number was ever going to describe this
+//    location well, and that disagreement is the tell — no need to
+//    already know it's a "Southampton-style" case in advance.
+function assessSecondaryOffsetReliability(eaStation, offset) {
+  const notes = [];
+
+  if (eaStation.distanceKm > 40) {
+    notes.push(`This location's nearest gauge is ${eaStation.distanceKm.toFixed(0)}km away — further than usual, so this correction matters more here than most.`);
+  }
+
+  [["high", offset.highHeightRatio], ["low", offset.lowHeightRatio]].forEach(([type, ratio]) => {
+    if (typeof ratio === "number" && Math.abs(ratio - 1) > 0.2) {
+      const pct = Math.round((ratio - 1) * 100);
+      notes.push(`A substantial ${type} correction (${pct >= 0 ? "+" : ""}${pct}%) has been applied — this location's tide differs considerably in size from its nearest gauge.`);
+    }
+  });
+
+  [["high", offset.highHeightRatioSpread, offset.highHeightRatio], ["low", offset.lowHeightRatioSpread, offset.lowHeightRatio]].forEach(([type, spread, ratio]) => {
+    if (typeof spread === "number" && typeof ratio === "number" && ratio > 0 && spread / ratio > 0.15) {
+      notes.push(`The ${type}-tide samples used to learn this correction varied more than usual — possibly a sign this location's tide has a genuinely different SHAPE from its nearest gauge (like a double high or low water), which a single correction number can't fully fix. Worth treating ${type} predictions here with extra caution.`);
+    }
+  });
+
+  return notes;
 }
 
 // Applies a learned secondary-port offset to a single hours/OD-level
@@ -715,17 +778,23 @@ function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
 
   const offsetFor = type => ({
     timeMin: type === "high" ? offset.highTimeMin : offset.lowTimeMin,
-    heightM: type === "high" ? offset.highHeightM : offset.lowHeightM
+    heightRatio: type === "high" ? offset.highHeightRatio : offset.lowHeightRatio
   });
   const beforeOffset = offsetFor(before.type);
   const afterOffset = offsetFor(after.type);
   if (beforeOffset.timeMin === null || afterOffset.timeMin === null) return null;
+  if (typeof beforeOffset.heightRatio !== "number" || typeof afterOffset.heightRatio !== "number") return null;
 
   const span = after.hours - before.hours;
   const frac = span > 0 ? (hours - before.hours) / span : 0;
   const timeMin = beforeOffset.timeMin + (afterOffset.timeMin - beforeOffset.timeMin) * frac;
-  const heightM = beforeOffset.heightM + (afterOffset.heightM - beforeOffset.heightM) * frac;
+  const heightRatio = beforeOffset.heightRatio + (afterOffset.heightRatio - beforeOffset.heightRatio) * frac;
 
-  const levelCD = (odLevel - eaStation.cdOffsetOD) + heightM;
+  // A ratio, not an additive shift — scales the Chart-Datum-referenced
+  // level (already relative to LAT's own zero) up or down proportionally,
+  // which is what actually stretches a suppressed-range station's curve
+  // toward a genuinely different-amplitude location, rather than just
+  // sliding an unchanged-size curve up or down.
+  const levelCD = (odLevel - eaStation.cdOffsetOD) * heightRatio;
   return { hours: hours + timeMin / 60, levelCD };
 }
