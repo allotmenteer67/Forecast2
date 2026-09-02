@@ -677,7 +677,8 @@ function renderAdmiraltyRow(loc, allLocations) {
         // predates one of these fixes.
         const missingOwnCoords = typeof loc.lat !== "number" || typeof loc.lon !== "number";
         const predatesNameMatching = loc.discoveryStation && !loc.discoveryStation.matchedBy;
-        let discoveryStation = (missingOwnCoords || predatesNameMatching) ? null : loc.discoveryStation;
+        const predatesDistanceCheck = loc.discoveryStation && typeof loc.discoveryStation.lat !== "number";
+        let discoveryStation = (missingOwnCoords || predatesNameMatching || predatesDistanceCheck) ? null : loc.discoveryStation;
         if (!discoveryStation) {
           status.textContent = "Checking… (looking up nearest Admiralty station)";
           let searchLat = loc.lat, searchLon = loc.lon;
@@ -706,7 +707,7 @@ function renderAdmiraltyRow(loc, allLocations) {
           if (!found) throw new Error("No Admiralty station found nearby.");
           const matchedBy = normalizePlaceName(found.name) === normalizePlaceName(loc.label) ? "name" : "distance";
           discoveryStation = found;
-          loc.discoveryStation = { id: found.id, name: found.name, distanceKm: found.distanceKm, matchedBy };
+          loc.discoveryStation = { id: found.id, name: found.name, distanceKm: found.distanceKm, lat: found.lat, lon: found.lon, matchedBy };
           saveTideLocations(allLocations);
         }
 
@@ -724,6 +725,11 @@ function renderAdmiraltyRow(loc, allLocations) {
           await learnSecondaryOffset({
             eaStation: loc.station,
             discoveryStationId: discoveryStation.id,
+            // Distance between the EA gauge and the matched Admiralty
+            // station itself (not the saved location) — lets the
+            // reliability check spot a "same physical place, so this
+            // ratio shouldn't be large" case automatically.
+            discoveryStationDistanceFromEaStationKm: haversineKm(loc.station.lat, loc.station.lon, discoveryStation.lat, discoveryStation.lon),
             apiKey,
             fit: built.fit,
             epochIso: built.epochIso

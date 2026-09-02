@@ -666,7 +666,7 @@ function saveSecondaryOffset(discoveryStationId, offset) {
 // Returns null (and stores nothing) if the EA station has no confident
 // cdOffsetOD — proceeding without it would silently produce a "learned
 // offset" that's actually just measuring the wrong thing.
-async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit, epochIso }) {
+async function learnSecondaryOffset({ eaStation, discoveryStationId, discoveryStationDistanceFromEaStationKm, apiKey, fit, epochIso }) {
   if (typeof eaStation.cdOffsetOD !== "number") {
     throw new Error("This location's nearest EA station has no confirmed Chart Datum offset yet, so a learned correction against it wouldn't be trustworthy.");
   }
@@ -688,7 +688,7 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
     heightCD: applyTideFudge(e.level, fudge) - eaStation.cdOffsetOD
   }));
 
-  const diffsByType = { high: { time: [], heightRatio: [] }, low: { time: [], heightRatio: [] } };
+  const diffsByType = { high: { time: [], discoveryHeight: [], modelHeight: [] }, low: { time: [], discoveryHeight: [], modelHeight: [] } };
   discoveryEvents.forEach(dEvent => {
     let nearest = null, nearestGap = Infinity;
     modelEvents.forEach(mEvent => {
@@ -709,7 +709,8 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
     // unstable ratio if it doesn't.
     if (nearest && nearestGap <= 4 * 3600000 && nearest.heightCD > 0.15) {
       diffsByType[dEvent.type].time.push((dEvent.time - nearest.time) / 60000); // minutes
-      diffsByType[dEvent.type].heightRatio.push(dEvent.heightCD / nearest.heightCD);
+      diffsByType[dEvent.type].discoveryHeight.push(dEvent.heightCD);
+      diffsByType[dEvent.type].modelHeight.push(nearest.heightCD);
     }
   });
 
@@ -726,17 +727,46 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
   };
 
   const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+
+  // The ratio is taken from the ratio of the MEAN heights, not the mean
+  // of the individual per-event ratios. Averaging ratios of small,
+  // genuinely noisy real-world heights is statistically unstable —
+  // a single event with an unusually small (but still >0.15m) model
+  // height can produce a wildly inflated individual ratio that skews
+  // the whole average, even though the same absolute error would barely
+  // register against a larger height. This showed up as a real bug: a
+  // location checked against its OWN nearest gauge (which should need
+  // essentially no correction — it's the same physical place) was still
+  // showing a 60-100%+ "correction", purely from this per-event
+  // averaging instability, worst on exactly the small-range,
+  // amphidromic-point stations (Weymouth) where it's most likely to be
+  // mistaken for a real geographic effect (like Lyme Regis's genuine,
+  // much larger difference from Weymouth). Taking one ratio from the
+  // two means is far less sensitive to any single noisy sample.
+  const ratioOfMeans = (dArr, mArr) => {
+    const dMean = mean(dArr), mMean = mean(mArr);
+    return (dMean !== null && mMean !== null && mMean > 0) ? dMean / mMean : null;
+  };
+  const individualRatios = arr => arr.discoveryHeight.map((h, i) => h / arr.modelHeight[i]);
+
   const offset = {
     highTimeMin: mean(diffsByType.high.time),
-    highHeightRatio: mean(diffsByType.high.heightRatio),
-    highHeightRatioSpread: stdDev(diffsByType.high.heightRatio),
+    highHeightRatio: ratioOfMeans(diffsByType.high.discoveryHeight, diffsByType.high.modelHeight),
+    highHeightRatioSpread: stdDev(individualRatios(diffsByType.high)),
     highTimeSpread: stdDev(diffsByType.high.time),
     lowTimeMin: mean(diffsByType.low.time),
-    lowHeightRatio: mean(diffsByType.low.heightRatio),
-    lowHeightRatioSpread: stdDev(diffsByType.low.heightRatio),
+    lowHeightRatio: ratioOfMeans(diffsByType.low.discoveryHeight, diffsByType.low.modelHeight),
+    lowHeightRatioSpread: stdDev(individualRatios(diffsByType.low)),
     lowTimeSpread: stdDev(diffsByType.low.time),
     sampleCount: diffsByType.high.time.length + diffsByType.low.time.length,
-    learnedAt: new Date().toISOString()
+    learnedAt: new Date().toISOString(),
+    // How far the matched Admiralty station is from the EA gauge itself
+    // (not from the saved location — a different distance). When this is
+    // small, the two are essentially the same physical place, so a large
+    // ratio here would mean the model disagrees with real data about the
+    // SAME location — a red flag in its own right, not a genuine
+    // geographic correction (see the reliability check below).
+    eaToDiscoveryDistanceKm: typeof discoveryStationDistanceFromEaStationKm === "number" ? discoveryStationDistanceFromEaStationKm : null
   };
   if (offset.highTimeMin === null && offset.lowTimeMin === null) {
     throw new Error("Couldn't match up enough events between Admiralty and this station's own model to learn from — try again later.");
@@ -767,6 +797,29 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, apiKey, fit
 //    already know it's a "Southampton-style" case in advance.
 function assessSecondaryOffsetReliability(eaStation, offset) {
   const notes = [];
+
+  // 0. Same-place sanity check — the most important of these, and one
+  // the user should never have to spot by eye. If the matched Admiralty
+  // station is essentially the same physical place as the EA gauge
+  // (a handful of km, not a genuinely different port), the two SHOULD
+  // need next to no correction against each other — a large ratio here
+  // means the underlying comparison itself is untrustworthy (whether
+  // from real-world noise or a modelling issue), not a genuine
+  // geographic difference. Surfaced as its own distinct, more direct
+  // warning rather than folding into the generic "substantial
+  // correction" note below, since this one specifically means "don't
+  // trust this number at all" rather than "this is a real, large, but
+  // genuine correction".
+  const SAME_PLACE_KM = 5;
+  const SAME_PLACE_MAX_RATIO_DEVIATION = 0.15;
+  if (typeof offset.eaToDiscoveryDistanceKm === "number" && offset.eaToDiscoveryDistanceKm <= SAME_PLACE_KM) {
+    [["high", offset.highHeightRatio], ["low", offset.lowHeightRatio]].forEach(([type, ratio]) => {
+      if (typeof ratio === "number" && Math.abs(ratio - 1) > SAME_PLACE_MAX_RATIO_DEVIATION) {
+        const pct = Math.round((ratio - 1) * 100);
+        notes.push(`⚠ This correction looks unreliable: the Admiralty station used is only ${offset.eaToDiscoveryDistanceKm.toFixed(1)}km from the gauge itself, essentially the same physical place, yet the learned ${type} correction is ${pct >= 0 ? "+" : ""}${pct}% — a real same-place comparison should need almost none. Treat this correction with real caution until it's been rechecked.`);
+      }
+    });
+  }
 
   if (eaStation.distanceKm > 40) {
     notes.push(`This location's nearest gauge is ${eaStation.distanceKm.toFixed(0)}km away — further than usual, so this correction matters more here than most.`);
