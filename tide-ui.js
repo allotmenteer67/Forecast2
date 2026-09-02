@@ -609,13 +609,14 @@ function renderAdmiraltyRow(loc, allLocations) {
       return;
     }
     const offset = loc.discoveryStation ? loadSecondaryOffset(loc.discoveryStation.id) : null;
-    if (offset && typeof offset.highHeightRatio !== "number" && typeof offset.lowHeightRatio !== "number") {
+    if (offset && typeof offset.highHeightSlope !== "number" && typeof offset.lowHeightSlope !== "number") {
       // A correction WAS learned and stored at some point, but it's not
-      // in the current (ratio-based) format — most likely learned before
-      // the additive→ratio switch. Rather than silently treating this
-      // exactly like "never checked" (which hides a real, previously-
-      // working correction quietly reverting to the uncorrected value),
-      // say so plainly so a stale correction doesn't go unnoticed.
+      // in the current (slope+intercept) format — most likely learned
+      // before the pure-ratio→linear-fit switch. Rather than silently
+      // treating this exactly like "never checked" (which hides a real,
+      // previously-working correction quietly reverting to the
+      // uncorrected value), say so plainly so a stale correction doesn't
+      // go unnoticed.
       summary.textContent = "Admiralty: stored correction is outdated (from before a recent fix) and isn't being applied — tap Recheck to relearn it.";
       notesEl.innerHTML = "";
       return;
@@ -625,18 +626,32 @@ function renderAdmiraltyRow(loc, allLocations) {
       notesEl.innerHTML = "";
       return;
     }
-    const ratioText = ratio => {
-      const pct = (ratio - 1) * 100;
-      return `${pct >= 0 ? "+" : ""}${pct.toFixed(0)}%`;
+    // Shows both parts of the linear correction plainly: the scaling
+    // factor (a real amplitude difference, like Lyme Regis vs Weymouth)
+    // and the fixed metres shift (a same-size-at-every-height
+    // discrepancy, which a pure ratio used to badly distort at low
+    // tide — see learnSecondaryOffset). Omits a part that's
+    // negligible (within a couple of percent / a few cm) so a small,
+    // genuine correction doesn't read as more complicated than it is.
+    const correctionText = (slope, intercept) => {
+      const parts = [];
+      if (typeof slope === "number" && Math.abs(slope - 1) > 0.02) {
+        const pct = (slope - 1) * 100;
+        parts.push(`×${slope.toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(0)}%)`);
+      }
+      if (typeof intercept === "number" && Math.abs(intercept) > 0.03) {
+        parts.push(`${intercept >= 0 ? "+" : ""}${intercept.toFixed(2)}m`);
+      }
+      return parts.length ? parts.join(" ") : "no meaningful correction";
     };
     const parts = [];
-    if (offset.highTimeMin !== null && typeof offset.highHeightRatio === "number") {
+    if (offset.highTimeMin !== null && typeof offset.highHeightSlope === "number") {
       const sign = offset.highTimeMin >= 0 ? "+" : "";
-      parts.push(`high ${sign}${Math.round(offset.highTimeMin)}min / ${ratioText(offset.highHeightRatio)}`);
+      parts.push(`high ${sign}${Math.round(offset.highTimeMin)}min / ${correctionText(offset.highHeightSlope, offset.highHeightIntercept)}`);
     }
-    if (offset.lowTimeMin !== null && typeof offset.lowHeightRatio === "number") {
+    if (offset.lowTimeMin !== null && typeof offset.lowHeightSlope === "number") {
       const sign = offset.lowTimeMin >= 0 ? "+" : "";
-      parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${ratioText(offset.lowHeightRatio)}`);
+      parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${correctionText(offset.lowHeightSlope, offset.lowHeightIntercept)}`);
     }
     const matchNote = loc.discoveryStation.matchedBy === "name"
       ? " — matched by name, Admiralty's own referenced port for this place"
@@ -743,6 +758,13 @@ function renderAdmiraltyRow(loc, allLocations) {
         renderTideRow(); // reflect the new correction immediately if this is the current location
       } catch (err) {
         status.textContent = err.message || "Couldn't check against Admiralty right now.";
+        // Diagnostic aid: something elsewhere in the app appears to be
+        // re-rendering this card shortly after a failed check, wiping
+        // this status text before it's readable. A blocking alert()
+        // can't be silently overwritten by that the way a text node
+        // can — once we know what the real error says, this can be
+        // replaced with a calmer, persistent on-page version.
+        alert(status.textContent);
       } finally {
         button.disabled = false;
       }
