@@ -544,8 +544,46 @@ async function loadDiscoveryStations(apiKey) {
   return stations;
 }
 
-async function nearestDiscoveryStation(lat, lon, apiKey) {
+// Normalises a place name for comparison — lowercase, drop a trailing
+// ", County" (resolveLocation's own labels always carry one, but a
+// Discovery station name never does), strip punctuation. Kept
+// deliberately simple: this only needs to recognise "this is genuinely
+// the same named place", not handle every possible spelling variant.
+function normalizePlaceName(name) {
+  return (name || "")
+    .split(",")[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// Finds the real Admiralty station for a location — preferring an exact
+// NAME match over raw distance. This matters because Admiralty's own
+// secondary-port predictions are already correctly adjusted from
+// whichever standard port each place is traditionally referenced
+// against (e.g. Lyme Regis is referenced to Plymouth, not its nearer-
+// by-air neighbour Weymouth, because Weymouth sits on an amphidromic
+// point that makes it a poor tidal proxy despite being geographically
+// closer) — so if a station literally named after the place exists in
+// Discovery's 607-station list, that IS the right, already-correctly-
+// adjusted answer, and picking the nearest-by-distance station instead
+// would silently ignore Admiralty's own considered choice of reference.
+// Nearest-by-distance is only a fallback for wherever no station bears
+// the place's own name (e.g. a postcode resolving to an unnamed stretch
+// of coast, or a genuinely ungauged location).
+async function nearestDiscoveryStation(lat, lon, apiKey, label) {
   const stations = await loadDiscoveryStations(apiKey);
+
+  if (label) {
+    const target = normalizePlaceName(label);
+    if (target.length >= 3) {
+      const nameMatch = stations.find(s => normalizePlaceName(s.name) === target);
+      if (nameMatch) {
+        return { ...nameMatch, distanceKm: haversineKm(lat, lon, nameMatch.lat, nameMatch.lon) };
+      }
+    }
+  }
+
   let best = null, bestDist = Infinity;
   stations.forEach(station => {
     const dist = haversineKm(lat, lon, station.lat, station.lon);

@@ -638,7 +638,12 @@ function renderAdmiraltyRow(loc, allLocations) {
       const sign = offset.lowTimeMin >= 0 ? "+" : "";
       parts.push(`low ${sign}${Math.round(offset.lowTimeMin)}min / ${ratioText(offset.lowHeightRatio)}`);
     }
-    summary.textContent = `Admiralty: learned ${parts.join(", ")} vs ${loc.station.label} (${offset.sampleCount} events, ${formatDateLong(new Date(offset.learnedAt))}).`;
+    const matchNote = loc.discoveryStation.matchedBy === "name"
+      ? " — matched by name, Admiralty's own referenced port for this place"
+      : loc.discoveryStation.matchedBy === "distance"
+        ? " — no station named after this place was found; using the nearest one instead"
+        : "";
+    summary.textContent = `Admiralty: learned ${parts.join(", ")} vs ${loc.discoveryStation.name}${matchNote} (${offset.sampleCount} events, ${formatDateLong(new Date(offset.learnedAt))}).`;
     renderNotes(offset);
   }
   renderSummary();
@@ -660,12 +665,19 @@ function renderAdmiraltyRow(loc, allLocations) {
         // already has was very likely found by searching near the
         // GAUGE (e.g. Weymouth) rather than the real saved place (e.g.
         // Lyme Regis), silently matching the gauge's own Admiralty
-        // listing instead. Detect that one-time case and force a fresh
-        // lookup with real coordinates, discarding the stale match,
-        // rather than trusting a cached discoveryStation that was
-        // likely wrong from the start.
+        // listing instead. Separately, any discoveryStation found before
+        // name-matching existed was picked by raw distance alone, which
+        // can miss a station genuinely named after the place (Admiralty
+        // secondary ports are deliberately referenced against whichever
+        // standard port suits them tidally, not necessarily their
+        // nearest neighbour — Lyme Regis vs Plymouth over the much
+        // closer but amphidromic Weymouth is exactly this case). Force
+        // a fresh lookup, discarding any stale cached match, whenever
+        // either condition applies, rather than trusting a match that
+        // predates one of these fixes.
         const missingOwnCoords = typeof loc.lat !== "number" || typeof loc.lon !== "number";
-        let discoveryStation = missingOwnCoords ? null : loc.discoveryStation;
+        const predatesNameMatching = loc.discoveryStation && !loc.discoveryStation.matchedBy;
+        let discoveryStation = (missingOwnCoords || predatesNameMatching) ? null : loc.discoveryStation;
         if (!discoveryStation) {
           status.textContent = "Checking… (looking up nearest Admiralty station)";
           let searchLat = loc.lat, searchLon = loc.lon;
@@ -685,13 +697,16 @@ function renderAdmiraltyRow(loc, allLocations) {
               searchLon = loc.station.lon;
             }
           }
+          let found;
           try {
-            discoveryStation = await nearestDiscoveryStation(searchLat, searchLon, apiKey);
+            found = await nearestDiscoveryStation(searchLat, searchLon, apiKey, loc.label);
           } catch (err) {
             throw new Error(`Failed looking up the nearest Admiralty station: ${err.message || err}`);
           }
-          if (!discoveryStation) throw new Error("No Admiralty station found nearby.");
-          loc.discoveryStation = { id: discoveryStation.id, name: discoveryStation.name, distanceKm: discoveryStation.distanceKm };
+          if (!found) throw new Error("No Admiralty station found nearby.");
+          const matchedBy = normalizePlaceName(found.name) === normalizePlaceName(loc.label) ? "name" : "distance";
+          discoveryStation = found;
+          loc.discoveryStation = { id: found.id, name: found.name, distanceKm: found.distanceKm, matchedBy };
           saveTideLocations(allLocations);
         }
 
