@@ -147,6 +147,10 @@ async function openFishingSheet() {
   sheetTitle.textContent = `Fishing — ${location.label}`;
   sheetRange.textContent = tideDateQualifier().replace(/^ · /, "");
   sheetReadout.hidden = true;
+  // readoutCycle (Tide's spring/neap phase) is a shared readout child —
+  // hide it defensively here too, since Fishing's own tap-readout later
+  // un-hides the shared parent without knowing this child exists.
+  if (readoutCycle) readoutCycle.hidden = true;
   sheetBody.innerHTML = "";
   sheetFootnote.textContent = "";
 
@@ -304,8 +308,9 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, lo
       const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * plotH;
       const tidePath = "M" + tidePts.map(p => `${xFor(p.hours)},${yForTide(p.level)}`).join(" L");
       svg.appendChild(sheetSvgEl("path", {
-        d: tidePath, fill: "none", stroke: "#3d6d95", "stroke-width": 1.4,
-        "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.28"
+        d: tidePath, fill: "none", "stroke-width": 2.4,
+        "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.35",
+        class: "fishing-tide-overlay"
       }));
     } catch {
       // Missing tide fit for this location shouldn't block the fishing

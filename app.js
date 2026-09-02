@@ -493,6 +493,7 @@ const sheetTitle = document.getElementById("sheetTitle");
 const sheetRange = document.getElementById("sheetRange");
 const sheetReadout = document.getElementById("sheetReadout");
 const readoutTime = document.getElementById("readoutTime");
+const readoutCycle = document.getElementById("readoutCycle");
 const readoutValue = document.getElementById("readoutValue");
 const sheetBody = document.getElementById("sheetBody");
 const sheetFootnote = document.getElementById("sheetFootnote");
@@ -3607,6 +3608,10 @@ function openHourlySheet(conditionName) {
   sheetRange.textContent = `Next ${hourRange}h`;
   sheetBody.innerHTML = "";
   sheetReadout.hidden = conditionName === "sunshine";
+  // readoutCycle is tide-specific (spring/neap phase) — every other
+  // condition shares this same readout row, so it needs hiding here
+  // defensively; tide-ui.js is the only place that ever un-hides it.
+  if (readoutCycle) readoutCycle.hidden = true;
   // Dew Point's readout carries its own figure plus Temperature
   // alongside it, and Wind's carries speed plus gust plus direction —
   // both routinely longer than every other condition's plain single

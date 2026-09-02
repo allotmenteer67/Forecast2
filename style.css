@@ -1688,6 +1688,7 @@ footer {
 }
 .sheet-readout[hidden] { display: none; }
 .sheet-readout-time { font-size: 16px; font-weight: 600; color: var(--accent-muted); }
+.sheet-readout-cycle { font-size: 13px; font-weight: 600; color: var(--accent-muted); letter-spacing: 0.02em; }
 .sheet-readout-value { font-size: 16px; font-weight: 700; color: var(--accent-dark); }
 .sheet-readout-value.is-compact { font-size: 13px; }
 
@@ -1746,6 +1747,11 @@ footer {
 
 .scrub-line { stroke: var(--accent-dark); stroke-width: 1.5; pointer-events: none; }
 .scrub-dot { fill: var(--accent-dark); stroke: white; stroke-width: 1.5; pointer-events: none; }
+/* Reuses the same theme-aware accent as the scrub line above, so the
+   tide-timing overlay on Fishing's chart contrasts against the score
+   line's own blue regardless of which colour theme is active, rather
+   than a fixed hex that could clash with or blend into some themes. */
+.fishing-tide-overlay { stroke: var(--accent-dark); }
 .graph-touch-area { fill: transparent; touch-action: pan-y; }
 
 /* Tide's own tap-to-read-off touch area — deliberately NOT

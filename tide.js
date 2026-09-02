@@ -89,6 +89,59 @@ function solveLinearSystem(A, b) {
   return x;
 }
 
+// Spring/neap cycle labels — the M2/S2 constituents already fitted for
+// each station ARE the spring/neap cycle (their ~14.77-day beat is
+// exactly what produces it), so this reads that beat directly rather
+// than scanning history separately. Deliberately in one place and
+// easy to swap: change the wording here only, nothing else needs to
+// know about it.
+const TIDE_CYCLE_LABELS = [
+  "Springs",       // peak
+  "Taking off",    // easing from springs, early
+  "Taking off",    // easing from springs, mid
+  "Near neaps",
+  "Neaps",         // trough
+  "Making",        // building toward springs, early
+  "Making",        // building toward springs, mid
+  "Near springs"
+];
+
+// Returns one of TIDE_CYCLE_LABELS for a given moment, purely from the
+// fitted M2 and S2 constituents' relative phase — no separate
+// historical min/max scan needed. M2 and S2 beating in phase (their
+// combined amplitude at its largest) IS a spring tide; beating in
+// opposition (their combined amplitude smallest) IS a neap — this is
+// the actual physical mechanism, not an approximation of it.
+function tideCyclePhase(fit, hours) {
+  if (!fit) return null;
+  const m2 = TIDE_CONSTITUENTS.findIndex(c => c.name === "M2");
+  const s2 = TIDE_CONSTITUENTS.findIndex(c => c.name === "S2");
+  if (m2 < 0 || s2 < 0) return null;
+  const { coeffs } = fit;
+  const cosM2 = coeffs[1 + m2 * 2], sinM2 = coeffs[2 + m2 * 2];
+  const cosS2 = coeffs[1 + s2 * 2], sinS2 = coeffs[2 + s2 * 2];
+  const phaseM2 = Math.atan2(sinM2, cosM2) * (180 / Math.PI);
+  const phaseS2 = Math.atan2(sinS2, cosS2) * (180 / Math.PI);
+  const speedM2 = TIDE_CONSTITUENTS[m2].speed, speedS2 = TIDE_CONSTITUENTS[s2].speed;
+
+  // psi = 0 at the moment M2 and S2 add constructively (spring), 180 at
+  // their most destructive (neap). Moves at a constant rate forever
+  // (speedM2 - speedS2 is fixed), so this always sweeps the same
+  // direction around the cycle — the 8 bins below are ordered to match
+  // that direction rather than needing a separate rising/falling check.
+  let psi = ((speedM2 - speedS2) * hours - (phaseM2 - phaseS2)) % 360;
+  if (psi < 0) psi += 360;
+
+  const bin = Math.round(psi / 45) % 8;
+  // Rotates the label list so index 0 (Springs) lines up with psi≈0,
+  // and walks forward through Taking off → Neaps → Making → Near
+  // springs as psi increases toward 360/0 — matching how psi actually
+  // decreases over real time (see comment above), so what a person
+  // sees scrubbing forward through the week moves through the labels
+  // in the sailing-almanac order, not backwards.
+  return TIDE_CYCLE_LABELS[(8 - bin) % 8];
+}
+
 function predictTideLevel(fit, hours) {
   if (!fit) return null;
   const { coeffs } = fit;

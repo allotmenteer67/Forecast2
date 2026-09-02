@@ -483,6 +483,13 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
     const when = new Date(Date.parse(epochIso) + result.hours * 3600000);
     readoutTime.textContent = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     readoutValue.textContent = `${result.level.toFixed(2)}m`;
+    const cyclePhase = tideCyclePhase(fit, clamped);
+    if (cyclePhase) {
+      readoutCycle.textContent = cyclePhase;
+      readoutCycle.hidden = false;
+    } else {
+      readoutCycle.hidden = true;
+    }
   }
 
   touchArea.addEventListener("click", e => {
