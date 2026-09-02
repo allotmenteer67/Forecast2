@@ -609,7 +609,18 @@ function renderAdmiraltyRow(loc, allLocations) {
       return;
     }
     const offset = loc.discoveryStation ? loadSecondaryOffset(loc.discoveryStation.id) : null;
-    if (!offset || (typeof offset.highHeightRatio !== "number" && typeof offset.lowHeightRatio !== "number")) {
+    if (offset && typeof offset.highHeightRatio !== "number" && typeof offset.lowHeightRatio !== "number") {
+      // A correction WAS learned and stored at some point, but it's not
+      // in the current (ratio-based) format — most likely learned before
+      // the additive→ratio switch. Rather than silently treating this
+      // exactly like "never checked" (which hides a real, previously-
+      // working correction quietly reverting to the uncorrected value),
+      // say so plainly so a stale correction doesn't go unnoticed.
+      summary.textContent = "Admiralty: stored correction is outdated (from before a recent fix) and isn't being applied — tap Recheck to relearn it.";
+      notesEl.innerHTML = "";
+      return;
+    }
+    if (!offset) {
       summary.textContent = "Admiralty: not checked yet.";
       notesEl.innerHTML = "";
       return;
@@ -644,11 +655,38 @@ function renderAdmiraltyRow(loc, allLocations) {
       button.disabled = true;
       status.textContent = "Checking…";
       try {
-        let discoveryStation = loc.discoveryStation;
+        // A location saved before this fix has no lat/lon of its own —
+        // only its nearest EA gauge's — so any discoveryStation it
+        // already has was very likely found by searching near the
+        // GAUGE (e.g. Weymouth) rather than the real saved place (e.g.
+        // Lyme Regis), silently matching the gauge's own Admiralty
+        // listing instead. Detect that one-time case and force a fresh
+        // lookup with real coordinates, discarding the stale match,
+        // rather than trusting a cached discoveryStation that was
+        // likely wrong from the start.
+        const missingOwnCoords = typeof loc.lat !== "number" || typeof loc.lon !== "number";
+        let discoveryStation = missingOwnCoords ? null : loc.discoveryStation;
         if (!discoveryStation) {
           status.textContent = "Checking… (looking up nearest Admiralty station)";
+          let searchLat = loc.lat, searchLon = loc.lon;
+          if (missingOwnCoords) {
+            try {
+              const reresolved = await resolveLocation(loc.label);
+              searchLat = reresolved.lat;
+              searchLon = reresolved.lon;
+              loc.lat = searchLat;
+              loc.lon = searchLon;
+              saveTideLocations(allLocations);
+            } catch {
+              // Couldn't re-resolve the label — fall back to the gauge's
+              // own coordinates rather than failing outright, though
+              // this will reproduce the old bug for this one check.
+              searchLat = loc.station.lat;
+              searchLon = loc.station.lon;
+            }
+          }
           try {
-            discoveryStation = await nearestDiscoveryStation(loc.station.lat, loc.station.lon, apiKey);
+            discoveryStation = await nearestDiscoveryStation(searchLat, searchLon, apiKey);
           } catch (err) {
             throw new Error(`Failed looking up the nearest Admiralty station: ${err.message || err}`);
           }
@@ -803,6 +841,15 @@ if (addTideLocationButton) {
       const newLocation = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         label: resolved.label || input,
+        // This location's OWN coordinates, distinct from the nearest EA
+        // gauge's (station.lat/lon) — needed so an Admiralty check
+        // searches near the actual saved place (e.g. Lyme Regis) rather
+        // than near its nearest gauge (Weymouth), which are often not
+        // the same station and can be tens of km apart. Without this,
+        // "nearest Admiralty station" was silently resolving to the
+        // gauge's own station instead of the real target location.
+        lat: resolved.lat,
+        lon: resolved.lon,
         station
       };
       locations.push(newLocation);

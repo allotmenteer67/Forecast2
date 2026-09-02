@@ -261,10 +261,23 @@ header p {
   font: inherit;
   color: inherit;
   text-align: left;
-  touch-action: pan-y;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: background-color .15s ease;
+}
+
+/* Only tideRow does its own custom pointer-capture swipe-vs-tap
+   detection (see tide-ui.js) and needs touch-action restricted so a
+   horizontal swipe isn't eaten by the browser's own gesture handling.
+   fishingRow shares .tide-row for its visual styling only — it uses a
+   plain native click listener with no swipe support, so it must NOT
+   get this restriction (matches every other headline cell, which also
+   leaves touch-action at its unrestricted default). Giving fishingRow
+   this property by accident, just because it reused .tide-row's class,
+   was undermining the exact "let the browser's native tap handling do
+   the job" reasoning that plain click listeners rely on elsewhere. */
+.tide-row-swipeable {
+  touch-action: pan-y;
 }
 
 .tide-row:hover,
@@ -1719,7 +1732,8 @@ footer {
 .tide-graph-wrap .graph-axis-label {
   font-size: 12px;
 }
-.tide-graph-wrap .tide-graph-svg {
+.tide-graph-wrap .tide-graph-svg,
+.tide-graph-wrap .fishing-graph-svg {
   width: auto;
   max-width: none;
 }

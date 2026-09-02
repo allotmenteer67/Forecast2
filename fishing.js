@@ -75,25 +75,39 @@ async function fetchFishingForecast(lat, lon, markType) {
     forecast_days: "7",
     timezone: "auto"
   });
-  const weatherRes = await fetchWithTimeout(`${WEATHER_URL}?${weatherParams.toString()}`, {}, 20000);
+  const marineParams = markType === "coastal" ? new URLSearchParams({
+    latitude: lat,
+    longitude: lon,
+    hourly: "wave_height,swell_wave_height,swell_wave_period,sea_surface_temperature",
+    forecast_days: "7",
+    timezone: "auto"
+  }) : null;
+
+  // Weather and marine are two independent API calls (different
+  // endpoints, neither depends on the other's result) — fetching them
+  // one after another (await, then await again) was silently doubling
+  // the real-world wait to open the sheet, since each is a genuine
+  // network round trip. Running them together with Promise.all cuts
+  // that to roughly the slower of the two rather than the sum of both,
+  // matching how instantly the headline weather cells and tide (which
+  // don't do a live fetch on every open) already feel.
+  const [weatherRes, marineRes] = await Promise.all([
+    fetchWithTimeout(`${WEATHER_URL}?${weatherParams.toString()}`, {}, 20000),
+    marineParams
+      ? fetchWithTimeout(`${FISHING_MARINE_URL}?${marineParams.toString()}`, {}, 20000).catch(() => null)
+      : Promise.resolve(null)
+  ]);
+
   if (!weatherRes.ok) throw new Error(`Weather fetch failed: ${weatherRes.status}`);
   const weather = await weatherRes.json();
 
+  // A non-ok or failed marine response (e.g. a mark just off the coast
+  // where Marine API has no grid point) just means marine factors are
+  // skipped for this fetch — not a hard failure of the whole forecast.
   let marine = null;
-  if (markType === "coastal") {
-    const marineParams = new URLSearchParams({
-      latitude: lat,
-      longitude: lon,
-      hourly: "wave_height,swell_wave_height,swell_wave_period,sea_surface_temperature",
-      forecast_days: "7",
-      timezone: "auto"
-    });
+  if (marineRes && marineRes.ok) {
     try {
-      const marineRes = await fetchWithTimeout(`${FISHING_MARINE_URL}?${marineParams.toString()}`, {}, 20000);
-      if (marineRes.ok) marine = await marineRes.json();
-      // A non-ok response (e.g. a mark just off the coast where Marine
-      // API has no grid point) just means marine factors are skipped
-      // for this fetch — not a hard failure of the whole forecast.
+      marine = await marineRes.json();
     } catch {
       marine = null;
     }
