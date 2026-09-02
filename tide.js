@@ -495,8 +495,14 @@ function discoveryApiBase() {
 // error with no indication of what to actually do about it.
 async function fetchDiscovery(path, apiKey) {
   try {
+    // cache: "no-store" — every Admiralty check genuinely needs fresh
+    // data (tide predictions and the reliability of a learned
+    // correction both depend on it), so this must never be served
+    // from the browser's own HTTP cache even if a future response
+    // ever carried cache-friendly headers.
     return await fetchWithTimeout(`${discoveryApiBase()}${path}`, {
-      headers: { "Ocp-Apim-Subscription-Key": apiKey }
+      headers: { "Ocp-Apim-Subscription-Key": apiKey },
+      cache: "no-store"
     }, 30000);
   } catch (err) {
     if (!loadDiscoveryProxyUrl()) {
@@ -808,8 +814,21 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, discoverySt
     // geographic correction (see the reliability check below).
     eaToDiscoveryDistanceKm: typeof discoveryStationDistanceFromEaStationKm === "number" ? discoveryStationDistanceFromEaStationKm : null
   };
-  if (offset.highTimeMin === null && offset.lowTimeMin === null) {
-    throw new Error("Couldn't match up enough events between Admiralty and this station's own model to learn from — try again later.");
+  if (!highFit && !lowFit) {
+    // linearFit needs at least 2 matched same-type events to produce a
+    // real slope+intercept — this is a DIFFERENT condition from "zero
+    // events matched at all" (which the old check here tested for).
+    // With exactly one matched high event and one matched low event,
+    // the old check passed silently, then saved an offset with null
+    // height fields anyway — indistinguishable from a genuinely stale
+    // pre-fix offset, which is exactly the confusing "stored correction
+    // is outdated" message a location kept showing no matter how many
+    // times it was rechecked. Catching it here, before anything is
+    // saved, means a real cause (the two places' tide timings not
+    // lining up well enough within the 4-hour matching window — quite
+    // possible for an open coastal bay checked against an estuary
+    // gauge) gets its own honest message instead.
+    throw new Error("Admiralty's predictions and this location's own model only lined up closely enough to compare on 1 or fewer high and low events each this week — too few to learn a reliable height correction from. This can happen when the matched places have a genuinely different tidal timing (e.g. an open bay vs a sheltered estuary) — try again in a few days once more events are available, or check a more local named station if one exists nearby.");
   }
 
   saveSecondaryOffset(discoveryStationId, offset);
