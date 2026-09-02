@@ -207,7 +207,7 @@ async function openFishingSheet() {
     }));
   }
 
-  sheetBody.appendChild(renderFishingCurve(points, built.epochIso, nowHours, startHours, endHours));
+  sheetBody.appendChild(renderFishingCurve(points, built.epochIso, nowHours, startHours, endHours, location, built.fit));
 
   if (loadFishingShowRaw()) {
     const nowPoint = points.find(p => p.hours >= nowHours) || points[0];
@@ -221,7 +221,19 @@ async function openFishingSheet() {
 // horizontally-scrolling chart (same TIDE_GRAPH_PX_PER_HOUR density,
 // same day-boundary gridlines), but the y-axis is the four score bands
 // rather than a height in metres.
-function renderFishingCurve(points, epochIso, nowHours, startHours, endHours) {
+//
+// Also draws the location's own corrected tide height as a faint
+// background line, purely for TIMING — auto-scaled to its own min/max
+// within the visible window (same idea as Temperature/Dew Point
+// overlaying each other), with no y-axis of its own and no claim that
+// a given height corresponds to a given score band. The tide contributor
+// to the fishing score is really tide MOVEMENT (rate of change, which
+// peaks mid-tide and drops to ~0 at both slack high and slack low), not
+// height — so a height curve here answers "is a low-tide-only mark
+// accessible when the score is good", which is what was actually asked
+// for, without implying a low/high-to-score relationship that isn't how
+// the score works.
+function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, location, tideFit) {
   const totalHours = endHours - startHours;
   const padL = 66, padR = 16, padT = 16, padB = 34;
   const plotW = Math.max(280, totalHours * TIDE_GRAPH_PX_PER_HOUR);
@@ -262,6 +274,44 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours) {
 
   const nowX = xFor(nowHours);
   svg.appendChild(sheetSvgEl("line", { x1: nowX, x2: nowX, y1: padT, y2: padT + plotH, class: "graph-gridline", "stroke-dasharray": "3 3" }));
+
+  // Tide overlay — drawn BEFORE the score line so the score sits
+  // visually on top. Uses the exact same correction path as tide's own
+  // sheet (getOrBuildTideFit + loadTideFudge + applyLocationCorrection),
+  // so a location with a learned Admiralty correction shows the same
+  // corrected shape here as it does on its own tide card — not the raw
+  // nearest-gauge curve underneath it.
+  if (location) {
+    try {
+      const fit = tideFit;
+      if (!fit) throw new Error("no tide fit available");
+      const fudge = loadTideFudge(location.station.id);
+      const tidePts = [];
+      const step = totalHours / 200;
+      for (let h = startHours; h <= endHours; h += step) {
+        const r = applyLocationCorrection(location, fit, h, applyTideFudge(predictTideLevel(fit, h), fudge));
+        tidePts.push({ hours: r.hours, level: r.level });
+      }
+      const levels = tidePts.map(p => p.level);
+      const minLevel = Math.min(...levels), maxLevel = Math.max(...levels);
+      const levelSpan = maxLevel - minLevel || 1;
+      // Auto-scaled to fill the SAME plot area as the score line, purely
+      // for shape/timing comparison — deliberately no axis or labels,
+      // since the numbers themselves aren't the point here (the tide
+      // card already shows those) and adding a second labelled axis
+      // would clutter a chart that's meant to answer one question: does
+      // the timing line up.
+      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * plotH;
+      const tidePath = "M" + tidePts.map(p => `${xFor(p.hours)},${yForTide(p.level)}`).join(" L");
+      svg.appendChild(sheetSvgEl("path", {
+        d: tidePath, fill: "none", stroke: "#3d6d95", "stroke-width": 1.4,
+        "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.28"
+      }));
+    } catch {
+      // Missing tide fit for this location shouldn't block the fishing
+      // chart itself from rendering — just skip the overlay silently.
+    }
+  }
 
   const path = "M" + points.map(p => `${xFor(p.hours)},${yForScore(p.score)}`).join(" L");
   svg.appendChild(sheetSvgEl("path", { d: path, fill: "none", stroke: "#3d6d95", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
