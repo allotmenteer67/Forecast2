@@ -545,13 +545,17 @@ async function loadDiscoveryStations(apiKey) {
 }
 
 // Normalises a place name for comparison — lowercase, drop a trailing
-// ", County" (resolveLocation's own labels always carry one, but a
-// Discovery station name never does), strip punctuation. Kept
-// deliberately simple: this only needs to recognise "this is genuinely
-// the same named place", not handle every possible spelling variant.
+// ", County" (resolveLocation's own labels always carry one) and any
+// trailing "(qualifier)" like "(New Quay)" or "(Approaches)" — several
+// real Discovery stations share one town name this way (e.g. Teignmouth
+// has both "Teignmouth (New Quay)" and "Teignmouth (Approaches)") — then
+// strips punctuation. Kept deliberately simple: this only needs to
+// recognise "this is genuinely the same named place", not handle every
+// possible spelling variant.
 function normalizePlaceName(name) {
   return (name || "")
     .split(",")[0]
+    .replace(/\([^)]*\)/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -577,9 +581,20 @@ async function nearestDiscoveryStation(lat, lon, apiKey, label) {
   if (label) {
     const target = normalizePlaceName(label);
     if (target.length >= 3) {
-      const nameMatch = stations.find(s => normalizePlaceName(s.name) === target);
-      if (nameMatch) {
-        return { ...nameMatch, distanceKm: haversineKm(lat, lon, nameMatch.lat, nameMatch.lon) };
+      // A town can have more than one qualified entry (Teignmouth has
+      // both "(New Quay)" and "(Approaches)") — collect every match
+      // rather than taking the first, and pick whichever is physically
+      // closest to the location actually being added, since a plain
+      // "Teignmouth" search has no way to know which qualifier the
+      // person meant.
+      const nameMatches = stations.filter(s => normalizePlaceName(s.name) === target);
+      if (nameMatches.length) {
+        let best = nameMatches[0], bestDist = haversineKm(lat, lon, best.lat, best.lon);
+        nameMatches.forEach(s => {
+          const d = haversineKm(lat, lon, s.lat, s.lon);
+          if (d < bestDist) { bestDist = d; best = s; }
+        });
+        return { ...best, distanceKm: bestDist };
       }
     }
   }
@@ -728,43 +743,68 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, discoverySt
 
   const mean = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 
-  // The ratio is taken from the ratio of the MEAN heights, not the mean
-  // of the individual per-event ratios. Averaging ratios of small,
-  // genuinely noisy real-world heights is statistically unstable —
-  // a single event with an unusually small (but still >0.15m) model
-  // height can produce a wildly inflated individual ratio that skews
-  // the whole average, even though the same absolute error would barely
-  // register against a larger height. This showed up as a real bug: a
-  // location checked against its OWN nearest gauge (which should need
-  // essentially no correction — it's the same physical place) was still
-  // showing a 60-100%+ "correction", purely from this per-event
-  // averaging instability, worst on exactly the small-range,
-  // amphidromic-point stations (Weymouth) where it's most likely to be
-  // mistaken for a real geographic effect (like Lyme Regis's genuine,
-  // much larger difference from Weymouth). Taking one ratio from the
-  // two means is far less sensitive to any single noisy sample.
-  const ratioOfMeans = (dArr, mArr) => {
-    const dMean = mean(dArr), mMean = mean(mArr);
-    return (dMean !== null && mMean !== null && mMean > 0) ? dMean / mMean : null;
+  // Fits real = a + b*model (ordinary least squares) rather than a pure
+  // ratio (real = b*model, forced through zero). A pure ratio was found
+  // to badly misrepresent a genuine ADDITIVE height bias — the kind
+  // that shows up as roughly the same real-world error in metres at
+  // both high and low tide — because dividing that same fixed error by
+  // a much smaller low-tide height inflates the ratio far more than it
+  // does at high tide. That exact fingerprint (a much bigger "% correction"
+  // on low tide than high tide, with individual samples agreeing closely
+  // with each other) is what a same-place self-check against Weymouth
+  // showed: not noise, not a real amplitude difference, but a fixed
+  // metres-level offset being forced through the wrong kind of model.
+  // The general linear fit resolves correctly either way without having
+  // to know in advance which kind of mismatch a location has: a=0,b≈1
+  // for a well-matched station; a large b with small a for a genuine
+  // amplitude difference (Lyme Regis vs Weymouth); a small b-deviation
+  // with a real nonzero a for a same-place additive bias (this case).
+  const linearFit = (modelArr, realArr) => {
+    const n = modelArr.length;
+    if (n < 2) return null;
+    const meanModel = mean(modelArr), meanReal = mean(realArr);
+    let cov = 0, varModel = 0;
+    for (let i = 0; i < n; i++) {
+      const dm = modelArr[i] - meanModel;
+      cov += dm * (realArr[i] - meanReal);
+      varModel += dm * dm;
+    }
+    // No spread in the model's own heights to fit a slope against
+    // (can happen with very few samples) — fall back to a pure
+    // additive shift rather than an undefined/unstable slope.
+    if (varModel === 0) return { intercept: meanReal - meanModel, slope: 1 };
+    const slope = cov / varModel;
+    const intercept = meanReal - slope * meanModel;
+    return { intercept, slope };
   };
-  const individualRatios = arr => arr.discoveryHeight.map((h, i) => h / arr.modelHeight[i]);
+
+  const residualStdDev = (modelArr, realArr, fit) => {
+    if (!fit) return null;
+    const residuals = modelArr.map((m, i) => realArr[i] - (fit.intercept + fit.slope * m));
+    return stdDev(residuals);
+  };
+
+  const highFit = linearFit(diffsByType.high.modelHeight, diffsByType.high.discoveryHeight);
+  const lowFit = linearFit(diffsByType.low.modelHeight, diffsByType.low.discoveryHeight);
 
   const offset = {
     highTimeMin: mean(diffsByType.high.time),
-    highHeightRatio: ratioOfMeans(diffsByType.high.discoveryHeight, diffsByType.high.modelHeight),
-    highHeightRatioSpread: stdDev(individualRatios(diffsByType.high)),
+    highHeightIntercept: highFit ? highFit.intercept : null,
+    highHeightSlope: highFit ? highFit.slope : null,
+    highHeightResidualSpread: residualStdDev(diffsByType.high.modelHeight, diffsByType.high.discoveryHeight, highFit),
     highTimeSpread: stdDev(diffsByType.high.time),
     lowTimeMin: mean(diffsByType.low.time),
-    lowHeightRatio: ratioOfMeans(diffsByType.low.discoveryHeight, diffsByType.low.modelHeight),
-    lowHeightRatioSpread: stdDev(individualRatios(diffsByType.low)),
+    lowHeightIntercept: lowFit ? lowFit.intercept : null,
+    lowHeightSlope: lowFit ? lowFit.slope : null,
+    lowHeightResidualSpread: residualStdDev(diffsByType.low.modelHeight, diffsByType.low.discoveryHeight, lowFit),
     lowTimeSpread: stdDev(diffsByType.low.time),
     sampleCount: diffsByType.high.time.length + diffsByType.low.time.length,
     learnedAt: new Date().toISOString(),
     // How far the matched Admiralty station is from the EA gauge itself
     // (not from the saved location — a different distance). When this is
     // small, the two are essentially the same physical place, so a large
-    // ratio here would mean the model disagrees with real data about the
-    // SAME location — a red flag in its own right, not a genuine
+    // correction here would mean the model disagrees with real data about
+    // the SAME location — a red flag in its own right, not a genuine
     // geographic correction (see the reliability check below).
     eaToDiscoveryDistanceKm: typeof discoveryStationDistanceFromEaStationKm === "number" ? discoveryStationDistanceFromEaStationKm : null
   };
@@ -795,28 +835,48 @@ async function learnSecondaryOffset({ eaStation, discoveryStationId, discoverySt
 //    other by a lot, no single number was ever going to describe this
 //    location well, and that disagreement is the tell — no need to
 //    already know it's a "Southampton-style" case in advance.
+// Rough, best-effort read on whether a location's learned correction
+// looks trustworthy — checks, none a confident diagnosis on their own,
+// but together a useful flag for "look more closely here":
+//
+// 1. Plain distance from the nearest EA gauge — the further away, the
+//    more this location depends on the correction actually being good,
+//    since the uncorrected model itself is weaker here than usual.
+// 2. Same-place sanity check — if the matched Admiralty station is
+//    essentially the same physical place as the EA gauge, BOTH the
+//    slope should sit close to 1 AND the intercept close to 0; either
+//    one being off means the comparison itself is untrustworthy, not a
+//    genuine correction.
+// 3. The SIZE of the learned slope — a slope far from 1.0 means a real
+//    amplitude mismatch (Weymouth vs Lyme Regis is the known example).
+//    This is exactly what the correction is FOR, so a big slope isn't
+//    itself a problem — just worth knowing how much correcting is
+//    happening.
+// 4. The CONSISTENCY of the individual samples around the fitted line
+//    (the residual spread) — this is the one that can catch a genuine
+//    SHAPE mismatch (Southampton's double high water is the known
+//    example), which no single slope+intercept pair can properly fix.
+//    If real samples scatter widely around the fitted line relative to
+//    the tide's own typical size, no simple correction was ever going
+//    to describe this location well, and that scatter is the tell — no
+//    need to already know it's a "Southampton-style" case in advance.
 function assessSecondaryOffsetReliability(eaStation, offset) {
   const notes = [];
 
-  // 0. Same-place sanity check — the most important of these, and one
-  // the user should never have to spot by eye. If the matched Admiralty
-  // station is essentially the same physical place as the EA gauge
-  // (a handful of km, not a genuinely different port), the two SHOULD
-  // need next to no correction against each other — a large ratio here
-  // means the underlying comparison itself is untrustworthy (whether
-  // from real-world noise or a modelling issue), not a genuine
-  // geographic difference. Surfaced as its own distinct, more direct
-  // warning rather than folding into the generic "substantial
-  // correction" note below, since this one specifically means "don't
-  // trust this number at all" rather than "this is a real, large, but
-  // genuine correction".
   const SAME_PLACE_KM = 5;
-  const SAME_PLACE_MAX_RATIO_DEVIATION = 0.15;
-  if (typeof offset.eaToDiscoveryDistanceKm === "number" && offset.eaToDiscoveryDistanceKm <= SAME_PLACE_KM) {
-    [["high", offset.highHeightRatio], ["low", offset.lowHeightRatio]].forEach(([type, ratio]) => {
-      if (typeof ratio === "number" && Math.abs(ratio - 1) > SAME_PLACE_MAX_RATIO_DEVIATION) {
-        const pct = Math.round((ratio - 1) * 100);
-        notes.push(`⚠ This correction looks unreliable: the Admiralty station used is only ${offset.eaToDiscoveryDistanceKm.toFixed(1)}km from the gauge itself, essentially the same physical place, yet the learned ${type} correction is ${pct >= 0 ? "+" : ""}${pct}% — a real same-place comparison should need almost none. Treat this correction with real caution until it's been rechecked.`);
+  const SAME_PLACE_MAX_SLOPE_DEVIATION = 0.15;
+  const SAME_PLACE_MAX_INTERCEPT_M = 0.3;
+  const isSamePlace = typeof offset.eaToDiscoveryDistanceKm === "number" && offset.eaToDiscoveryDistanceKm <= SAME_PLACE_KM;
+
+  if (isSamePlace) {
+    [["high", offset.highHeightSlope, offset.highHeightIntercept], ["low", offset.lowHeightSlope, offset.lowHeightIntercept]].forEach(([type, slope, intercept]) => {
+      const slopeOff = typeof slope === "number" && Math.abs(slope - 1) > SAME_PLACE_MAX_SLOPE_DEVIATION;
+      const interceptOff = typeof intercept === "number" && Math.abs(intercept) > SAME_PLACE_MAX_INTERCEPT_M;
+      if (slopeOff || interceptOff) {
+        const parts = [];
+        if (slopeOff) parts.push(`a scaling factor of ×${slope.toFixed(2)}`);
+        if (interceptOff) parts.push(`a fixed shift of ${intercept >= 0 ? "+" : ""}${intercept.toFixed(2)}m`);
+        notes.push(`⚠ This correction looks unreliable: the Admiralty station used is only ${offset.eaToDiscoveryDistanceKm.toFixed(1)}km from the gauge itself, essentially the same physical place, yet the learned ${type}-tide correction includes ${parts.join(" and ")} — a real same-place comparison should need almost neither. Treat this correction with real caution until it's been rechecked.`);
       }
     });
   }
@@ -825,16 +885,22 @@ function assessSecondaryOffsetReliability(eaStation, offset) {
     notes.push(`This location's nearest gauge is ${eaStation.distanceKm.toFixed(0)}km away — further than usual, so this correction matters more here than most.`);
   }
 
-  [["high", offset.highHeightRatio], ["low", offset.lowHeightRatio]].forEach(([type, ratio]) => {
-    if (typeof ratio === "number" && Math.abs(ratio - 1) > 0.2) {
-      const pct = Math.round((ratio - 1) * 100);
-      notes.push(`A substantial ${type} correction (${pct >= 0 ? "+" : ""}${pct}%) has been applied — this location's tide differs considerably in size from its nearest gauge.`);
-    }
-  });
+  if (!isSamePlace) {
+    [["high", offset.highHeightSlope], ["low", offset.lowHeightSlope]].forEach(([type, slope]) => {
+      if (typeof slope === "number" && Math.abs(slope - 1) > 0.2) {
+        const pct = Math.round((slope - 1) * 100);
+        notes.push(`A substantial ${type} correction (scaling by ${pct >= 0 ? "+" : ""}${pct}%) has been applied — this location's tide differs considerably in size from its nearest gauge.`);
+      }
+    });
+  }
 
-  [["high", offset.highHeightRatioSpread, offset.highHeightRatio], ["low", offset.lowHeightRatioSpread, offset.lowHeightRatio]].forEach(([type, spread, ratio]) => {
-    if (typeof spread === "number" && typeof ratio === "number" && ratio > 0 && spread / ratio > 0.15) {
-      notes.push(`The ${type}-tide samples used to learn this correction varied more than usual — possibly a sign this location's tide has a genuinely different SHAPE from its nearest gauge (like a double high or low water), which a single correction number can't fully fix. Worth treating ${type} predictions here with extra caution.`);
+  [["high", offset.highHeightResidualSpread], ["low", offset.lowHeightResidualSpread]].forEach(([type, spread]) => {
+    // Residual spread relative to a typical tidal range (2m — a rough
+    // but reasonable UK-wide yardstick) rather than relative to the
+    // slope/ratio itself, since a residual is already in metres and
+    // comparing it to a near-zero ratio would be meaningless.
+    if (typeof spread === "number" && spread > 0.3) {
+      notes.push(`The ${type}-tide samples used to learn this correction scattered more than usual around the fitted line (±${spread.toFixed(2)}m) — possibly a sign this location's tide has a genuinely different SHAPE from its nearest gauge (like a double high or low water), which a single correction can't fully fix. Worth treating ${type} predictions here with extra caution.`);
     }
   });
 
@@ -869,23 +935,28 @@ function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
 
   const offsetFor = type => ({
     timeMin: type === "high" ? offset.highTimeMin : offset.lowTimeMin,
-    heightRatio: type === "high" ? offset.highHeightRatio : offset.lowHeightRatio
+    slope: type === "high" ? offset.highHeightSlope : offset.lowHeightSlope,
+    intercept: type === "high" ? offset.highHeightIntercept : offset.lowHeightIntercept
   });
   const beforeOffset = offsetFor(before.type);
   const afterOffset = offsetFor(after.type);
   if (beforeOffset.timeMin === null || afterOffset.timeMin === null) return null;
-  if (typeof beforeOffset.heightRatio !== "number" || typeof afterOffset.heightRatio !== "number") return null;
+  if (typeof beforeOffset.slope !== "number" || typeof afterOffset.slope !== "number") return null;
+  if (typeof beforeOffset.intercept !== "number" || typeof afterOffset.intercept !== "number") return null;
 
   const span = after.hours - before.hours;
   const frac = span > 0 ? (hours - before.hours) / span : 0;
   const timeMin = beforeOffset.timeMin + (afterOffset.timeMin - beforeOffset.timeMin) * frac;
-  const heightRatio = beforeOffset.heightRatio + (afterOffset.heightRatio - beforeOffset.heightRatio) * frac;
+  const slope = beforeOffset.slope + (afterOffset.slope - beforeOffset.slope) * frac;
+  const intercept = beforeOffset.intercept + (afterOffset.intercept - beforeOffset.intercept) * frac;
 
-  // A ratio, not an additive shift — scales the Chart-Datum-referenced
-  // level (already relative to LAT's own zero) up or down proportionally,
-  // which is what actually stretches a suppressed-range station's curve
-  // toward a genuinely different-amplitude location, rather than just
-  // sliding an unchanged-size curve up or down.
-  const levelCD = (odLevel - eaStation.cdOffsetOD) * heightRatio;
+  // A full linear correction (slope AND intercept), not a pure ratio —
+  // the slope stretches a suppressed-range station's curve toward a
+  // genuinely different-amplitude location (Lyme Regis vs Weymouth);
+  // the intercept absorbs a fixed, same-size-at-every-tide-height
+  // discrepancy that a pure ratio would otherwise distort — inflating
+  // it far more at low tide than high tide, which is exactly the bug
+  // a same-place self-check exposed (see learnSecondaryOffset).
+  const levelCD = (odLevel - eaStation.cdOffsetOD) * slope + intercept;
   return { hours: hours + timeMin / 60, levelCD };
 }
