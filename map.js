@@ -250,10 +250,11 @@ function drawGeoJson(ctx, geo, view, { fill, stroke, lineWidth = 1 }) {
 //
 // grid = { lat0, lon0, dLat, dLon, rows, cols, hours, values[hour][row][col] }
 //
-// The stub below generates a plausible field so the whole page — pan,
-// zoom, adopt, palettes, the hour slider — is testable before the fetch
-// exists. fetchWeatherGrid() is the ONLY function that needs replacing
-// to go live; nothing else knows where the numbers came from.
+// fetchWeatherGrid() is live — real Open-Meteo precipitation, one
+// request per pan/zoom/refresh. buildStubGrid() is kept alongside it,
+// unused by the running app, purely as an offline fallback for testing
+// pan/zoom/adopt/palettes/the hour slider without burning API calls or
+// needing a connection; swap the call in ensureGrid() to reach for it.
 // ---------------------------------------------------------------------
 let mapGrid = null;
 let mapGridFetchedAt = 0;
@@ -280,7 +281,10 @@ function stubValueAt(lat, lon, t) {
   return Math.max(0, band + blob - 0.05);
 }
 
-function buildStubGrid(centre, radiusKm) {
+// Shared by the stub and the live fetch below, so the two can never
+// silently drift into different grid shapes — sampleGrid() has to agree
+// with whichever one actually filled `values`.
+function buildGridShape(centre, radiusKm) {
   const spanKm = radiusKm * MAP_FETCH_MARGIN;
   const dLat = MAP_GRID_SPACING_KM / KM_PER_DEG_LAT;
   const dLon = MAP_GRID_SPACING_KM / kmPerDegLon(centre.lat);
@@ -288,6 +292,11 @@ function buildStubGrid(centre, radiusKm) {
   const cols = rows;
   const lat0 = centre.lat - (rows - 1) / 2 * dLat;
   const lon0 = centre.lon - (cols - 1) / 2 * dLon;
+  return { lat0, lon0, dLat, dLon, rows, cols };
+}
+
+function buildStubGrid(centre, radiusKm) {
+  const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
   const hours = 48;
   const values = [];
   for (let t = 0; t < hours; t++) {
@@ -304,23 +313,89 @@ function buildStubGrid(centre, radiusKm) {
   return { lat0, lon0, dLat, dLon, rows, cols, hours, values, stub: true };
 }
 
-// REPLACE THIS to go live.
-//
+const MAP_FORECAST_HOURS = 48;
+
+// forecast_days: 3, not 2 — the Hour slider always shows the next 48
+// hours from THIS MOMENT, not from local midnight, so on a late evening
+// two days of data could run out before the slider does. Three always
+// leaves a full 48-hour margin regardless of what time "now" happens
+// to be. Same convention as fetchHourlyForecast()'s real-source fetch.
+const MAP_FORECAST_DAYS = 3;
+
 // One request, comma-separated coordinate lists (Open-Meteo supports
-// multiple locations natively and returns one object per location, in
-// the order requested). Do NOT pin ukmo_uk_deterministic_2km here — see
-// the note at the top of this file.
+// multiple locations natively — up to 1000 per call — and returns an
+// array of one object per location, in the order requested, each
+// shaped exactly like a single-location response). Deliberately the
+// merged global models rather than ukmo_uk_deterministic_2km — see the
+// note at the top of this file for why.
 //
 // Cost: assume roughly one API call PER POINT against the 10,000/day
-// free-tier limit. The pricing page's worked examples floor each
-// multiplier at 1, so there is no fractional discount for asking for
-// little, and their Climate API notes confirm locations multiply. At
-// 10 km spacing a 100 km circle is ~81 points, which is comfortable.
-// This has NOT been verified against a live response — no network was
-// available when it was written — so log the rate-limit response
-// headers on the first real fetch rather than assuming.
+// free-tier limit. At 10 km spacing a 100 km-radius view can reach
+// several hundred points (radiusKm * MAP_FETCH_MARGIN, squared, over
+// the 10 km cell size) — comfortable for occasional use, but zooming
+// out and panning around repeatedly could burn through the daily
+// allowance faster than the other real sources do. Worth keeping an
+// eye on if "Couldn't load map data" starts showing up on a well
+// zoomed-out view.
 async function fetchWeatherGrid(centre, radiusKm) {
-  return buildStubGrid(centre, radiusKm);
+  const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
+  const lats = [];
+  const lons = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      lats.push((lat0 + r * dLat).toFixed(4));
+      lons.push((lon0 + c * dLon).toFixed(4));
+    }
+  }
+
+  const params = new URLSearchParams({
+    latitude: lats.join(","),
+    longitude: lons.join(","),
+    hourly: "precipitation",
+    forecast_days: String(MAP_FORECAST_DAYS),
+    timezone: "auto"
+  });
+
+  const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`, {}, 30000);
+  if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
+  const data = await res.json();
+
+  // A single point comes back as one object rather than an array — the
+  // grid always has more than one point in practice, but this keeps the
+  // indexing below from ever having to special-case it.
+  const points = Array.isArray(data) ? data : [data];
+  if (points.length !== rows * cols) {
+    throw new Error("Map weather fetch returned an unexpected number of points");
+  }
+
+  // Every point sits inside the same small area and shares one
+  // timezone, so "now" only needs working out once rather than per
+  // point. Same tolerant lookup as fetchHourlyForecast() uses for the
+  // real-source hourly view, for the same reason: matching by parsed
+  // time rather than string equality survives whatever exact minute
+  // Open-Meteo's hourly buckets land on.
+  const now = new Date();
+  const nowIndex = points[0].hourly.time.findIndex(
+    t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000
+  );
+  const startIdx = nowIndex >= 0 ? nowIndex : 0;
+
+  const values = [];
+  for (let h = 0; h < MAP_FORECAST_HOURS; h++) {
+    const frame = [];
+    for (let r = 0; r < rows; r++) {
+      const row = [];
+      for (let c = 0; c < cols; c++) {
+        const point = points[r * cols + c];
+        const v = point.hourly.precipitation[startIdx + h];
+        row.push(v === null || v === undefined ? 0 : v);
+      }
+      frame.push(row);
+    }
+    values.push(frame);
+  }
+
+  return { lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS, values, stub: false };
 }
 
 async function ensureGrid(centre, radiusKm, force) {
