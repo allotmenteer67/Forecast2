@@ -175,7 +175,11 @@ async function renderTideRow() {
   const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
     const timeStr = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${e.level.toFixed(1)}m</small></span>`;
+    // Time only. The height used to sit alongside as a <small>, but at
+    // half width beside fishing it pushed the row past the card and the
+    // second event visibly clipped. Heights are one tap away in the
+    // sheet, so the row keeps what you actually scan for — when.
+    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr}</span>`;
   }).join("");
 
   tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>`;

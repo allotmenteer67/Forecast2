@@ -398,9 +398,10 @@ header p {
   white-space: nowrap;
 }
 
-/* Heights were in the muted label colour, which made them look faint
-   against the times. They are data, not annotation — same colour, one
-   step down in size. */
+/* The front-page row no longer prints heights (see tide-ui.js) — they
+   overflowed the card at half width and are one tap away in the sheet.
+   This rule stays because the sheet still renders heights inside a
+   .tide-event, and it is the only thing sizing them there. */
 .tide-event small {
   font-size: 14px;
   font-weight: 600;
