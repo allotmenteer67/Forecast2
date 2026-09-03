@@ -2011,3 +2011,113 @@ footer {
 .theme-swatch[data-fishing-color="sand"] { background: #e0bd8c; }
 .theme-swatch[data-fishing-color="lavender"] { background: #c3b8e0; }
 .theme-swatch[data-fishing-color="white"] { background: #ffffff; border-color: #dfe7e1; }
+
+/* ---------------------------------------------------------------
+   Map page (map.html)
+   --------------------------------------------------------------- */
+
+/* Controls above the map, not beside or below: there is more width to
+   spend up here, a thumb reaching the bottom of the screen doesn't
+   cover them, and a side rail would eat into the map itself. */
+.map-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.map-adopt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.map-nav-button {
+  flex: 0 0 auto;
+}
+
+.map-stage {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
+}
+
+#mapCanvas {
+  display: block;
+  width: 100%;
+  /* Roughly 4:3. Squarer than a front-page strip on purpose: a wide,
+     short map shows plenty to the west and almost nothing north or
+     south, which fails exactly when the weather is doing something
+     other than the prevailing westerly. */
+  aspect-ratio: 4 / 3;
+  /* Required for single-finger drag — without it the browser scrolls
+     the page instead of panning the map. It is also the reason drag
+     exists only on this page: a scroll-blocking canvas inside a
+     scrolling column feels broken. */
+  touch-action: none;
+}
+
+/* In the DOM rather than painted on the canvas, so it never needs
+   redrawing during a pan — the centre doesn't move relative to the
+   viewport, only the world underneath it does. */
+.map-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  pointer-events: none;
+  background:
+    linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat,
+    linear-gradient(currentColor, currentColor) center / 1px 100% no-repeat;
+  color: rgba(31, 42, 36, .55);
+}
+
+.map-scale {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .78);
+  color: var(--accent-dark);
+}
+
+.map-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.map-zoom-label {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 13px;
+  color: var(--accent-muted);
+}
+
+/* Best-window shading on the fishing graph.
+   Violet deliberately, and NOT one of the optimistic greens.
+
+   The four score bands already own green, amber and red, so any warm or
+   green highlight here would read as a score — a gold column would look
+   like "Fair", which is exactly the wrong message for the best window of
+   the day. A hue from outside the scoring scale entirely can't be
+   misread as a value, so it reads as annotation instead.
+
+   Opacity is low on purpose: this sits behind the score curve, the band
+   gridlines, the day boundaries and the tide overlay, and should look
+   like the background lifting rather than another thing drawn on top. */
+.fishing-window-band {
+  fill: #6b4fa8;
+  opacity: 0.12;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fishing-window-band {
+    fill: #b9a3e6;
+    opacity: 0.16;
+  }
+}

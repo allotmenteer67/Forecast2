@@ -113,32 +113,27 @@ async function renderFishingRow() {
   const marineTimesEpoch = forecast.marine ? forecast.marine.hourly.time.map(t => Date.parse(t)) : null;
   const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
 
-  // Sample every 15 minutes across the next 24h to find the best
-  // contiguous 2-hour window — fine-grained enough to catch a real
-  // window without being an expensive number of points.
-  const points = [];
-  for (let h = nowHours; h <= nowHours + 24; h += 0.25) {
-    points.push(computeFishingAt({
-      fit: built.fit, epochIso: built.epochIso, hours: h,
-      weatherHourly: forecast.weather.hourly, weatherTimesEpoch,
-      marineHourly: forecast.marine ? forecast.marine.hourly : null, marineTimesEpoch,
-      isEstuary: markType === "estuary"
-    }));
-  }
+  // The front-page card shows the CURRENT band only, deliberately.
+  //
+  // It used to also show the best upcoming 2-hour window, which pushed
+  // the card to three lines while tide sits at two — visibly uneven
+  // beside it now the pair shares a row, and height is the most
+  // expensive thing on that page. The window is one tap away in the
+  // sheet, where there is room to show it properly.
+  //
+  // This also removes real work: finding that window meant sampling
+  // every 15 minutes across the next 24 hours, 97 points, on every
+  // render of the row — including every swipe between saved locations.
+  // Only the current moment is needed now.
+  const nowPoint = computeFishingAt({
+    fit: built.fit, epochIso: built.epochIso, hours: nowHours,
+    weatherHourly: forecast.weather.hourly, weatherTimesEpoch,
+    marineHourly: forecast.marine ? forecast.marine.hourly : null, marineTimesEpoch,
+    isEstuary: markType === "estuary"
+  });
 
-  const nowPoint = points[0];
-  const best = findBestFishingWindow(points, nowHours, 2, 24);
-
-  let valueHtml;
-  if (!best) {
-    valueHtml = `<span class="fishing-band fishing-band-${nowPoint.band.toLowerCase()}">${nowPoint.band} now</span>`;
-  } else {
-    const startWhen = new Date(Date.parse(built.epochIso) + best.startHours * 3600000);
-    const endWhen = new Date(Date.parse(built.epochIso) + best.endHours * 3600000);
-    const fmt = d => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    valueHtml = `<span class="fishing-band fishing-band-${nowPoint.band.toLowerCase()}">${nowPoint.band} now</span>` +
-      `<span class="fishing-band fishing-band-${best.band.toLowerCase()}">${best.band} ${fmt(startWhen)}–${fmt(endWhen)}</span>`;
-  }
+  const valueHtml =
+    `<span class="fishing-band fishing-band-${nowPoint.band.toLowerCase()}">${nowPoint.band} now</span>`;
 
   fishingRow.innerHTML = `${headHtml}<div class="fishing-row-value">${valueHtml}</div>`;
 }
@@ -227,7 +222,11 @@ async function openFishingSheet() {
     sheetBody.appendChild(renderFishingRawFactors(nowPoint, markType));
   }
 
-  sheetFootnote.textContent = "Fishing conditions are a rule-of-thumb estimate, not measured science — see Help for exactly how each factor is worked out and weighted.";
+  sheetFootnote.textContent =
+    (loadFishingShowWindows()
+      ? "Shaded columns mark each day's best two-hour window. "
+      : "") +
+    "Fishing conditions are a rule-of-thumb estimate, not measured science — see Help for exactly how each factor is worked out and weighted.";
 }
 
 // The scrolling score curve — visually matches tide's own wide,
@@ -264,6 +263,29 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, lo
     height: String(height),
     class: "graph-svg fishing-graph-svg"
   });
+
+  // Best-window bands, drawn FIRST so everything else sits on top of
+  // them. They read as the background lifting slightly rather than as
+  // another line competing with the score curve, the four band
+  // gridlines, the day boundaries and the tide overlay — the graph was
+  // already carrying a lot before this was added.
+  //
+  // Deliberately unlabelled. At 10px per hour a two-hour window is only
+  // about 20px wide, which is too narrow for a time range without
+  // either shrinking the text to nothing or letting it overflow into
+  // its neighbours. Tapping the graph already gives an exact readout,
+  // and the footnote says what the shading means.
+  if (loadFishingShowWindows()) {
+    findDailyFishingWindows(points, epochIso, 2).forEach(w => {
+      const x1 = xFor(Math.max(w.startHours, startHours));
+      const x2 = xFor(Math.min(w.endHours, endHours));
+      if (x2 <= x1) return;
+      svg.appendChild(sheetSvgEl("rect", {
+        x: x1, y: padT, width: Math.max(2, x2 - x1), height: plotH,
+        class: "fishing-window-band"
+      }));
+    });
+  }
 
   FISHING_BAND_ORDER.forEach((band, rank) => {
     const y = yForBand(rank);
@@ -530,6 +552,31 @@ if (fishingShowRawToggle) {
   fishingShowRawToggle.addEventListener("change", () => {
     saveFishingShowRaw(fishingShowRawToggle.checked);
   });
+
+  // ---- Settings page: show/hide best-window shading ----
+  //
+  // Built here rather than added to settings.html, so this toggle and
+  // the feature it controls live in the same file — settings.html has
+  // no other knowledge of fishing's graph options, and a checkbox
+  // marooned there would be easy to leave orphaned if the shading were
+  // ever removed. It clones the existing label's markup so it matches
+  // whatever that one looks like, rather than restating the classes.
+  const showRawLabel = fishingShowRawToggle.closest("label");
+  if (showRawLabel && showRawLabel.parentNode) {
+    const windowsLabel = document.createElement("label");
+    windowsLabel.className = showRawLabel.className;
+    const windowsInput = document.createElement("input");
+    windowsInput.type = "checkbox";
+    windowsInput.id = "fishingShowWindowsToggle";
+    windowsInput.checked = loadFishingShowWindows();
+    windowsInput.addEventListener("change", () => {
+      saveFishingShowWindows(windowsInput.checked);
+    });
+    const windowsText = document.createElement("span");
+    windowsText.textContent = "Shade each day's best window on the fishing graph";
+    windowsLabel.append(windowsInput, windowsText);
+    showRawLabel.parentNode.insertBefore(windowsLabel, showRawLabel.nextSibling);
+  }
 }
 
 if (fishingRow) {

@@ -755,9 +755,42 @@ function distinctPlaces(candidates) {
 // and the actual ceiling on precision is the weather models' own grid —
 // 10-25km for Met Office/ECMWF — which swallows the difference between a
 // postcode-area centre point and a place name's centre point regardless.
+// "51.130,-2.990" — a pair of plain decimal coordinates. Only the map
+// page produces these, when a spot is adopted by dragging rather than
+// named. Deliberately narrow: it requires a decimal point in the
+// latitude, so it can never swallow a real place name, and it is checked
+// BEFORE the postcode test because a postcode can never contain a comma.
+function looksLikeCoordinates(input) {
+  return /^-?\d{1,2}\.\d+\s*,\s*-?\d{1,3}\.\d+$/.test(input.trim());
+}
+
 async function resolveLocation(input) {
   const trimmed = input.trim();
   if (!trimmed) throw new Error("Enter a postcode or place name");
+
+  if (looksLikeCoordinates(trimmed)) {
+    const [lat, lon] = trimmed.split(",").map(part => parseFloat(part));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new Error("Those coordinates didn't make sense");
+    }
+    // Rounded to ~11km, matching what a place-name lookup already does
+    // for its own areaCode — so a spot adopted from the map shares its
+    // learned FFV history with any other location that rounds to the
+    // same cell, rather than starting from nothing every time the map is
+    // dragged a few hundred metres.
+    const areaCode = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+    return {
+      lat,
+      lon,
+      // No reverse geocode: it would be another network call on a path
+      // that already has one, and it can fail or return something
+      // misleading out at sea. The coordinates are honest about what was
+      // actually picked, and the place can be renamed in Settings like
+      // any other saved place.
+      label: `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
+      areaCode
+    };
+  }
 
   if (looksLikePostcode(trimmed)) {
     return geocodePostcode(trimmed);

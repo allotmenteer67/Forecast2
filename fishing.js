@@ -45,6 +45,25 @@ function saveFishingShowRaw(value) {
   }
 }
 
+const FISHING_SHOW_WINDOWS_KEY = "cloude-fishing:showWindows";
+
+function loadFishingShowWindows() {
+  try {
+    const raw = localStorage.getItem(FISHING_SHOW_WINDOWS_KEY);
+    return raw === null ? true : raw === "true"; // on by default
+  } catch {
+    return true;
+  }
+}
+
+function saveFishingShowWindows(value) {
+  try {
+    localStorage.setItem(FISHING_SHOW_WINDOWS_KEY, value ? "true" : "false");
+  } catch {
+    // Storage unavailable — choice just won't persist between visits.
+  }
+}
+
 // ---- Fetching wind + pressure (both mark types) and marine data
 // (coastal only) ----
 //
@@ -347,6 +366,66 @@ function computeFishingAt({ fit, epochIso, hours, weatherHourly, weatherTimesEpo
 // (a window can only claim to be "Good" if it's at least Good for its
 // whole span, not just at one favourable instant inside it). Returns
 // null if nothing beats the current moment's own band.
+// The best window within EACH calendar day the curve covers, rather than
+// one single best across the whole span.
+//
+// A single best window over a five-day chart is close to useless: you
+// scroll past it and lose it, it says nothing about the other four days,
+// and it quietly implies the rest of the week isn't worth fishing —
+// which is not what "second best" means. Per-day windows mean there is
+// always one on screen, and comparing Thursday's best against
+// Saturday's becomes possible, which is the actual question when you're
+// deciding when to go.
+//
+// Uses the same "worst band within the window" rule as
+// findBestFishingWindow below — a window only claims a band if it holds
+// that band for its whole span — with mean score as the tie-break, so a
+// flat Good day still picks out its actual peak rather than whichever
+// candidate happened to come first.
+//
+// Unlike findBestFishingWindow, this does NOT require a window to beat
+// the current moment. Every day gets its best, even if today is better
+// than all of them.
+function findDailyFishingWindows(points, epochIso, windowHours) {
+  if (!Array.isArray(points) || points.length < 2) return [];
+  const epoch = Date.parse(epochIso);
+  const byDay = new Map();
+  points.forEach(p => {
+    const key = new Date(epoch + p.hours * 3600000).toDateString();
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(p);
+  });
+
+  const windows = [];
+  byDay.forEach(dayPoints => {
+    let best = null;
+    for (let i = 0; i < dayPoints.length; i++) {
+      const start = dayPoints[i];
+      const end = start.hours + windowHours;
+      const inWindow = dayPoints.filter(p => p.hours >= start.hours && p.hours <= end);
+      if (inWindow.length < 2) continue;
+      // Reject a window that runs off the end of this day's own data —
+      // otherwise the last hour of every day scores as a short window
+      // judged on one or two points.
+      if (inWindow[inWindow.length - 1].hours < end - 0.01) continue;
+      const worstRank = Math.min(...inWindow.map(p => fishingBandRank(p.band)));
+      const meanScore = inWindow.reduce((sum, p) => sum + (p.score || 0), 0) / inWindow.length;
+      if (!best || worstRank > best.rank || (worstRank === best.rank && meanScore > best.meanScore)) {
+        best = {
+          startHours: start.hours,
+          endHours: end,
+          rank: worstRank,
+          band: FISHING_BAND_ORDER[worstRank],
+          meanScore
+        };
+      }
+    }
+    if (best) windows.push(best);
+  });
+
+  return windows.sort((a, b) => a.startHours - b.startHours);
+}
+
 function findBestFishingWindow(points, nowHours, windowHours, lookaheadHours) {
   const nowBand = points.find(p => p.hours >= nowHours)?.band || points[0]?.band;
   const nowRank = fishingBandRank(nowBand);

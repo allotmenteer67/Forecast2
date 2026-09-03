@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Applies a saved colour theme before the page paints — see index.html
+    // for the full explanation; duplicated identically in every page's head.
+    (function () {
+      try {
+        var theme = localStorage.getItem("forecast-compare:theme");
+        if (theme && theme !== "mint") document.documentElement.dataset.theme = theme;
+      } catch {}
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2f6f4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cloude">
+  <title>Map — Cloude</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
+      <h1>Map</h1>
+    </header>
+
+    <!-- Controls sit ABOVE the map, not beside or below it: there is more
+         width to spend up here, a thumb reaching the bottom of the screen
+         doesn't cover them, and a side rail would eat into the map itself.
+
+         "Forecast for here" is a plain persistent button rather than a
+         prompt that appears after you stop dragging. A prompt would fire
+         every time you paused to look at something, which is exactly the
+         interrupting behaviour this app deliberately avoids. -->
+    <div class="map-controls">
+      <button id="mapAdopt" type="button" class="map-adopt">Forecast for here</button>
+      <button id="mapHome" type="button" class="map-nav-button">Home</button>
+      <button id="mapBack" type="button" class="map-nav-button" hidden>Back</button>
+    </div>
+
+    <div class="map-stage">
+      <canvas id="mapCanvas"></canvas>
+      <!-- Drawn in the DOM rather than on the canvas so it never has to be
+           redrawn during a pan — the centre never moves relative to the
+           viewport, only the world underneath it does. -->
+      <div class="map-crosshair" aria-hidden="true"></div>
+      <div id="mapScale" class="map-scale"></div>
+    </div>
+
+    <p id="mapStatus" class="actual-status status-error-only"></p>
+
+    <div class="map-zoom-row">
+      <button id="mapZoomIn" type="button" class="map-nav-button">Closer</button>
+      <span id="mapZoomLabel" class="map-zoom-label"></span>
+      <button id="mapZoomOut" type="button" class="map-nav-button">Wider</button>
+    </div>
+
+    <section class="controls">
+      <div class="rollback">
+        <div class="rollback-title">
+          <strong>Hour</strong>
+          <span id="mapHourLabel">Now</span>
+        </div>
+        <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
+        <div class="range-labels">
+          <span>Now</span>
+          <span>+24h</span>
+          <span>+48h</span>
+        </div>
+      </div>
+    </section>
+
+    <nav class="bottom-nav">
+      <a href="index.html">Cloude</a>
+      <a href="compare.html">Compare</a>
+      <a href="solar.html">Solar</a>
+      <a href="help.html">Help</a>
+    </nav>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="tide.js"></script>
+  <script src="map.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    }
+  </script>
+</body>
+</html>
