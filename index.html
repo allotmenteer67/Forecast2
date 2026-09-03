@@ -101,12 +101,16 @@
       </div>
     </section>
 
-    <!-- Solar and Help are reached from Settings now, via the tab bar
-         app.js adds to the top of those three pages. They are places you
-         visit occasionally, and they were costing the front page a
-         second row of nav pills. -->
+    <!-- Compare, Solar and Help are all reached through the tab bar
+         app.js adds to the top of those pages — places you visit now and
+         then rather than every time the app opens.
+
+         Map is still here ONLY until the front-page map strip exists.
+         Once tapping the strip opens the map, this drops to a single
+         Settings entry and the bottom row can go, which is most of the
+         height the strip needs. Removing it before then would leave the
+         map with no way in at all. -->
     <nav class="bottom-nav">
-      <a href="compare.html">Compare</a>
       <a href="map.html">Map</a>
       <a href="settings.html">Settings</a>
     </nav>

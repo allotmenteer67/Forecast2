@@ -2210,6 +2210,11 @@ footer {
   flex: 1 1 0;
   min-width: 0;
   min-height: 38px;
+  /* Four tabs on a phone leaves roughly 80px each. Longer labels
+     ellipsis rather than forcing the bar to wrap or scroll. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -411,6 +411,7 @@ function emptyRealSourcesState() {
 // be kept in sync by hand.
 const OCCASIONAL_PAGES = [
   { file: "settings.html", label: "Settings" },
+  { file: "compare.html", label: "Compare" },
   { file: "solar.html", label: "Solar" },
   { file: "help.html", label: "Help" }
 ];
