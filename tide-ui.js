@@ -74,6 +74,23 @@ function tideReferenceNow() {
 // A short qualifier appended to the tide row/sheet titles whenever the
 // Date slider isn't on "today" — without it, tides for a rolled-back
 // date would look identical to today's and be easy to misread as live.
+// Trims a saved place label down to what fits a half-width card: the
+// part before the first comma. "Broad Haven, Pembrokeshire" becomes
+// "Broad Haven", which is what stops a long name ellipsising into
+// something unreadable next to fishing.
+//
+// Only the front-page rows use this. Settings and the sheets keep the
+// full label, so the county is never actually lost — and because these
+// names are typed or renamed by the user, the short form is one they
+// chose rather than one guessed for them.
+//
+// A label with no comma is returned unchanged.
+function shortPlaceLabel(label) {
+  const text = String(label || "");
+  const comma = text.indexOf(",");
+  return comma === -1 ? text : text.slice(0, comma).trim();
+}
+
 function tideDateQualifier() {
   const rollbackDays = (typeof state !== "undefined" && state.rollback) ? state.rollback : 0;
   if (!rollbackDays) return "";
@@ -138,7 +155,7 @@ async function renderTideRow() {
   const headHtml =
     `<div class="tide-row-head">` +
       `<span class="tide-row-title">Tide</span>` +
-      `<span class="tide-row-place">${location.label}${tideDateQualifier()}</span>` +
+      `<span class="tide-row-place">${shortPlaceLabel(location.label)}${tideDateQualifier()}</span>` +
     `</div>`;
   // The transient states stay on one plain line — there is nothing to
   // spread across two, and a message reads better unbroken.

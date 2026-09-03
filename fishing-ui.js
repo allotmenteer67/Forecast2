@@ -79,7 +79,7 @@ async function renderFishingRow() {
   const headHtml =
     `<div class="tide-row-head">` +
       `<span class="tide-row-title">Fishing</span>` +
-      `<span class="tide-row-place">${location.label}${tideDateQualifier()}</span>` +
+      `<span class="tide-row-place">${shortPlaceLabel(location.label)}${tideDateQualifier()}</span>` +
     `</div>`;
   const labelHtml = `FISHING — ${location.label}${tideDateQualifier()}`;
   fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
