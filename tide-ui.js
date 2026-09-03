@@ -130,6 +130,18 @@ async function renderTideRow() {
   setTideCardVisible(true);
 
   const myToken = ++tideRenderToken;
+  // Two pieces now rather than one combined label: the card sits at
+  // roughly half width beside fishing, so the title stays put on the
+  // left while the place name is free to shrink and ellipsis on the
+  // right. The rollback date qualifier rides with the name, since it
+  // describes which day is being shown, not which card this is.
+  const headHtml =
+    `<div class="tide-row-head">` +
+      `<span class="tide-row-title">Tide</span>` +
+      `<span class="tide-row-place">${location.label}${tideDateQualifier()}</span>` +
+    `</div>`;
+  // The transient states stay on one plain line — there is nothing to
+  // spread across two, and a message reads better unbroken.
   const labelHtml = `TIDE — ${location.label}${tideDateQualifier()}`;
   tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
 
@@ -159,7 +171,6 @@ async function renderTideRow() {
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
 
-  const finalLabelHtml = `TIDE — ${location.label}${tideDateQualifier()}`;
 
   const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
@@ -167,7 +178,7 @@ async function renderTideRow() {
     return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr} <small>${e.level.toFixed(1)}m</small></span>`;
   }).join("");
 
-  tideRow.innerHTML = `<span class="tide-row-label">${finalLabelHtml}</span><div class="tide-row-events">${partsHtml}</div>`;
+  tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>`;
   renderTideDots();
 }
 
@@ -572,6 +583,42 @@ if (saveDiscoveryKeyButton) {
   });
 }
 
+// The result of the last Admiralty check, per saved location, held for
+// the life of the page rather than only inside the status element built
+// by the render below.
+//
+// Previously the outcome existed ONLY as text on a freshly-created node,
+// so anything that rebuilt this list discarded it — and because a failure
+// message appeared to be vanishing before it could be read, a blocking
+// alert() was added so it couldn't be missed. An audit of every script
+// that actually runs on settings.html (app.js, tide.js, tide-ui.js,
+// fishing.js, fishing-ui.js, settings.js) found nothing that re-renders
+// this card: renderTideLocationsList() has only four callers, all of them
+// direct user actions elsewhere on the page; tide.js touches no DOM at
+// all; and app.js's async machinery (loadLocationData, its 30s retry
+// interval, the "online" listener, visibilitychange/pageshow) is inert
+// here because the page bootstrap is gated on `headlineGrid || table`,
+// both of which are null on Settings. So the original "something
+// re-renders and wipes it" theory isn't supported by the code.
+//
+// Rather than keep hunting a redraw that may not exist, the outcome is
+// now state that any redraw REPAINTS instead of losing. That makes the
+// whole class of problem impossible regardless of what the real cause
+// was, which is what lets the alert() go.
+//
+// Deliberately not persisted to localStorage: a failure from a previous
+// session shouldn't reappear as if it just happened.
+const admiraltyCheckOutcomes = new Map();
+
+// A check involves up to three separate network round trips (station
+// lookup, EA gauge history, Admiralty predictions) and any of them can be
+// slow. This says so instead of leaving "Checking…" on screen looking
+// identical to a hang. Deliberately does NOT abandon the real work — the
+// same trade-off already made in app.js's loadLocationData(), where
+// racing a timeout against a live fetch caused genuinely worse bugs than
+// the slowness it was meant to report.
+const ADMIRALTY_CHECK_SLOW_MS = 45000;
+
 // Builds the "Admiralty accuracy" sub-row for one saved location: the
 // learned offset if there is one, or a plain explanation of why
 // checking isn't available yet, plus the check/re-check button itself.
@@ -677,10 +724,46 @@ function renderAdmiraltyRow(loc, allLocations) {
     button.textContent = loc.discoveryStation ? "Re-check against Admiralty" : "Check against Admiralty";
     const status = document.createElement("small");
     status.className = "place-row-sub place-row-admiralty-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+
+    // Sets the visible text AND remembers it, so a rebuild of this list
+    // from any source repaints the same outcome rather than losing it.
+    // kind: "progress" (transient, not remembered), "error", or "success".
+    function setStatus(message, kind) {
+      status.textContent = message || "";
+      status.classList.toggle("is-error", kind === "error");
+      status.classList.toggle("is-success", kind === "success");
+      if (kind === "progress") return;
+      if (!message) admiraltyCheckOutcomes.delete(loc.id);
+      else admiraltyCheckOutcomes.set(loc.id, { message, kind });
+      // Closes the last hole: if this list WAS rebuilt while the check
+      // was still running, the node written to above is detached and the
+      // row now on screen was built before this result existed. Storing
+      // the outcome isn't enough on its own in that case — the visible
+      // row has to be rebuilt to pick it up. Safe to call: the render
+      // only reads this map, never writes to it, so there's no loop.
+      if (!status.isConnected && typeof renderTideLocationsList === "function") {
+        renderTideLocationsList();
+      }
+    }
+
+    const lastOutcome = admiraltyCheckOutcomes.get(loc.id);
+    if (lastOutcome) {
+      status.textContent = lastOutcome.message;
+      status.classList.toggle("is-error", lastOutcome.kind === "error");
+      status.classList.toggle("is-success", lastOutcome.kind === "success");
+    }
 
     button.addEventListener("click", async () => {
       button.disabled = true;
-      status.textContent = "Checking…";
+      setStatus("Checking…", "progress");
+      // Fires only if the whole check is still running well past the
+      // point it should have finished — replaced immediately by the real
+      // result whenever that arrives, however long it takes.
+      const slowNoticeId = setTimeout(() => {
+        setStatus("Still checking — this is taking longer than usual, but it hasn't given up.", "progress");
+      }, ADMIRALTY_CHECK_SLOW_MS);
       try {
         // A location saved before this fix has no lat/lon of its own —
         // only its nearest EA gauge's — so any discoveryStation it
@@ -702,7 +785,7 @@ function renderAdmiraltyRow(loc, allLocations) {
         const predatesDistanceCheck = loc.discoveryStation && typeof loc.discoveryStation.lat !== "number";
         let discoveryStation = (missingOwnCoords || predatesNameMatching || predatesDistanceCheck) ? null : loc.discoveryStation;
         if (!discoveryStation) {
-          status.textContent = "Checking… (looking up nearest Admiralty station)";
+          setStatus("Checking… (looking up nearest Admiralty station)", "progress");
           let searchLat = loc.lat, searchLon = loc.lon;
           if (missingOwnCoords) {
             try {
@@ -733,7 +816,7 @@ function renderAdmiraltyRow(loc, allLocations) {
           saveTideLocations(allLocations);
         }
 
-        status.textContent = "Checking… (building this location's own tide model)";
+        setStatus("Checking… (building this location's own tide model)", "progress");
         let built;
         try {
           built = await getOrBuildTideFit(loc.station);
@@ -742,7 +825,7 @@ function renderAdmiraltyRow(loc, allLocations) {
         }
         if (!built) throw new Error("This location's own tide model isn't ready yet — try again shortly.");
 
-        status.textContent = "Checking… (fetching Admiralty's real tide predictions)";
+        setStatus("Checking… (fetching Admiralty's real tide predictions)", "progress");
         try {
           await learnSecondaryOffset({
             eaStation: loc.station,
@@ -760,19 +843,27 @@ function renderAdmiraltyRow(loc, allLocations) {
           throw new Error(`Failed fetching from Admiralty: ${err.message || err}`);
         }
 
-        status.textContent = "";
+        // An explicit confirmation rather than a blank. Clearing the
+        // status used to leave the summary line above as the only
+        // evidence anything had happened — and when a check "succeeded"
+        // but saved nothing usable, that line could read exactly as it
+        // did before, making a completed check look like a no-op.
+        setStatus("Checked just now.", "success");
         renderSummary();
         renderTideRow(); // reflect the new correction immediately if this is the current location
       } catch (err) {
-        status.textContent = err.message || "Couldn't check against Admiralty right now.";
-        // Diagnostic aid: something elsewhere in the app appears to be
-        // re-rendering this card shortly after a failed check, wiping
-        // this status text before it's readable. A blocking alert()
-        // can't be silently overwritten by that the way a text node
-        // can — once we know what the real error says, this can be
-        // replaced with a calmer, persistent on-page version.
-        alert(status.textContent);
+        setStatus(err.message || "Couldn't check against Admiralty right now.", "error");
+        // Replaces the blocking alert() that used to guarantee this was
+        // seen. The message now lives in admiraltyCheckOutcomes, so it
+        // survives any redraw of this list and stays on screen until the
+        // next check — it can't be silently lost the way a bare text
+        // node could. Scrolled into view because the real reason a
+        // failure could go unnoticed on a phone is just as likely to be
+        // that it landed below the fold on a long settings page as
+        // anything exotic.
+        status.scrollIntoView({ block: "nearest", behavior: "smooth" });
       } finally {
+        clearTimeout(slowNoticeId);
         button.disabled = false;
       }
     });

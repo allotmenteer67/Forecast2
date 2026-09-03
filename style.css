@@ -100,8 +100,20 @@ body {
   padding: 20px;
 }
 
+/* Phone widths only. The desktop/iPad padding is left alone — the
+   tightening exists to get the front page above the fold on a phone,
+   which is not a problem the wider layouts have. */
+@media (max-width: 700px) {
+  .app { padding: 12px; }
+}
+
 header {
-  margin-bottom: 18px;
+  /* Was 18px. The gap under the title was pure dead space on the front
+     page — the single easiest saving, and it buys most of the map strip
+     on its own. The title-bar's own top padding is NOT touched: that is
+     the iPadOS windowed/Split-View clearance (see .title-bar), not
+     decoration, and removing it reintroduces a fixed bug. */
+  margin-bottom: 9px;
 }
 
 h1 {
@@ -119,8 +131,8 @@ header p {
 .comparison {
   background: white;
   border-radius: 14px;
-  padding: 22px;
-  margin-bottom: 18px;
+  padding: 15px;
+  margin-bottom: 12px;
   box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
   border: 1px solid #e7ede6;
 }
@@ -128,8 +140,11 @@ header p {
 .headline {
   background: var(--headline-bg);
   border-radius: 14px;
-  padding: 20px 22px;
-  margin-bottom: 18px;
+  /* Tightened from 20px 22px / 18px. Every card on the front page now
+     sits on a uniform 12px rhythm so the tide/fishing pair's internal
+     gap matches the vertical spacing between cards. */
+  padding: 14px 15px;
+  margin-bottom: 12px;
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
   /* Lets the browser keep handling vertical page scrolling natively from
      inside this card — the swipe-between-places gesture only ever looks
@@ -141,7 +156,7 @@ header p {
 .headline-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px 22px;
+  gap: 10px 16px;
 }
 
 .headline-loading {
@@ -173,13 +188,40 @@ header p {
    a per-condition figure), so it sits underneath the grid instead,
    spanning the whole card. Shares the tap/hover feel of a headline
    cell (rounded, subtle hover) since it opens the same kind of sheet. */
+/* The pair. Tide and fishing sit side by side because they always share
+   a location (swiping tide re-renders fishing for the same place), so
+   showing them as one row of two reads as one subject rather than two
+   identical-looking bars.
+
+   Both children are flex: 1 1 auto, so the row fills edge to edge with a
+   single gap and any spare width is SHARED rather than pooling in one
+   card. That matters: an earlier version gave all the slack to tide,
+   which then spread its figures to its own edges and manufactured a
+   large blank in the middle while fishing's place name was truncating.
+
+   If only one of the two is enabled in Settings, the other is display:
+   none (via the hidden attribute) and the survivor takes the full width
+   with no rule change needed. */
+.tide-fishing-pair {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .tide-card {
   background: #e3f0f8;
   border-radius: 14px;
-  padding: 14px 16px;
-  margin-bottom: 18px;
+  padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
   border: 1px solid rgba(31, 42, 36, .09);
+}
+
+.tide-fishing-pair > .tide-card,
+.tide-fishing-pair > .fishing-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
 }
 .tide-card[data-color="teal"] { background: #dcefec; }
 .tide-card[data-color="mint"] { background: #e1f0e4; }
@@ -190,8 +232,7 @@ header p {
 .fishing-card {
   background: #eef6ea;
   border-radius: 14px;
-  padding: 14px 16px;
-  margin-bottom: 18px;
+  padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
   border: 1px solid rgba(31, 42, 36, .09);
 }
@@ -247,14 +288,17 @@ header p {
   color: var(--accent-muted);
 }
 
+/* Was a single wrapping row of label + value. Now a two-line stack: a
+   header line (title left, place name right) above the figures, so both
+   lines run edge to edge and the card reads as a small panel rather than
+   a bar. */
 .tide-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
-  padding: 4px 2px;
+  padding: 2px;
   border: 0;
   background: none;
   border-radius: 8px;
@@ -285,6 +329,8 @@ header p {
   background: var(--accent-light);
 }
 
+/* Kept for the Loading / Not available states, which are still a single
+   plain line rather than the two-line layout below. */
 .tide-row-label {
   color: var(--accent-muted);
   font-size: 12px;
@@ -294,6 +340,40 @@ header p {
   white-space: normal;
 }
 
+.tide-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tide-row-title {
+  color: var(--accent-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Deliberately small. The place name is confirmation, not
+   identification — the card colour already says which card you are
+   looking at — and at half width it is the widest thing competing with
+   the tide figures. Shrinking it here is what buys the figures their
+   size back. This font-size is the lever if the balance looks wrong.
+
+   It ellipsises rather than wrapping, and because it is the only
+   shrinkable thing in the row, the figures are the last to give way. */
+.tide-row-place {
+  color: var(--accent-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .tide-row-value {
   color: var(--accent-dark);
   font-size: 14px;
@@ -301,7 +381,9 @@ header p {
 
 .tide-row-events {
   display: flex;
-  gap: 18px;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
   flex-wrap: nowrap;
 }
 
@@ -309,17 +391,20 @@ header p {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--accent-dark);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* Heights were in the muted label colour, which made them look faint
+   against the times. They are data, not annotation — same colour, one
+   step down in size. */
 .tide-event small {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--accent-muted);
+  color: var(--accent-dark);
 }
 
 .tide-event-type {
@@ -382,7 +467,7 @@ header p {
                        ever splitting mid-way through — see .headline-value
                        white-space below */
   gap: 6px;
-  min-height: 34px; /* matches .headline-value's own line height, so the
+  min-height: 28px; /* matches .headline-value's own line height, so the
                         row's height never depends on whether the wind
                         arrow happens to be present */
 }
@@ -390,9 +475,13 @@ header p {
 .headline-value {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
+  min-height: 28px;
   color: var(--accent-dark);
-  font-size: 28px;
+  /* 28px -> 22px. This is the change most likely to read as cheapening
+     rather than refining, since the bolder headline figure was a
+     deliberate outcome of the polish pass. If it looks thin in use,
+     24px is the halfway step — this one line is the whole lever. */
+  font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.01em;
   line-height: 1.2;
@@ -1373,6 +1462,15 @@ footer {
   gap: 8px;
   margin-top: 8px;
 }
+
+/* The tide dots now sit under the whole pair rather than inside the tide
+   card, because swiping tide also re-renders fishing for the same
+   location — they govern both cards, so centring them under just one
+   would have implied otherwise. */
+#tideDots {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
 .place-dot {
   width: 16px;
   height: 16px;
@@ -1570,8 +1668,19 @@ footer {
 .place-row-admiralty-status {
   margin-top: 3px;
 }
-.place-row-admiralty-status:not(:empty) {
+
+/* Progress text ("Checking…") stays muted — it used to go amber like a
+   warning purely because the old rule coloured ANY non-empty status,
+   which made a working check look like something had gone wrong. Only a
+   real failure is amber now, and it's bold so a long message reads as a
+   result rather than more small print. */
+.place-row-admiralty-status.is-success {
+  color: var(--accent-dark);
+}
+
+.place-row-admiralty-status.is-error {
   color: var(--amber);
+  font-weight: 600;
 }
 
 /* ---- Bottom nav (replaces the old footer links on every page) ---- */

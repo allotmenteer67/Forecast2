@@ -58,14 +58,33 @@
       </div>
     </section>
 
-    <section class="tide-card">
-      <button id="tideRow" class="tide-row tide-row-swipeable" type="button" hidden></button>
-      <div id="tideDots" class="place-dots"></div>
-    </section>
+    <!-- Tide and fishing sit side by side rather than stacked. They always
+         share a location — swiping tide re-renders fishing for the same
+         place — so one row of two reads as a single subject, and it saves
+         roughly the height of one card, which is what makes room for the
+         map strip that will eventually sit above the headline.
 
-    <section class="fishing-card">
-      <button id="fishingRow" class="tide-row" type="button" hidden></button>
-    </section>
+         Each card keeps its own background colour: that colour is how you
+         tell them apart at a glance, and merging them into one card lost
+         that distinction.
+
+         If only one is enabled in Settings, the other gets the hidden
+         attribute and the survivor takes the full width automatically —
+         see .tide-fishing-pair in style.css. -->
+    <div class="tide-fishing-pair">
+      <section class="tide-card">
+        <button id="tideRow" class="tide-row tide-row-swipeable" type="button" hidden></button>
+      </section>
+
+      <section class="fishing-card">
+        <button id="fishingRow" class="tide-row" type="button" hidden></button>
+      </section>
+    </div>
+
+    <!-- Moved out of the tide card and under the pair. The swipe changes
+         the location for BOTH cards, so dots centred under tide alone
+         would have implied they only governed tide. -->
+    <div id="tideDots" class="place-dots"></div>
 
     <section class="controls">
       <div class="rollback">

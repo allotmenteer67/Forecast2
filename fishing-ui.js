@@ -72,6 +72,15 @@ async function renderFishingRow() {
   setFishingCardVisible(true);
 
   const myToken = ++fishingRenderToken;
+  // Same split as tide (see tide-ui.js) — title fixed left, place name
+  // shrinkable on the right. Fishing shares tide's location, so this is
+  // deliberately the same string in both cards; the duplication is the
+  // price of each card being readable on its own.
+  const headHtml =
+    `<div class="tide-row-head">` +
+      `<span class="tide-row-title">Fishing</span>` +
+      `<span class="tide-row-place">${location.label}${tideDateQualifier()}</span>` +
+    `</div>`;
   const labelHtml = `FISHING — ${location.label}${tideDateQualifier()}`;
   fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
 
@@ -131,7 +140,7 @@ async function renderFishingRow() {
       `<span class="fishing-band fishing-band-${best.band.toLowerCase()}">${best.band} ${fmt(startWhen)}–${fmt(endWhen)}</span>`;
   }
 
-  fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><div class="fishing-row-value">${valueHtml}</div>`;
+  fishingRow.innerHTML = `${headHtml}<div class="fishing-row-value">${valueHtml}</div>`;
 }
 
 // ---- Sheet: scrolling score curve + optional raw factors ----
