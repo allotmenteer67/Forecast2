@@ -1689,13 +1689,21 @@ footer {
 .bottom-nav {
   display: flex;
   justify-content: center;
-  gap: 10px;
+  /* Wraps since Map made it five items, which no longer fit on one
+     phone-width row. Two rows of pills is fine here — the nav sits
+     below the fold by design, and squeezing five pills onto one line
+     would mean padding tight enough to hurt them as tap targets. */
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 4px;
 }
 
 .bottom-nav a {
   min-height: 44px;
-  padding: 0 18px;
+  /* 18px -> 15px: buys back enough width for five pills to sit on two
+     comfortable rows rather than three ragged ones. Still well clear of
+     the 44px minimum tap height. */
+  padding: 0 15px;
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
