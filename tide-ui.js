@@ -325,6 +325,11 @@ async function openTideSheet() {
   sheet.hidden = false;
   requestAnimationFrame(() => {
     sheetBackdrop.classList.add("is-open");
+    // The sheet takes the tide card's own selected colour. Opening the
+    // graph from a card is meant to feel like that card expanding, not
+    // like arriving somewhere else — and the colour is what identifies
+    // which of the two cards you tapped.
+    sheet.dataset.color = loadTideCardColor();
     sheet.classList.add("is-open");
   });
 

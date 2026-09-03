@@ -3787,6 +3787,11 @@ function openHourlySheet(conditionName) {
   // paint otherwise).
   requestAnimationFrame(() => {
     sheetBackdrop.classList.add("is-open");
+    // Weather sheets use the plain sheet background. Cleared explicitly
+    // because the tide and fishing sheets set it (see tide-ui.js), and
+    // the sheet element is shared — without this, opening Rain straight
+    // after Tide would inherit Tide's card colour.
+    delete sheet.dataset.color;
     sheet.classList.add("is-open");
   });
 }

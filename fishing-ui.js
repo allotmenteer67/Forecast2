@@ -161,6 +161,9 @@ async function openFishingSheet() {
   sheet.hidden = false;
   requestAnimationFrame(() => {
     sheetBackdrop.classList.add("is-open");
+    // Same as tide's sheet — carries the fishing card's own colour
+    // through, so the expanded view stays visibly the fishing one.
+    sheet.dataset.color = loadFishingCardColor();
     sheet.classList.add("is-open");
   });
 
