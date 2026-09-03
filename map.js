@@ -246,6 +246,27 @@ let mapGrid = null;
 let mapGridFetchedAt = 0;
 let mapGridCentre = null;
 
+// Anchored to real latitude and longitude, NOT to the grid's own row and
+// column indices.
+//
+// The first version keyed off indices, which meant the pattern was
+// identical relative to whatever the centre happened to be. Panning
+// moved the shower correctly while the finger was down, then the grid
+// regenerated around the new centre on release and the shower snapped
+// straight back to where it started. It looked exactly like the pan
+// being undone, but the centre was moving fine all along — it was the
+// fake weather that followed it. Real data will not do this; anchoring
+// the stub to the world means the stub does not either.
+function stubValueAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const d = (u * 0.8 + v * 0.3) - front;
+  const band = Math.exp(-(d * d) / 0.09) * 1.6;
+  const blob = Math.exp(-(((u - 0.9) ** 2) + ((v + 0.4) ** 2)) / 0.10) * 0.9;
+  return Math.max(0, band + blob - 0.05);
+}
+
 function buildStubGrid(centre, radiusKm) {
   const spanKm = radiusKm * MAP_FETCH_MARGIN;
   const dLat = MAP_GRID_SPACING_KM / KM_PER_DEG_LAT;
@@ -261,14 +282,7 @@ function buildStubGrid(centre, radiusKm) {
     for (let r = 0; r < rows; r++) {
       const row = [];
       for (let c = 0; c < cols; c++) {
-        // A band tracking across from the south-west, plus a slower
-        // blob, so panning and scrubbing both visibly do something.
-        const u = c / (cols - 1), v = r / (rows - 1);
-        const front = -0.5 + t * 0.045;
-        const d = (u * 0.8 + (1 - v) * 0.3) - front;
-        const band = Math.exp(-(d * d) / 0.02) * 1.6;
-        const blob = Math.exp(-(((u - 0.7) ** 2) + ((v - 0.35) ** 2)) / 0.02) * 0.9;
-        row.push(Math.max(0, band + blob - 0.05));
+        row.push(stubValueAt(lat0 + r * dLat, lon0 + c * dLon, t));
       }
       frame.push(row);
     }
@@ -462,13 +476,37 @@ registerMapLayer({
 // ---------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------
+// Resolved once on load, and cached here for the life of the page.
+let mapHome = null;
+
 function homeCoords() {
-  // state.lat/lon come from app.js, set once the current location has
-  // resolved. Null until then, which the ring layer handles.
   if (typeof state === "object" && state && state.lat != null && state.lon != null) {
     return { lat: state.lat, lon: state.lon };
   }
-  return null;
+  return mapHome;
+}
+
+// app.js only starts loadLocationData() when the page has a headline
+// grid or a comparison table, and this page has neither — deliberately,
+// so the map can never block or be blocked by the main forecast load.
+// The side effect is that state.lat and state.lon stay null here
+// forever, which silently took out both the distance rings and the Home
+// button: each needs to know where home actually is.
+//
+// So the map resolves it once itself. One extra lookup on a page that
+// already fetches weather, and it fails quietly — the map still pans and
+// still draws rain without it, it just has nothing to measure from.
+async function resolveMapHome() {
+  if (homeCoords()) return;
+  try {
+    const postcode = typeof state === "object" && state ? state.postcode : null;
+    if (!postcode) return;
+    const resolved = await resolveLocation(postcode);
+    mapHome = { lat: resolved.lat, lon: resolved.lon };
+  } catch {
+    // Ambiguous or unreachable — rings and Home stay unavailable rather
+    // than guessing at a location.
+  }
 }
 
 function usingMiles() {
@@ -603,6 +641,9 @@ function updateMapChrome() {
       : `Forecast for here${away != null ? ` (${Math.round(away)} km out)` : ""}`;
   }
 
+  const home = document.getElementById("mapHome");
+  if (home) home.disabled = !homeCoords();
+
   const back = document.getElementById("mapBack");
   if (back) {
     // Absent rather than disabled until there is somewhere to go back
@@ -712,6 +753,15 @@ window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
 (async function initMap() {
   sizeMapCanvas();
   renderMap();
+
+  await resolveMapHome();
+  // Only recentre if nothing was stored — a remembered position must
+  // survive, that being the whole point of remembering it.
+  let stored = null;
+  try { stored = localStorage.getItem(MAP_CENTRE_KEY); } catch {}
+  if (!stored && homeCoords()) mapCentre = { ...homeCoords() };
+  renderMap();
+
   await loadMapVectors();
   renderMap();
   await ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex], true);

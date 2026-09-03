@@ -2048,13 +2048,39 @@ footer {
   margin-bottom: 10px;
 }
 
+/* Pill-shaped and sized to match the bottom nav's own buttons, rather
+   than inheriting the app's default full-size button. These sit above
+   the map as a compact row of three, so the chunky default made them
+   look like the main event when they are chrome around the map. */
+.map-adopt,
+.map-nav-button {
+  min-height: 38px;
+  padding: 0 15px;
+  border-radius: 999px;
+  border: 1px solid #dfe7e1;
+  background: white;
+  color: var(--accent-dark);
+  font-weight: 600;
+  font-size: 14px;
+}
+
 .map-adopt {
   flex: 1 1 auto;
   min-width: 0;
+  /* The one button here that does something irreversible-ish — it
+     changes which location the whole app is showing — so it is the only
+     one that reads as a primary action. */
+  background: var(--accent-dark);
+  color: white;
+  border-color: transparent;
 }
 
 .map-nav-button {
   flex: 0 0 auto;
+}
+
+.map-nav-button:disabled {
+  opacity: 0.4;
 }
 
 .map-stage {
