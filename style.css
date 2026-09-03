@@ -2191,3 +2191,40 @@ footer {
 .sheet[data-color="sand"] { background: #faf5ec; }
 .sheet[data-color="lavender"] { background: #f6f4fb; }
 .sheet[data-color="white"] { background: #ffffff; }
+
+/* Settings / Solar / Help tab bar.
+   Injected by app.js into the header of those three pages only — see
+   OCCASIONAL_PAGES there. Styled as a segmented control rather than as
+   more nav pills, so it reads as "three views of one place" instead of
+   three unrelated destinations. */
+.page-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 4px;
+  padding: 3px;
+  background: rgba(31, 42, 36, .06);
+  border-radius: 999px;
+}
+
+.page-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.page-tab:hover {
+  text-decoration: none;
+}
+
+.page-tab.is-current {
+  background: white;
+  box-shadow: 0 1px 2px rgba(31, 42, 36, .12);
+}

@@ -396,6 +396,53 @@ function emptyRealSourcesState() {
   return bySource;
 }
 
+// ---- Settings / Solar / Help tab bar ----
+//
+// These three sit together as "the occasional pages": things you visit
+// now and then rather than every time you open the app. Grouping them
+// behind one nav entry gets the front page's bottom row back to a single
+// line, and makes the relationship between them visible once you are
+// there.
+//
+// Built here rather than added to each page's HTML because app.js is
+// already loaded by every page — so this needs no edit to settings.html,
+// solar.html or help.html, and a future fourth page joins by adding one
+// line below rather than by touching three files that would then have to
+// be kept in sync by hand.
+const OCCASIONAL_PAGES = [
+  { file: "settings.html", label: "Settings" },
+  { file: "solar.html", label: "Solar" },
+  { file: "help.html", label: "Help" }
+];
+
+(function renderPageTabs() {
+  const here = (location.pathname.split("/").pop() || "index.html").toLowerCase();
+  const current = OCCASIONAL_PAGES.find(page => page.file === here);
+  if (!current) return; // every other page is left alone
+
+  const header = document.querySelector("header");
+  if (!header) return;
+
+  const nav = document.createElement("nav");
+  nav.className = "page-tabs";
+  nav.setAttribute("aria-label", "Settings, Solar and Help");
+
+  OCCASIONAL_PAGES.forEach(page => {
+    const isCurrent = page.file === here;
+    // The current page is a span, not a self-referential link: tapping
+    // the tab you are already on and watching the page reload is a small
+    // but real annoyance.
+    const el = document.createElement(isCurrent ? "span" : "a");
+    if (!isCurrent) el.href = page.file;
+    el.className = "page-tab" + (isCurrent ? " is-current" : "");
+    if (isCurrent) el.setAttribute("aria-current", "page");
+    el.textContent = page.label;
+    nav.appendChild(el);
+  });
+
+  header.appendChild(nav);
+})();
+
 const state = {
   condition: "rain",
   rollback: 0,

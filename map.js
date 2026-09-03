@@ -182,7 +182,20 @@ function kmPerDegLon(lat) {
 }
 
 function makeView(canvas, centre, radiusKm) {
-  const w = canvas.width, h = canvas.height;
+  // CSS pixels, not the canvas's backing-store pixels. renderMap()
+  // scales the context by the device pixel ratio, so everything below —
+  // font sizes, line widths, cell sizes — is expressed at the size it
+  // will actually appear.
+  //
+  // This was the bug behind the unreadable ring labels. The canvas is
+  // sized at rect.width * dpr for sharpness, but the context was never
+  // scaled to match, so drawing happened in device pixels: a "10px"
+  // label rendered at 10 device pixels, which is barely 3 CSS pixels on
+  // a modern phone. Not small — microscopic. The same fault made every
+  // line hairline-thin and the rain cells a third of their intended
+  // size.
+  const dpr = canvas.width / (canvas.getBoundingClientRect().width || canvas.width);
+  const w = canvas.width / dpr, h = canvas.height / dpr;
   // Scale from the WIDTH, so the stated radius is always what you get
   // left-to-right regardless of how tall the canvas happens to be.
   const pxPerKm = w / (radiusKm * 2);
@@ -423,12 +436,19 @@ registerMapLayer({
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      ctx.fillStyle = p.ring;
-      ctx.font = "10px -apple-system, system-ui, sans-serif";
       // Units follow the choice already made in Settings rather than
       // introducing a map-specific one.
       const shown = imperial ? Math.round(km * 0.621371) : km;
-      ctx.fillText(`${shown} ${imperial ? "mi" : "km"}`, hx + 4, hy - km * view.pxPerKm - 3);
+      const text = `${shown} ${imperial ? "mi" : "km"}`;
+      ctx.font = "600 13px -apple-system, system-ui, sans-serif";
+      // Outlined in the base colour first: these labels sit on top of
+      // whatever the rain layer drew, which at the heavy end is dark
+      // enough to swallow them entirely.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(text, hx + 5, hy - km * view.pxPerKm - 4);
+      ctx.fillStyle = p.ink;
+      ctx.fillText(text, hx + 5, hy - km * view.pxPerKm - 4);
       ctx.setLineDash([3, 4]);
       ctx.globalAlpha = 0.7;
     });
@@ -587,6 +607,19 @@ function mapHourValue() {
   return mapHourInput ? parseInt(mapHourInput.value, 10) || 0 : 0;
 }
 
+// "+7h" makes you do the arithmetic before you can act on it. The
+// question being asked is "will it be raining when I get there", and
+// that is a clock time. Days are named once they stop being today,
+// because "09:00" alone is ambiguous over a 48-hour slider.
+function mapHourClock(hoursAhead) {
+  const when = new Date(Date.now() + hoursAhead * 3600000);
+  const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const isToday = when.toDateString() === new Date().toDateString();
+  if (hoursAhead === 0) return `Now, ${time}`;
+  if (isToday) return time;
+  return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+}
+
 function setMapStatus(message) {
   if (!mapStatusEl) return;
   mapStatusEl.textContent = message || "";
@@ -604,6 +637,9 @@ function sizeMapCanvas() {
 function renderMap() {
   if (!mapCanvas) return;
   const ctx = mapCanvas.getContext("2d");
+  const dpr = mapCanvas.width / (mapCanvas.getBoundingClientRect().width || mapCanvas.width);
+  // Everything after this draws in CSS pixels and comes out sharp.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
   mapLayers.forEach(layer => {
     ctx.save();
@@ -623,12 +659,11 @@ function updateMapChrome() {
   const scale = document.getElementById("mapScale");
   if (scale) {
     const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
-    const hour = mapHourValue();
-    scale.textContent = (hour === 0 ? "Now" : `+${hour}h`) + (stale ? " · older data" : "");
+    scale.textContent = mapHourClock(mapHourValue()) + (stale ? " · older data" : "");
   }
 
   const hourLabel = document.getElementById("mapHourLabel");
-  if (hourLabel) hourLabel.textContent = mapHourValue() === 0 ? "Now" : `+${mapHourValue()}h`;
+  if (hourLabel) hourLabel.textContent = mapHourClock(mapHourValue());
 
   const adopt = document.getElementById("mapAdopt");
   if (adopt) {
@@ -673,10 +708,11 @@ if (mapCanvas) {
 
   mapCanvas.addEventListener("pointermove", e => {
     if (e.pointerId !== panPointerId || !panLast) return;
-    const dpr = mapCanvas.width / mapCanvas.getBoundingClientRect().width;
+    // No dpr correction here any more: pointer coordinates and the
+    // view are both in CSS pixels now.
     const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
-    const dxKm = ((e.clientX - panLast.x) * dpr) / view.pxPerKm;
-    const dyKm = ((e.clientY - panLast.y) * dpr) / view.pxPerKm;
+    const dxKm = (e.clientX - panLast.x) / view.pxPerKm;
+    const dyKm = (e.clientY - panLast.y) / view.pxPerKm;
     mapCentre = {
       lat: mapCentre.lat + dyKm / KM_PER_DEG_LAT,
       lon: mapCentre.lon - dxKm / kmPerDegLon(mapCentre.lat)
