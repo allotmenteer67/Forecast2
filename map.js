@@ -56,9 +56,19 @@ const MAP_RING_RADII_MI = { 25: [5, 10], 50: [10, 20], 100: [20, 40] };
 // dragging past this margin costs a new request.
 const MAP_FETCH_MARGIN = 1.5;
 
-// ~10 km, matching the coarsest of the merged models. Finer would be
-// resampling interpolation that has already happened upstream.
-const MAP_GRID_SPACING_KM = 10;
+// ~10 km at the closest zoom, matching the coarsest of the merged
+// models (finer would just be resampling interpolation that already
+// happened upstream) — but widened at the two wider zoom levels
+// specifically to keep the POINT COUNT, and so the payload size, from
+// growing unboundedly with the viewing area. Flat 10km spacing at
+// 100km radius meant ~960 points and a multi-megabyte response once
+// wind/temperature/pressure joined rain in the same request (5
+// variables instead of 1) — squarely why "couldn't load map data"
+// started showing up more often on a wide, zoomed-out view: that
+// response was routinely taking longer to arrive than the fetch
+// timeout allowed, especially on a slower connection. Detail that
+// dense was never visible at that zoom anyway.
+const MAP_GRID_SPACING_KM = { 25: 10, 50: 14, 100: 20 };
 
 const MAP_STALE_MS = 30 * 60 * 1000;
 
@@ -84,7 +94,15 @@ const MAP_PALETTES = [
   {
     id: "paper",
     name: "Paper",
-    land: "#EFEDE6", sea: "#DCE7EF", coast: "#9c9a92", ink: "#4a4844", ring: "#8a887f",
+    // Land now uses the app's own --accent-light green (#e4efe6) rather
+    // than a neutral beige — safe to do now that no data layer uses
+    // green anywhere (rain is blue, temperature runs purple→red,
+    // pressure is unfilled contour lines), and it ties the map visually
+    // back to the rest of the app. Sea is paler than before for the
+    // same underlying reason as the land change: the palest rain band
+    // needs to actually stand out against it, and the old sea tone sat
+    // too close to that band's own colour.
+    land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ring: "#8a887f",
     // Starts at mid-blue, not near-white: on a light base the palest
     // stops of a conventional radar ramp read as "no rain".
     ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"]
@@ -92,13 +110,23 @@ const MAP_PALETTES = [
   {
     id: "slate",
     name: "Slate",
-    land: "#3a3a37", sea: "#262b30", coast: "#7a7a72", ink: "#d8d6cf", ring: "#8f8f86",
+    // Land uses the app's own --accent-dark green (#234f39), same
+    // reasoning as Paper above. Sea lightened from the original
+    // near-black so the palest rain band doesn't get lost against it —
+    // "paler" means lighter here, the opposite direction from Paper's
+    // sea change, since a dark theme needs MORE separation from black
+    // to show a pale colour, not less.
+    land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ring: "#8f8f86",
     // Dark base, so the full range including the pale end is usable.
     ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"]
   },
   {
     id: "mono",
     name: "High contrast",
+    // Deliberately NOT given the green land treatment the other two
+    // palettes got — this one's whole purpose is no hue at all, for
+    // anyone who can't reliably separate colours by shade. Introducing
+    // green here would undermine the one thing this palette is for.
     land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ring: "#777777",
     // No hue at all. For bright daylight, and for anyone who can't
     // reliably separate the blues.
@@ -122,11 +150,40 @@ function mapPalette() {
 // separate blues — temperature and pressure don't get that treatment,
 // and showing them at the same time as rain (or each other) in mono
 // mode will be harder to tell apart than rain alone is.
-const MAP_TEMP_THRESHOLDS = [-Infinity, 0, 6, 12, 18, 24]; // °C, lower bound per band
-const MAP_TEMP_RAMP = ["#2b6cb0", "#4299e1", "#63b3ed", "#f6ad55", "#ed8936", "#c53030"];
+//
+// Temperature is a smooth gradient between these stops, not discrete
+// bands — the original 6-step banding (6°C per colour change) read as
+// coarse, and widening the range to actually cover a UK heatwave/cold
+// snap (-10 to 34°C, both seen in recent years) at a similarly coarse
+// step would have meant a dozen-plus swatches, unworkable as a legend
+// on a phone. A continuous scale changes colour at every degree and
+// only needs a handful of tick labels to explain itself.
+const MAP_TEMP_MIN_C = -10;
+const MAP_TEMP_MAX_C = 34;
+const MAP_TEMP_COLOR_STOPS = [
+  { t: -10, rgb: [90, 40, 140] },  // deep purple — proper winter cold
+  { t: 0, rgb: [43, 108, 176] },   // blue — freezing
+  { t: 12, rgb: [99, 179, 237] },  // light blue — cool
+  { t: 20, rgb: [246, 173, 85] },  // amber — warm
+  { t: 27, rgb: [237, 137, 54] },  // orange — hot
+  { t: 34, rgb: [197, 48, 48] }    // red — heatwave
+];
 
-const MAP_PRESSURE_THRESHOLDS = [-Infinity, 995, 1005, 1013, 1020, 1028]; // hPa, lower bound per band
-const MAP_PRESSURE_RAMP = ["#553c9a", "#805ad5", "#b794f4", "#9ae6b4", "#68d391", "#dd6b20"];
+function tempColor(value) {
+  const v = Math.max(MAP_TEMP_MIN_C, Math.min(MAP_TEMP_MAX_C, value));
+  const stops = MAP_TEMP_COLOR_STOPS;
+  let lo = stops[0], hi = stops[stops.length - 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (v >= stops[i].t && v <= stops[i + 1].t) { lo = stops[i]; hi = stops[i + 1]; break; }
+  }
+  const span = hi.t - lo.t || 1;
+  const f = (v - lo.t) / span;
+  const r = Math.round(lo.rgb[0] + (hi.rgb[0] - lo.rgb[0]) * f);
+  const g = Math.round(lo.rgb[1] + (hi.rgb[1] - lo.rgb[1]) * f);
+  const b = Math.round(lo.rgb[2] + (hi.rgb[2] - lo.rgb[2]) * f);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 
 // Highest index whose threshold the value clears — used by temperature
 // and pressure, which (unlike rain) always have a value worth showing;
@@ -378,10 +435,11 @@ function stubWindAt(lat, lon, t) {
 // silently drift into different grid shapes — sampleGrid() has to agree
 // with whichever one actually filled `values`.
 function buildGridShape(centre, radiusKm) {
+  const spacingKm = MAP_GRID_SPACING_KM[radiusKm] || 10;
   const spanKm = radiusKm * MAP_FETCH_MARGIN;
-  const dLat = MAP_GRID_SPACING_KM / KM_PER_DEG_LAT;
-  const dLon = MAP_GRID_SPACING_KM / kmPerDegLon(centre.lat);
-  const rows = Math.ceil((spanKm * 2) / MAP_GRID_SPACING_KM) + 1;
+  const dLat = spacingKm / KM_PER_DEG_LAT;
+  const dLon = spacingKm / kmPerDegLon(centre.lat);
+  const rows = Math.ceil((spanKm * 2) / spacingKm) + 1;
   const cols = rows;
   const lat0 = centre.lat - (rows - 1) / 2 * dLat;
   const lon0 = centre.lon - (cols - 1) / 2 * dLon;
@@ -536,15 +594,50 @@ async function ensureGrid(centre, radiusKm, force) {
     mapGridCentre = { ...centre };
     mapGridFetchedAt = Date.now();
     setMapStatus("");
-  } catch {
-    // Keep whatever was last drawn rather than blanking. If the daily
-    // limit is ever hit, a slightly stale map beats a broken one — and
-    // the rest of Cloude is unaffected either way, because this fetch
-    // is entirely separate from loadLocationData().
-    setMapStatus(mapGrid
-      ? "Couldn't refresh the map just now — showing the last one."
-      : "Couldn't load map data just now.");
+  } catch (err) {
+    // One silent retry before giving up — a lot of what shows up as
+    // "couldn't load" on mobile is a momentary signal drop rather than
+    // anything actually wrong, and a short pause is often all it takes.
+    // Only tried once: a genuinely dead connection or a real server
+    // error shouldn't sit here retrying indefinitely.
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      mapGrid = await fetchWeatherGrid(centre, radiusKm);
+      mapGridCentre = { ...centre };
+      mapGridFetchedAt = Date.now();
+      setMapStatus("");
+      return;
+    } catch (retryErr) {
+      // Keep whatever was last drawn rather than blanking. If the daily
+      // limit is ever hit, a slightly stale map beats a broken one —
+      // and the rest of Cloude is unaffected either way, because this
+      // fetch is entirely separate from loadLocationData().
+      //
+      // The reason is named rather than one blanket sentence for every
+      // failure — a timeout, a rate limit, and a genuine network drop
+      // want different responses (wait it out, wait longer, or check
+      // the connection), and lumping them together made this
+      // impossible to tell apart from the outside.
+      const reason = describeMapFetchError(retryErr);
+      setMapStatus(mapGrid
+        ? `Couldn't refresh the map just now (${reason}) — showing the last one.`
+        : `Couldn't load map data just now (${reason}).`);
+    }
   }
+}
+
+// fetchWithTimeout (app.js) already converts its own AbortError into a
+// plain Error with this exact message before it ever reaches here, so
+// that's what's actually checked for a timeout — not err.name, which
+// would never match by this point. Everything else genuinely is
+// offline/DNS/TLS territory that a message can't usefully subdivide
+// further from here.
+function describeMapFetchError(err) {
+  if (err instanceof Error && /^Timed out/.test(err.message)) return "timed out";
+  if (err instanceof Error && /^Map weather fetch failed: 429/.test(err.message)) return "rate limited";
+  if (err instanceof Error && /^Map weather fetch failed: \d+/.test(err.message)) return err.message.replace("Map weather fetch failed: ", "server error ");
+  if (err instanceof Error && /unexpected number of points/.test(err.message)) return "unexpected response";
+  return "connection problem";
 }
 
 // field: "rain" | "temp" | "pressure" | "windSpeed" | "windDir" — each a
@@ -655,7 +748,7 @@ registerMapLayer({
       for (let py = 0; py < view.h; py += cell) {
         const value = sampleGrid(mapGrid, "temp", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
         if (value === null || value === undefined) continue;
-        ctx.fillStyle = MAP_TEMP_RAMP[bandIndexFor(value, MAP_TEMP_THRESHOLDS)];
+        ctx.fillStyle = tempColor(value);
         ctx.globalAlpha = 0.55;
         ctx.fillRect(px, py, cell, cell);
         ctx.globalAlpha = 1;
@@ -664,22 +757,112 @@ registerMapLayer({
   }
 });
 
+// ---------------------------------------------------------------------
+// Isobars — marching squares over the pressure grid, at the standard
+// synoptic-chart spacing of 4 hPa. Chosen over a colour wash (the
+// original approach) for two reasons at once: it's the familiar
+// convention from every other pressure chart, and it stacks cleanly
+// with rain/temperature underneath rather than adding a third
+// competing colour field to a display that was already getting muddy
+// with two.
+// ---------------------------------------------------------------------
+const MAP_ISOBAR_INTERVAL_HPA = 4;
+
+// Null if the level doesn't cross this edge at all; otherwise the
+// interpolated screen point where it does.
+function edgeCrossing(vA, vB, ax, ay, bx, by, level) {
+  if (vA === null || vB === null || (vA >= level) === (vB >= level)) return null;
+  const t = (level - vA) / (vB - vA);
+  return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t };
+}
+
+// One contour level at a time, over the grid's own lattice (not a
+// finer screen-space resampling like the colour-wash layers use) —
+// isobars are about the shape of the pressure field itself, not pixel
+// smoothness, and the model's real ~10km spacing is the honest
+// resolution to draw them at.
+function marchingSquaresSegments(grid, hourIdx, view, level) {
+  const segments = [];
+  const field = grid.pressure[hourIdx];
+  for (let r = 0; r < grid.rows - 1; r++) {
+    for (let c = 0; c < grid.cols - 1; c++) {
+      const vTL = field[r][c], vTR = field[r][c + 1];
+      const vBL = field[r + 1][c], vBR = field[r + 1][c + 1];
+      if ([vTL, vTR, vBL, vBR].some(v => v === null || v === undefined)) continue;
+
+      const latT = grid.lat0 + r * grid.dLat, latB = grid.lat0 + (r + 1) * grid.dLat;
+      const lonL = grid.lon0 + c * grid.dLon, lonR = grid.lon0 + (c + 1) * grid.dLon;
+      const xL = view.x(lonL), xR = view.x(lonR);
+      const yT = view.y(latT), yB = view.y(latB);
+
+      const top = edgeCrossing(vTL, vTR, xL, yT, xR, yT, level);
+      const right = edgeCrossing(vTR, vBR, xR, yT, xR, yB, level);
+      const bottom = edgeCrossing(vBL, vBR, xL, yB, xR, yB, level);
+      const left = edgeCrossing(vTL, vBL, xL, yT, xL, yB, level);
+
+      const points = [top, right, bottom, left].filter(Boolean);
+      if (points.length === 2) {
+        segments.push([points[0], points[1]]);
+      } else if (points.length === 4) {
+        // The ambiguous "saddle" case — the level crosses all four
+        // edges, and there are two equally-valid ways to connect them
+        // into two lines. Pairing top-with-bottom and left-with-right
+        // is a fixed, arbitrary choice rather than resolving the true
+        // topology (which needs checking the cell's centre value too) —
+        // fine for a readable isobar, not claiming survey precision.
+        segments.push([top, bottom]);
+        segments.push([left, right]);
+      }
+    }
+  }
+  return segments;
+}
+
 registerMapLayer({
   id: "pressure",
   draw(ctx, view) {
     if (!mapGrid || !mapLayerVisible("pressure")) return;
-    const hour = mapHourValue();
-    const cell = 6;
-    for (let px = 0; px < view.w; px += cell) {
-      for (let py = 0; py < view.h; py += cell) {
-        const value = sampleGrid(mapGrid, "pressure", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
-        if (value === null || value === undefined) continue;
-        ctx.fillStyle = MAP_PRESSURE_RAMP[bandIndexFor(value, MAP_PRESSURE_THRESHOLDS)];
-        ctx.globalAlpha = 0.5;
-        ctx.fillRect(px, py, cell, cell);
-        ctx.globalAlpha = 1;
-      }
+    const p = mapPalette();
+    const hour = Math.min(mapHourValue(), mapGrid.hours - 1);
+    const field = mapGrid.pressure[hour];
+    const flat = field.flat().filter(v => v !== null && v !== undefined);
+    if (!flat.length) return;
+    const minP = Math.min(...flat), maxP = Math.max(...flat);
+    const lo = Math.floor(minP / MAP_ISOBAR_INTERVAL_HPA) * MAP_ISOBAR_INTERVAL_HPA;
+    const hi = Math.ceil(maxP / MAP_ISOBAR_INTERVAL_HPA) * MAP_ISOBAR_INTERVAL_HPA;
+
+    ctx.save();
+    ctx.strokeStyle = p.ink;
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.75;
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+
+    for (let level = lo; level <= hi; level += MAP_ISOBAR_INTERVAL_HPA) {
+      const segments = marchingSquaresSegments(mapGrid, hour, view, level);
+      if (!segments.length) continue;
+
+      ctx.beginPath();
+      segments.forEach(([a, b]) => {
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      });
+      ctx.stroke();
+
+      // One label per level, near a representative segment — a label
+      // on every segment would be as cluttered as the colour wash this
+      // replaced.
+      const mid = segments[Math.floor(segments.length / 2)];
+      const mx = (mid[0].x + mid[1].x) / 2, my = (mid[0].y + mid[1].y) / 2;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(String(level), mx + 3, my - 3);
+      ctx.fillStyle = p.ink;
+      ctx.fillText(String(level), mx + 3, my - 3);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = p.ink;
     }
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 });
 
@@ -833,11 +1016,100 @@ function renderMapLegends() {
     const p = mapPalette();
     addRow("Rain, mm/hr", RAIN_BAND_THRESHOLDS, p.ramp, "");
   }
+
+  // A gradient bar, not swatches — temperature is a continuous scale
+  // now (see MAP_TEMP_COLOR_STOPS), so discrete boxes would misrepresent
+  // it as banded again. Built from the exact same colour stops the
+  // layer paints with, the same "one source of truth" rule every other
+  // legend on this map already follows.
   if (mapLayerVisible("temperature")) {
-    addRow("Temperature, °C", MAP_TEMP_THRESHOLDS, MAP_TEMP_RAMP, "");
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Temperature, °C";
+    row.appendChild(caption);
+
+    const span = MAP_TEMP_MAX_C - MAP_TEMP_MIN_C;
+    const stops = MAP_TEMP_COLOR_STOPS
+      .map(s => `${tempColor(s.t)} ${((s.t - MAP_TEMP_MIN_C) / span) * 100}%`)
+      .join(", ");
+    const bar = document.createElement("div");
+    bar.className = "map-legend-gradient";
+    bar.style.background = `linear-gradient(to right, ${stops})`;
+    row.appendChild(bar);
+
+    const ticks = document.createElement("div");
+    ticks.className = "map-legend-ticks";
+    [MAP_TEMP_MIN_C, 0, 10, 20, 30, MAP_TEMP_MAX_C].forEach(t => {
+      const tick = document.createElement("span");
+      tick.textContent = `${t}°`;
+      ticks.appendChild(tick);
+    });
+    row.appendChild(ticks);
+    container.appendChild(row);
   }
+
+  // A caption, not a legend — isobars are a familiar convention (every
+  // synoptic chart labels its own lines directly, same as this layer
+  // does), so the useful thing to state here is just the spacing
+  // between them, not a colour key that no longer exists.
   if (mapLayerVisible("pressure")) {
-    addRow("Pressure, hPa", MAP_PRESSURE_THRESHOLDS, MAP_PRESSURE_RAMP, "");
+    const row = document.createElement("div");
+    row.className = "map-legend-row map-legend-note";
+    row.textContent = `Isobars, every ${MAP_ISOBAR_INTERVAL_HPA} hPa — labelled in hPa`;
+    container.appendChild(row);
+  }
+
+  // Arrow length is the thing that actually needs a key — colour swatch
+  // legends don't apply to a direction-and-length field, so this draws
+  // small reference arrows at each band's real length instead, in the
+  // current palette's own ink colour so it always matches what's on the
+  // map.
+  if (mapLayerVisible("wind")) {
+    const p = mapPalette();
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Wind, mph";
+    row.appendChild(caption);
+
+    const strip = document.createElement("div");
+    strip.className = "map-legend";
+    const svgNS = "http://www.w3.org/2000/svg";
+    MAP_WIND_SPEED_THRESHOLDS.forEach((threshold, i) => {
+      const len = MAP_WIND_ARROW_LENGTHS[i];
+      const item = document.createElement("span");
+      item.className = "map-legend-item";
+
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", "28");
+      svg.setAttribute("height", "26");
+      svg.setAttribute("viewBox", "0 0 28 26");
+      const cx = 14, cy = 18;
+      const tipY = cy - len;
+      const line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", String(cx)); line.setAttribute("y1", String(cy));
+      line.setAttribute("x2", String(cx)); line.setAttribute("y2", String(tipY));
+      line.setAttribute("stroke", p.ink);
+      line.setAttribute("stroke-width", "1.8");
+      line.setAttribute("stroke-linecap", "round");
+      svg.appendChild(line);
+      const head = document.createElementNS(svgNS, "polygon");
+      head.setAttribute("points", `${cx},${tipY - 6} ${cx - 4},${tipY + 1} ${cx + 4},${tipY + 1}`);
+      head.setAttribute("fill", p.ink);
+      svg.appendChild(head);
+      item.appendChild(svg);
+
+      const label = document.createElement("span");
+      label.className = "map-legend-label";
+      label.textContent = i === MAP_WIND_SPEED_THRESHOLDS.length - 1 ? `${threshold}+` : `${threshold}`;
+      item.appendChild(label);
+      strip.appendChild(item);
+    });
+    row.appendChild(strip);
+    container.appendChild(row);
   }
 }
 
@@ -855,15 +1127,35 @@ registerMapLayer({
     const radii = imperial ? (MAP_RING_RADII_MI[view.radiusKm] || [20, 40]) : (MAP_RING_RADII_KM[view.radiusKm] || [30, 60]);
     const kmPerUnit = imperial ? 1.60934 : 1;
     ctx.save();
-    ctx.setLineDash([3, 4]);
-    ctx.strokeStyle = p.ring;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.7;
     radii.forEach(value => {
       const km = value * kmPerUnit;
+      const r = km * view.pxPerKm;
+
+      // A solid halo pass first, in the base land colour — the inner
+      // and outer rings were already the exact same colour, but the
+      // outer one covers more ground and so is more likely to cross a
+      // patch of rain/temperature colouring close to its own tone,
+      // where it effectively vanishes. This halo is what actually
+      // guarantees both rings stay visible against whatever happens to
+      // be underneath them, the same trick the labels below already
+      // use against a dark rain wash.
+      ctx.setLineDash([]);
+      ctx.strokeStyle = p.land;
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.85;
       ctx.beginPath();
-      ctx.arc(hx, hy, km * view.pxPerKm, 0, Math.PI * 2);
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
       ctx.stroke();
+
+      // The actual dashed ring, identical style for inner and outer.
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = p.ring;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
       const text = `${value} ${imperial ? "mi" : "km"}`;
@@ -873,11 +1165,9 @@ registerMapLayer({
       // enough to swallow them entirely.
       ctx.lineWidth = 3;
       ctx.strokeStyle = p.land;
-      ctx.strokeText(text, hx + 5, hy - km * view.pxPerKm - 4);
+      ctx.strokeText(text, hx + 5, hy - r - 4);
       ctx.fillStyle = p.ink;
-      ctx.fillText(text, hx + 5, hy - km * view.pxPerKm - 4);
-      ctx.setLineDash([3, 4]);
-      ctx.globalAlpha = 0.7;
+      ctx.fillText(text, hx + 5, hy - r - 4);
     });
     ctx.restore();
     ctx.fillStyle = p.ink;
@@ -1065,6 +1355,40 @@ function mapHourClock(hoursAhead) {
   return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
 }
 
+// Shorthand conditions at the crosshair (mapCentre — wherever the map
+// is currently centred on, the same point "Forecast for here" would
+// adopt) for whichever hour the slider is on. Only for layers actually
+// switched on, matching what's drawn: showing a rain figure while the
+// rain layer itself is hidden would read as data appearing from
+// nowhere. compassLabel() comes from app.js, already loaded before this
+// file on every page that includes the map.
+function buildMapReadout(hour) {
+  if (!mapGrid) return "";
+  const parts = [];
+
+  if (mapLayerVisible("wind")) {
+    const speed = sampleGrid(mapGrid, "windSpeed", hour, mapCentre.lat, mapCentre.lon);
+    const dir = sampleWindDir(mapGrid, hour, mapCentre.lat, mapCentre.lon);
+    if (speed !== null && dir !== null) parts.push(`${compassLabel(dir)} ${Math.round(speed)}mph`);
+  }
+  if (mapLayerVisible("rain")) {
+    const rain = sampleGrid(mapGrid, "rain", hour, mapCentre.lat, mapCentre.lon);
+    if (rain !== null && rain !== undefined) {
+      parts.push(rain < RAIN_BAND_THRESHOLDS[0] ? "dry" : `${rain.toFixed(1)}mm/hr`);
+    }
+  }
+  if (mapLayerVisible("temperature")) {
+    const temp = sampleGrid(mapGrid, "temp", hour, mapCentre.lat, mapCentre.lon);
+    if (temp !== null && temp !== undefined) parts.push(`${Math.round(temp)}°C`);
+  }
+  if (mapLayerVisible("pressure")) {
+    const pressure = sampleGrid(mapGrid, "pressure", hour, mapCentre.lat, mapCentre.lon);
+    if (pressure !== null && pressure !== undefined) parts.push(`${Math.round(pressure)}hPa`);
+  }
+
+  return parts.join(" · ");
+}
+
 function setMapStatus(message) {
   if (!mapStatusEl) return;
   mapStatusEl.textContent = message || "";
@@ -1105,7 +1429,9 @@ function updateMapChrome() {
   const scale = document.getElementById("mapScale");
   if (scale) {
     const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
-    scale.textContent = mapHourClock(mapHourValue()) + (stale ? " · older data" : "");
+    const hour = mapHourValue();
+    const readout = buildMapReadout(hour);
+    scale.textContent = mapHourClock(hour) + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
   }
 
   const hourLabel = document.getElementById("mapHourLabel");
