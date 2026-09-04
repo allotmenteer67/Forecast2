@@ -4,8 +4,8 @@
 // alongside the shared app.js (same as every other page — see the
 // handover doc), so it reuses that file's location resolution
 // (resolveLocation, AmbiguousLocationError), fetch helper
-// (fetchWithTimeout), and URL constants (ARCHIVE_URL, WEATHER_URL)
-// rather than duplicating them.
+// (fetchWithTimeout / fetchOpenMeteo), and URL constants (ARCHIVE_URL,
+// WEATHER_URL) rather than duplicating them.
 //
 // Core idea, per the brief: most consumer solar calculators lean on a
 // single regional average. This instead pulls real historical solar
@@ -63,7 +63,13 @@ async function fetchSolarSeries(baseUrl, lat, lon, tilt, azimuth, extraParams) {
     timezone: "auto",
     ...extraParams
   });
-  const res = await fetchWithTimeout(`${baseUrl}?${params.toString()}`, {}, 30000);
+  // Routed through fetchOpenMeteo (app.js) rather than plain
+  // fetchWithTimeout — same shared concurrency gate + 429 backoff as
+  // every other Open-Meteo call in the app, added after real rate
+  // limiting was observed on the map page. Solar isn't usually run
+  // alongside a map/front-page burst, but it hits the same server and
+  // the same published limit, so there's no reason to leave it out.
+  const res = await fetchOpenMeteo(`${baseUrl}?${params.toString()}`, {}, 30000);
   if (!res.ok) throw new Error(`Weather data fetch failed: ${res.status}`);
   const data = await res.json();
   const gti = data.hourly.global_tilted_irradiance;
@@ -102,7 +108,7 @@ async function fetchSolarSeriesFallback(baseUrl, lat, lon, extraParams) {
     timezone: "auto",
     ...extraParams
   });
-  const res = await fetchWithTimeout(`${baseUrl}?${params.toString()}`, {}, 30000);
+  const res = await fetchOpenMeteo(`${baseUrl}?${params.toString()}`, {}, 30000);
   if (!res.ok) throw new Error(`Weather data fetch failed: ${res.status}`);
   const data = await res.json();
   return {

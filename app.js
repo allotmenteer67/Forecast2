@@ -707,6 +707,66 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_FETCH_TIM
   }
 }
 
+// ---- Open-Meteo concurrency gate + 429 backoff ----
+//
+// Added after real rate-limiting was confirmed in practice — the map's
+// weather grid AND its terrain elevation batches both came back 429 in
+// the same session. Open-Meteo's own published limit is generous
+// (600/minute), but a single Cloude page load already fires a lot at
+// once by design: nine independent forecast sources on the front page
+// (each fetched separately so its own FFV correction can be tracked),
+// plus Actual, plus the hourly blend — all roughly simultaneously — and
+// the map page adds its own weather grid plus, when terrain loads,
+// another 7-16 sequential elevation requests on top. None of that is
+// wasteful individually, but bursting it all at once (especially on a
+// mobile connection, where a carrier's shared NAT'd IP means Cloude
+// isn't necessarily the only thing consuming that limit) is a realistic
+// way to trip it. This doesn't reduce how much Cloude fetches — it
+// paces WHEN each request actually goes out, and retries a genuine 429
+// with backoff instead of surfacing it as a hard failure straight away.
+//
+// Every Open-Meteo call site (this file, map.js, map-strip.js, solar.js)
+// goes through fetchOpenMeteo instead of calling fetchWithTimeout
+// directly. Non-Open-Meteo calls (postcodes.io, Nominatim) are
+// deliberately NOT routed through this gate — they're occasional
+// single lookups, not the bursty multi-source pattern this exists for.
+const OPEN_METEO_MAX_CONCURRENT = 4;
+let openMeteoActive = 0;
+const openMeteoQueue = [];
+
+function openMeteoAcquire() {
+  if (openMeteoActive < OPEN_METEO_MAX_CONCURRENT) {
+    openMeteoActive++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => openMeteoQueue.push(resolve)).then(() => { openMeteoActive++; });
+}
+
+function openMeteoRelease() {
+  openMeteoActive--;
+  const next = openMeteoQueue.shift();
+  if (next) next();
+}
+
+async function fetchOpenMeteo(url, options = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
+  await openMeteoAcquire();
+  try {
+    const maxAttempts = 3; // one real attempt + up to two backed-off retries
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const res = await fetchWithTimeout(url, options, timeoutMs);
+      if (res.status !== 429 || attempt === maxAttempts - 1) return res;
+      // Respects the server's own Retry-After when it sends one, rather
+      // than guessing — falls back to a short exponential backoff
+      // (1s, then 2s) when it doesn't.
+      const retryAfter = parseFloat(res.headers.get("Retry-After"));
+      const waitMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000 * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  } finally {
+    openMeteoRelease();
+  }
+}
+
 // ---- Actual weather fetching ----
 
 // Reverse of geocodePostcode: given the device's raw coordinates (from
@@ -1057,7 +1117,7 @@ async function fetchActualWeather(lat, lon) {
       timezone: "auto"
     });
 
-    const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`);
+    const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Weather lookup failed");
     const data = await res.json();
 
@@ -1144,7 +1204,7 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
       timezone: "auto"
     });
 
-    const res = await fetchWithTimeout(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
+    const res = await fetchOpenMeteo(`${PREVIOUS_RUNS_URL}?${params.toString()}`);
     if (!res.ok) throw new Error("Data lookup failed");
     const data = await res.json();
 
@@ -1302,7 +1362,7 @@ async function fetchHourlyForecast(lat, lon) {
         ...(id === "metoffice" ? { daily: "sunrise,sunset,uv_index_max" } : {})
       });
 
-      const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`);
+      const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`);
       if (!res.ok) throw new Error(`Hourly forecast lookup failed for ${id}`);
       const data = await res.json();
       return { id, data };
@@ -4509,7 +4569,7 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
     wind_speed_unit: "mph",
     timezone: "auto"
   });
-  const res = await fetchWithTimeout(`${PREVIOUS_RUNS_URL}?${params.toString()}`, {}, 30000);
+  const res = await fetchOpenMeteo(`${PREVIOUS_RUNS_URL}?${params.toString()}`, {}, 30000);
   if (!res.ok) throw new Error(`${sourceId} history lookup failed`);
   const data = await res.json();
   const hourlyTime = data.hourly.time;
@@ -4558,7 +4618,7 @@ async function backfillRealSourceHistory() {
       wind_speed_unit: "mph",
       timezone: "auto"
     });
-    const actualRes = await fetchWithTimeout(`${ARCHIVE_URL}?${actualParams.toString()}`, {}, 30000);
+    const actualRes = await fetchOpenMeteo(`${ARCHIVE_URL}?${actualParams.toString()}`, {}, 30000);
     if (!actualRes.ok) throw new Error("Actual weather archive lookup failed");
     const actualData = await actualRes.json();
     const dayCount = actualData.daily.time.length;

@@ -544,7 +544,7 @@ async function fetchWeatherGrid(centre, radiusKm) {
     timezone: "auto"
   });
 
-  const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`, {}, 30000);
+  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 30000);
   if (!res.ok) throw new Error(`Map weather fetch failed: ${res.status}`);
   const data = await res.json();
 
@@ -907,7 +907,7 @@ async function fetchTerrainGrid(centre, radiusKm) {
       latitude: batchLats.map(v => v.toFixed(4)).join(","),
       longitude: batchLons.map(v => v.toFixed(4)).join(",")
     });
-    const res = await fetchWithTimeout(`${TERRAIN_ELEVATION_URL}?${params.toString()}`, {}, 20000);
+    const res = await fetchOpenMeteo(`${TERRAIN_ELEVATION_URL}?${params.toString()}`, {}, 20000);
     if (!res.ok) {
       // The response body on a 400 names the actual problem (e.g. a
       // coordinate out of range) — logged here even though nothing

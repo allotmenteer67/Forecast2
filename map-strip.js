@@ -200,7 +200,13 @@ async function fetchMapStripGrid(centre) {
     forecast_days: String(MAP_STRIP_FORECAST_DAYS),
     timezone: "auto"
   });
-  const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`, {}, 20000);
+  // Routed through fetchOpenMeteo (app.js), which this page also loads —
+  // same shared concurrency gate + 429 backoff as every other Open-Meteo
+  // call in the app. This fetch fires right after the front page's own
+  // 19-ish-request burst lands (see the file-level note above), so it's
+  // exactly the kind of follow-up call that could land in the middle of
+  // a rate-limit window the burst itself just caused.
+  const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 20000);
   if (!res.ok) throw new Error(`Map strip fetch failed: ${res.status}`);
   const data = await res.json();
   const points = Array.isArray(data) ? data : [data];
