@@ -102,17 +102,17 @@ body {
 
 /* Phone widths only. The desktop/iPad padding is left alone — the
    tightening exists to get the front page above the fold on a phone,
-   which is not a problem the wider layouts have. */
+   which is not a problem the wider layouts have. Top is tighter still
+   than the other three sides — see .title-bar below for why phones
+   don't need the same top clearance iPad does. */
 @media (max-width: 700px) {
-  .app { padding: 12px; }
+  .app { padding: 6px 12px 12px; }
 }
 
 header {
   /* Was 18px. The gap under the title was pure dead space on the front
      page — the single easiest saving, and it buys most of the map strip
-     on its own. The title-bar's own top padding is NOT touched: that is
-     the iPadOS windowed/Split-View clearance (see .title-bar), not
-     decoration, and removing it reintroduces a fixed bug. */
+     on its own. */
   margin-bottom: 9px;
 }
 
@@ -166,7 +166,13 @@ header p {
 .headline-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 16px;
+  /* Row gap was 10px, same as the column gap's near-neighbour 16px was
+     doing double duty as both "space between two side-by-side figures"
+     and "space between one row and the next" — two different jobs that
+     don't need the same amount. Tightened the row gap on its own,
+     column gap untouched (that's genuine breathing room between two
+     numbers, not slack). */
+  gap: 7px 16px;
 }
 
 .headline-loading {
@@ -564,7 +570,13 @@ header p {
 }
 
 .hour-slider {
-  margin-top: 14px;
+  /* Was 14px. The range-input height bump (32px → 44px, done for a
+     bigger touch target) added 6px of invisible padding above the
+     visible track along with 6px below it — this trims that back out
+     so the gap between the hour-slider-title row and the track itself
+     stays the same size it always was, rather than quietly growing by
+     6px as an unintended side effect of a touch-target fix. */
+  margin-top: 8px;
   padding-top: 12px;
   border-top: 1px solid rgba(76, 106, 88, 0.25);
 }
@@ -874,6 +886,12 @@ legend {
   justify-content: space-between;
   color: #6b7d70;
   font-size: 12px;
+  /* Same compensation as .hour-slider above: the taller range input
+     added 6px of invisible padding below its own visible track, which
+     otherwise shows up here as the gap between the track and these
+     labels growing by that same 6px. Pulls it back to how it looked
+     before the touch-target fix. */
+  margin-top: -6px;
 }
 
 .rollback p,
@@ -1426,11 +1444,19 @@ footer {
   align-items: center;
   gap: 10px;
   position: relative;
-  /* A little extra clearance at the top — on iPad, when this runs as a
-     windowed/Split View app, iPadOS draws its own window controls (the
-     macOS-style traffic-light pill) right over the top-left corner of
-     the page, which otherwise lands directly on the title. */
-  padding-top: 6px;
+}
+
+/* iPad only, not phones — when this runs as a windowed/Split View app,
+   iPadOS draws its own window controls (the macOS-style traffic-light
+   pill) right over the top-left corner of the page, which otherwise
+   lands directly on the title. Phones have no such overlay and were
+   paying this same 6px for no reason, sitting on top of the status bar/
+   notch clearance the OS already reserves on its own — a real, visible
+   gap above "Cloude" with nothing there to protect against. */
+@media (min-width: 701px) {
+  .title-bar {
+    padding-top: 6px;
+  }
 }
 
 .title-bar h1 {
@@ -1513,6 +1539,14 @@ footer {
   padding: 0;
   border: 0;
   background: none;
+  /* Without this, iOS's own default tap-highlight overlay covers the
+     full 32px button — visibly larger than the 16-20px icon sitting
+     inside it — which reads as the icon itself darkening and growing
+     on tap, then fading back on release. The is-current class above
+     already gives a plain, instant colour/opacity change on selection;
+     this was an unrelated platform effect layered on top of it, not
+     part of the intended feedback. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .place-menu {

@@ -252,6 +252,14 @@ const PLACE_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
+// Reverse geocoding only — turning a dropped map pin's raw lat/lon back
+// into a nearby place name. Nominatim (OpenStreetMap) rather than
+// Open-Meteo's own geocoder, since that one only searches BY name; it
+// has no reverse direction at all. Free and keyless, matching the
+// no-API-key rule the rest of this app follows, but a shared public
+// service rather than one built for this kind of traffic — kept to
+// this one call site, never polled or looped.
+const REVERSE_GEOCODE_URL = "https://nominatim.openstreetmap.org/reverse";
 const MAX_ROLLBACK = 7; // days into the past the slider (and Actual) can reach
 const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live forecast) can reach
 
@@ -812,6 +820,33 @@ function looksLikeCoordinates(input) {
   return /^-?\d{1,2}\.\d+\s*,\s*-?\d{1,3}\.\d+$/.test(input.trim());
 }
 
+// Best-effort "what's this point actually called" for a dropped map
+// pin — nearest village/town/suburb, in that order, since a village
+// name is more useful than "the town 8 miles away" when both are
+// technically valid containing places. Returns null rather than
+// throwing on anything short of success (no result, offshore, a slow
+// or failed request) — the caller already has a perfectly honest plain
+// coordinate label to fall back to, so this only ever makes that label
+// nicer, never blocks on it.
+async function reverseGeocodeLabel(lat, lon) {
+  try {
+    const params = new URLSearchParams({
+      format: "jsonv2",
+      lat: String(lat),
+      lon: String(lon),
+      addressdetails: "1",
+      zoom: "14"
+    });
+    const res = await fetchWithTimeout(`${REVERSE_GEOCODE_URL}?${params.toString()}`, {}, 8000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data.address || {};
+    return addr.village || addr.town || addr.suburb || addr.hamlet || addr.city || null;
+  } catch {
+    return null; // offline, timed out, or genuinely nothing there (open water) — the plain lat/lon label covers all three honestly
+  }
+}
+
 async function resolveLocation(input) {
   const trimmed = input.trim();
   if (!trimmed) throw new Error("Enter a postcode or place name");
@@ -827,15 +862,18 @@ async function resolveLocation(input) {
     // same cell, rather than starting from nothing every time the map is
     // dragged a few hundred metres.
     const areaCode = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+    // One extra network call on a path that already has one — but this
+    // runs alongside loadLocationData()'s own fetches (the caller
+    // re-renders the place chip the moment this resolves, without
+    // waiting for the weather itself), so it costs no extra time the
+    // person actually notices. Falls back to the plain coordinates
+    // exactly as before if nothing comes back — still true at sea,
+    // offline, or if Nominatim itself is ever unreachable.
+    const place = await reverseGeocodeLabel(lat, lon);
     return {
       lat,
       lon,
-      // No reverse geocode: it would be another network call on a path
-      // that already has one, and it can fail or return something
-      // misleading out at sea. The coordinates are honest about what was
-      // actually picked, and the place can be renamed in Settings like
-      // any other saved place.
-      label: `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
+      label: place || `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
       areaCode
     };
   }
@@ -1603,6 +1641,12 @@ async function runLoadLocationData() {
     state.lon = lon;
     state.areaCode = areaCode;
     state.actual.coordLabel = label;
+    // The chip may currently be showing a bare "51.13, -2.99" (or
+    // nothing at all, on first paint) — this is what actually replaces
+    // it with the reverse-geocoded name the instant it's known, rather
+    // than waiting for the weather fetches below (which can take
+    // noticeably longer) to finish first.
+    renderPlaceChip();
     await Promise.all([
       fetchActualWeather(lat, lon),
       ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
@@ -5061,7 +5105,15 @@ function swipeToAdjacentPlace(direction) {
 function renderPlaceChip() {
   if (!placeChipLabel) return;
   const match = loadPlaces().find(place => place.postcode === state.postcode);
-  placeChipLabel.textContent = match ? match.label : (state.postcode || "Set location");
+  // A saved place's own label wins if there is one; otherwise fall back
+  // to whatever resolveLocation() last resolved this postcode to —
+  // for an adopted map coordinate, that's the reverse-geocoded village/
+  // town name once it's back (or the plain lat/lon before it arrives,
+  // or if it never finds one) — before falling back to the raw
+  // postcode/coordinate string itself, which only shows if neither of
+  // those exist yet (e.g. the very first paint, before any lookup has
+  // had a chance to run at all).
+  placeChipLabel.textContent = match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
 }
 
 const placeDots = document.getElementById("placeDots");
