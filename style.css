@@ -1475,14 +1475,27 @@ footer {
   justify-self: center;
 }
 
-/* The header grid has always been 1fr / auto / 1fr — column 3 held the
-   place chip, column 1 sat empty purely to keep the title centred by
-   symmetry. That empty column is what Settings moves into now that
-   Map's gone from the bottom nav: no new layout needed, just finally
-   using the slot that was already there. */
+/* Right side only — the left corner is exactly where iPad/Mac window
+   chrome (traffic-light buttons) sits, the same collision already
+   fixed once for the map page's title. Putting the new Settings icon
+   there too just walked straight back into it. The right corner has
+   never had this problem (the chip's sat there safely all along), so
+   Settings joins it there instead of getting its own dedicated corner. */
+.title-bar-right {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Grid items default to a content-based minimum width too, same
+     underlying issue as .place-chip below — without this, the wrapper
+     itself could refuse to shrink below its content's natural size,
+     which would defeat that fix at the next level up. */
+  min-width: 0;
+  max-width: 100%;
+}
+
 .settings-icon-button {
-  grid-column: 1;
-  justify-self: start;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1490,6 +1503,7 @@ footer {
   height: 44px;
   border-radius: 50%;
   color: var(--accent-dark);
+  flex: 0 0 auto;
 }
 
 .settings-icon-button:hover {
@@ -1497,8 +1511,13 @@ footer {
 }
 
 .place-chip {
-  grid-column: 3;
-  justify-self: end;
+  /* Was 0 0 auto (can't shrink at all). With a fixed-size icon now
+     sitting next to it in the same row, a long place name needs
+     somewhere to give — this lets the chip shrink below its natural
+     width so max-width/ellipsis on the label actually get a chance to
+     kick in, rather than the pair overflowing past the icon instead. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .place-chip {

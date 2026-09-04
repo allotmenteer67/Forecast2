@@ -29,21 +29,23 @@
   <main class="app">
     <header>
       <div class="title-bar">
-        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
-            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
-            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
-          </svg>
-        </a>
         <h1>Cloude</h1>
-        <button id="placeChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
-          <span id="placeChipLabel">TA6</span>
-          <span class="place-chip-caret" aria-hidden="true">&#9662;</span>
-        </button>
+        <div class="title-bar-right">
+          <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+              <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+              <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+            </svg>
+          </a>
+          <button id="placeChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
+            <span id="placeChipLabel">TA6</span>
+            <span class="place-chip-caret" aria-hidden="true">&#9662;</span>
+          </button>
+        </div>
         <div id="placeMenu" class="place-menu" hidden>
           <div id="placeMenuList"></div>
           <a class="place-menu-manage" href="settings.html">Manage places</a>
