@@ -1656,6 +1656,15 @@ async function runLoadLocationData() {
 
     if (state.postcode !== requestedFor) return; // a newer switch has since taken over — this result is stale, leave it alone
 
+    // The map strip (map-strip.js, front page only) starts its own,
+    // separate fetch here — deliberately AFTER the actual weather above
+    // has already landed, not alongside it, so a slow map fetch can
+    // never delay the headline figures someone actually came for. Fired
+    // as a DOM event rather than a direct function call so this file
+    // doesn't need to know map-strip.js exists at all; on any other page
+    // there's simply no listener and this is a no-op.
+    document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat, lon } }));
+
     // Everything from here on is bookkeeping (learning FFV, and the
     // one-off backfill for a genuinely new area) rather than data the
     // page needs to show. If any of it throws, the fetches above still

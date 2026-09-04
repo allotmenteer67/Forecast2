@@ -152,6 +152,28 @@ header p {
   border: 1px solid #e7ede6;
 }
 
+/* A static preview, same card language as .headline below it (rounded
+   corners, the same shadow) so it reads as part of the same page
+   rather than a bolted-on widget — but shorter and a plain link rather
+   than a card full of controls, since tapping it is the only thing it
+   does. Height is content-driven via aspect-ratio rather than a fixed
+   px value, so it scales sensibly across phone widths instead of being
+   tuned for one screen size. */
+.map-strip {
+  display: block;
+  aspect-ratio: 3 / 1;
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+}
+
+.map-strip canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .headline {
   background: var(--headline-bg);
   border-radius: 14px;

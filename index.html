@@ -53,6 +53,15 @@
       </div>
     </header>
 
+    <!-- Static preview, not a mini pannable map — tap opens map.html for
+         real interaction. Centred on wherever the front page is
+         currently showing, 25km fixed radius, rain only (wind/pressure/
+         temperature stay on the full map page — this is "is it raining
+         nearby", not the full picture). See map-strip.js. -->
+    <a href="map.html" class="map-strip" aria-label="Open the map">
+      <canvas id="mapStripCanvas"></canvas>
+    </a>
+
     <section class="headline">
       <p id="headlineDate" class="headline-date">Today</p>
       <div id="headlineStatusBlock" class="headline-status-block" hidden>
@@ -131,6 +140,7 @@
   </section>
 
   <script src="app.js"></script>
+  <script src="map-strip.js"></script>
   <script src="tide.js"></script>
   <script src="tide-ui.js"></script>
   <script src="fishing.js"></script>
