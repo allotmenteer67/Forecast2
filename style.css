@@ -2198,12 +2198,21 @@ footer {
 
 .map-scale {
   position: absolute;
+  /* Was right:8px only, font-size:11px — a small bottom-right pill was
+     fine for a bare clock time, but too cramped once this line also
+     carries the shorthand conditions readout (wind/rain/temp/pressure
+     at the crosshair). Spans the full width now so a longer line wraps
+     within the map instead of running off it, and reads at a size
+     that's actually easy to check at a glance. */
+  left: 8px;
   right: 8px;
   bottom: 8px;
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, .78);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .82);
   color: var(--accent-dark);
 }
 
@@ -2233,6 +2242,22 @@ footer {
   font-size: 11px;
   color: var(--accent-muted);
   font-style: italic;
+}
+
+/* Temperature's legend — a continuous bar rather than the discrete
+   swatches the other legends use, since the layer itself paints a
+   smooth gradient now (see MAP_TEMP_COLOR_STOPS) rather than bands. */
+.map-legend-gradient {
+  height: 10px;
+  border-radius: 5px;
+  margin: 2px 0;
+}
+
+.map-legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--accent-muted);
 }
 
 .map-legend {
