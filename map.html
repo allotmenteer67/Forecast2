@@ -52,6 +52,11 @@
       <div id="mapScale" class="map-scale"></div>
     </div>
 
+    <!-- Reads current mm/hr against the exact same colour ramp the rain
+         layer just painted — see RAIN_BAND_THRESHOLDS / renderRainLegend()
+         in map.js, the single source of truth for both. -->
+    <div id="mapRainLegend" class="map-legend" aria-label="Rain intensity, mm per hour"></div>
+
     <p id="mapStatus" class="actual-status status-error-only"></p>
 
     <div class="map-zoom-row">
@@ -75,11 +80,14 @@
       </div>
     </section>
 
+    <!-- Reduced to Settings alone — Compare/Solar/Help all live behind it
+         now, and "← Back to Cloude" above already covers the one other
+         place people actually jump to from here. A four-link row cost
+         more vertical space than it earned on a page whose whole point is
+         the map itself; see the deeper #mapCanvas aspect-ratio in
+         style.css, freed up by the same trim. -->
     <nav class="bottom-nav">
-      <a href="index.html">Cloude</a>
-      <a href="compare.html">Compare</a>
-      <a href="solar.html">Solar</a>
-      <a href="help.html">Help</a>
+      <a href="settings.html">Settings</a>
     </nav>
   </main>
 

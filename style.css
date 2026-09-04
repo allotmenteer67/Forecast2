@@ -2093,11 +2093,14 @@ footer {
 #mapCanvas {
   display: block;
   width: 100%;
-  /* Roughly 4:3. Squarer than a front-page strip on purpose: a wide,
-     short map shows plenty to the west and almost nothing north or
-     south, which fails exactly when the weather is doing something
-     other than the prevailing westerly. */
-  aspect-ratio: 4 / 3;
+  /* Deeper than a front-page strip on purpose — a wide, short map shows
+     plenty to the west and almost nothing north or south, which fails
+     exactly when the weather is doing something other than the
+     prevailing westerly. This was 4:3 until the bottom nav dropped to a
+     single Settings link; the space that freed up went straight into
+     the map itself rather than just tightening the page, since "a lot
+     of blank screen" was the more direct complaint. */
+  aspect-ratio: 1 / 1;
   /* Required for single-finger drag — without it the browser scrolls
      the page instead of panning the map. It is also the reason drag
      exists only on this page: a scroll-blocking canvas inside a
@@ -2131,6 +2134,37 @@ footer {
   border-radius: 5px;
   background: rgba(255, 255, 255, .78);
   color: var(--accent-dark);
+}
+
+/* Sits directly under the map, between it and the status line — close
+   enough to read as "this explains what's above" rather than a
+   disconnected key floating elsewhere on the page. */
+.map-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 8px 0 2px;
+  font-size: 11px;
+  color: var(--accent-muted);
+}
+
+.map-legend-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1 1 0;
+  gap: 3px;
+}
+
+.map-legend-swatch {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.map-legend-label {
+  white-space: nowrap;
 }
 
 .map-zoom-row {

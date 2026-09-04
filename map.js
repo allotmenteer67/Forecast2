@@ -469,6 +469,31 @@ registerMapLayer({
   }
 });
 
+// Real hourly precipitation, in mm/hr — one threshold per ramp colour.
+// Below the first threshold is drawn as nothing at all (dry), not the
+// palest band, so "no colour" always means "no rain" rather than "a
+// trace too faint to bother with" being indistinguishable from actual
+// dry weather. Chosen to roughly track the intensity bands the Met
+// Office and BBC already use in words (very light/light/moderate/
+// heavy/torrential) rather than an abstract 0–1 scale — this replaced
+// a sqrt(value) curve that was tuned for the stub's synthetic 0–1.6
+// range and never revisited once real Open-Meteo data went live, which
+// meant the palest band could never actually be reached by a real mm/hr
+// figure. renderRainLegend() reads this same array, so the on-screen key
+// and the fill colours can never drift out of sync with each other.
+const RAIN_BAND_THRESHOLDS = [0.1, 0.5, 1, 2, 4, 8];
+
+// Highest band whose threshold the value clears, or -1 for "don't draw
+// this cell at all" (dry, or no data).
+function rainBandIndex(value) {
+  if (value === null || value === undefined || value < RAIN_BAND_THRESHOLDS[0]) return -1;
+  let idx = 0;
+  for (let i = 1; i < RAIN_BAND_THRESHOLDS.length; i++) {
+    if (value >= RAIN_BAND_THRESHOLDS[i]) idx = i;
+  }
+  return idx;
+}
+
 registerMapLayer({
   id: "rain",
   draw(ctx, view) {
@@ -481,9 +506,9 @@ registerMapLayer({
     for (let px = 0; px < view.w; px += cell) {
       for (let py = 0; py < view.h; py += cell) {
         const value = sampleGrid(mapGrid, hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
-        if (value === null || value < 0.05) continue;
-        const step = Math.min(p.ramp.length - 1, Math.floor(Math.sqrt(value) * p.ramp.length));
-        ctx.fillStyle = p.ramp[step];
+        const band = rainBandIndex(value);
+        if (band < 0) continue;
+        ctx.fillStyle = p.ramp[band];
         ctx.globalAlpha = 0.85;
         ctx.fillRect(px, py, cell, cell);
         ctx.globalAlpha = 1;
@@ -491,6 +516,30 @@ registerMapLayer({
     }
   }
 });
+
+// The legend is DOM, not canvas — same reasoning as the crosshair: it
+// never needs redrawing mid-pan, and real text is sharper and far
+// cheaper to keep accessible than canvas-drawn labels would be. Called
+// from renderMap() so a palette change (paper/night/mono) is reflected
+// immediately rather than only on next page load.
+function renderRainLegend() {
+  const el = document.getElementById("mapRainLegend");
+  if (!el) return;
+  const p = mapPalette();
+  el.innerHTML = "";
+  RAIN_BAND_THRESHOLDS.forEach((threshold, i) => {
+    const swatch = document.createElement("span");
+    swatch.className = "map-legend-swatch";
+    swatch.style.background = p.ramp[i];
+    const label = document.createElement("span");
+    label.className = "map-legend-label";
+    label.textContent = i === RAIN_BAND_THRESHOLDS.length - 1 ? `${threshold}+` : `${threshold}`;
+    const item = document.createElement("span");
+    item.className = "map-legend-item";
+    item.append(swatch, label);
+    el.appendChild(item);
+  });
+}
 
 registerMapLayer({
   id: "rings",
@@ -721,6 +770,7 @@ function renderMap() {
     try { layer.draw(ctx, view); } catch { /* one bad layer must not blank the map */ }
     ctx.restore();
   });
+  renderRainLegend();
   updateMapChrome();
 }
 
