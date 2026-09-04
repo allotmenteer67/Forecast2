@@ -2136,16 +2136,38 @@ footer {
   color: var(--accent-dark);
 }
 
-/* Sits directly under the map, between it and the status line — close
+/* Sits directly under the map, between it and the layer toggles — close
    enough to read as "this explains what's above" rather than a
    disconnected key floating elsewhere on the page. */
+.map-layer-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.map-legend-row {
+  margin: 4px 0;
+}
+
+.map-legend-caption {
+  display: block;
+  font-size: 11px;
+  color: var(--accent-muted);
+  margin-bottom: 2px;
+}
+
+.map-legend-note {
+  font-size: 11px;
+  color: var(--accent-muted);
+  font-style: italic;
+}
+
 .map-legend {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin: 8px 0 2px;
-  font-size: 11px;
-  color: var(--accent-muted);
 }
 
 .map-legend-item {
@@ -2165,6 +2187,8 @@ footer {
 
 .map-legend-label {
   white-space: nowrap;
+  font-size: 11px;
+  color: var(--accent-muted);
 }
 
 .map-zoom-row {

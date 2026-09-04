@@ -107,6 +107,65 @@ function mapPalette() {
   return MAP_PALETTES.find(p => p.id === id) || MAP_PALETTES[0];
 }
 
+// Temperature and pressure get their own FIXED colour scales rather
+// than one per palette (unlike rain's ramp above) — real-world
+// temperature maps are blue-cold/red-hot almost universally regardless
+// of app theme, and inventing a "Slate" or "Paper" variant of that
+// would just be decoration with no convention behind it. One
+// consequence worth stating plainly: the "High contrast" mono palette
+// was built so rain reads by shade alone for anyone who can't reliably
+// separate blues — temperature and pressure don't get that treatment,
+// and showing them at the same time as rain (or each other) in mono
+// mode will be harder to tell apart than rain alone is.
+const MAP_TEMP_THRESHOLDS = [-Infinity, 0, 6, 12, 18, 24]; // °C, lower bound per band
+const MAP_TEMP_RAMP = ["#2b6cb0", "#4299e1", "#63b3ed", "#f6ad55", "#ed8936", "#c53030"];
+
+const MAP_PRESSURE_THRESHOLDS = [-Infinity, 995, 1005, 1013, 1020, 1028]; // hPa, lower bound per band
+const MAP_PRESSURE_RAMP = ["#553c9a", "#805ad5", "#b794f4", "#9ae6b4", "#68d391", "#dd6b20"];
+
+// Highest index whose threshold the value clears — used by temperature
+// and pressure, which (unlike rain) always have a value worth showing;
+// there's no "dry" band to hide below.
+function bandIndexFor(value, thresholds) {
+  let idx = 0;
+  for (let i = 0; i < thresholds.length; i++) {
+    if (value >= thresholds[i]) idx = i;
+  }
+  return idx;
+}
+
+// ---------------------------------------------------------------------
+// Layer visibility — independent toggles, not a single-layer switcher.
+// Rain defaults on (the map's original purpose); the three added later
+// default off so nobody's map suddenly looks different after an update.
+// Deliberately no mutual exclusion: showing rain and temperature at
+// once will look muddier than either alone (two colour washes occupying
+// the same pixels), but that trade was the explicit ask — a forced
+// single-layer switcher would be easier to keep legible but wouldn't be
+// what this is for.
+// ---------------------------------------------------------------------
+const MAP_LAYER_TOGGLES_KEY = "forecast-compare:map:layers";
+const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature"];
+const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false };
+
+function loadMapLayerToggles() {
+  try {
+    const raw = localStorage.getItem(MAP_LAYER_TOGGLES_KEY);
+    if (raw) return { ...MAP_LAYER_DEFAULTS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...MAP_LAYER_DEFAULTS };
+}
+
+function saveMapLayerToggle(id, visible) {
+  const toggles = loadMapLayerToggles();
+  toggles[id] = visible;
+  try { localStorage.setItem(MAP_LAYER_TOGGLES_KEY, JSON.stringify(toggles)); } catch {}
+}
+
+function mapLayerVisible(id) {
+  return !!loadMapLayerToggles()[id];
+}
+
 // ---------------------------------------------------------------------
 // Layer registry
 //
@@ -281,6 +340,35 @@ function stubValueAt(lat, lon, t) {
   return Math.max(0, band + blob - 0.05);
 }
 
+// Rough plausible-looking stand-ins for the three added fields, built
+// from the same u/v/front terms as rain above so all four stay loosely
+// consistent with each other (temperature drops and pressure falls
+// near the "front", wind backs veered ahead of it) — good enough for
+// exercising the toggle UI and the wind animation offline, not a real
+// physical model.
+function stubTempAt(lat, lon, t) {
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const seasonalBase = 14 - v * 3;
+  return seasonalBase - Math.exp(-((front + 0.6) ** 2) / 0.5) * 4;
+}
+
+function stubPressureAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const v = (lat - 51.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const d = (u * 0.8 + v * 0.3) - front;
+  return 1013 - Math.exp(-(d * d) / 0.2) * 22;
+}
+
+function stubWindAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const speed = 8 + Math.exp(-((u - front) ** 2) / 0.3) * 22;
+  const dir = (220 + t * 1.5 + u * 20) % 360;
+  return { speed, dir };
+}
+
 // Shared by the stub and the live fetch below, so the two can never
 // silently drift into different grid shapes — sampleGrid() has to agree
 // with whichever one actually filled `values`.
@@ -298,19 +386,27 @@ function buildGridShape(centre, radiusKm) {
 function buildStubGrid(centre, radiusKm) {
   const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
   const hours = 48;
-  const values = [];
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [];
   for (let t = 0; t < hours; t++) {
-    const frame = [];
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [];
     for (let r = 0; r < rows; r++) {
-      const row = [];
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [];
       for (let c = 0; c < cols; c++) {
-        row.push(stubValueAt(lat0 + r * dLat, lon0 + c * dLon, t));
+        const lat = lat0 + r * dLat, lon = lon0 + c * dLon;
+        rainRow.push(stubValueAt(lat, lon, t));
+        tempRow.push(stubTempAt(lat, lon, t));
+        pressureRow.push(stubPressureAt(lat, lon, t));
+        const wind = stubWindAt(lat, lon, t);
+        speedRow.push(wind.speed);
+        dirRow.push(wind.dir);
       }
-      frame.push(row);
+      rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
+      speedFrame.push(speedRow); dirFrame.push(dirRow);
     }
-    values.push(frame);
+    rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
+    windSpeed.push(speedFrame); windDir.push(dirFrame);
   }
-  return { lat0, lon0, dLat, dLon, rows, cols, hours, values, stub: true };
+  return { lat0, lon0, dLat, dLon, rows, cols, hours, rain, temp, pressure, windSpeed, windDir, stub: true };
 }
 
 const MAP_FORECAST_HOURS = 48;
@@ -327,16 +423,22 @@ const MAP_FORECAST_DAYS = 3;
 // array of one object per location, in the order requested, each
 // shaped exactly like a single-location response). Deliberately the
 // merged global models rather than ukmo_uk_deterministic_2km — see the
-// note at the top of this file for why.
+// note at the top of this file for why. pressure_msl (sea-level,
+// height-corrected), not surface_pressure — the same choice
+// collect-weather.js already makes for the Compare page's Pressure
+// condition, since the map's area can span real elevation differences
+// that surface pressure alone would show as a fake gradient.
+// wind_speed_unit: mph to match every other real fetch in this app —
+// see the README note on the km/h-labelled-as-mph bug that convention
+// was introduced to fix.
 //
-// Cost: assume roughly one API call PER POINT against the 10,000/day
-// free-tier limit. At 10 km spacing a 100 km-radius view can reach
-// several hundred points (radiusKm * MAP_FETCH_MARGIN, squared, over
-// the 10 km cell size) — comfortable for occasional use, but zooming
-// out and panning around repeatedly could burn through the daily
-// allowance faster than the other real sources do. Worth keeping an
-// eye on if "Couldn't load map data" starts showing up on a well
-// zoomed-out view.
+// Cost: four hourly variables instead of one, on the same one-request-
+// per-point shape as before — assume roughly 4x the "API call" cost per
+// point against the 10,000/day free-tier limit now that wind, pressure
+// and temperature ride along with rain. At 10 km spacing a 100 km-
+// radius view can reach several hundred points, so this is worth
+// watching if "Couldn't load map data" starts showing up on a well
+// zoomed-out view — more so than before this change.
 async function fetchWeatherGrid(centre, radiusKm) {
   const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
   const lats = [];
@@ -351,7 +453,8 @@ async function fetchWeatherGrid(centre, radiusKm) {
   const params = new URLSearchParams({
     latitude: lats.join(","),
     longitude: lons.join(","),
-    hourly: "precipitation",
+    hourly: "precipitation,temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m",
+    wind_speed_unit: "mph",
     forecast_days: String(MAP_FORECAST_DAYS),
     timezone: "auto"
   });
@@ -380,22 +483,32 @@ async function fetchWeatherGrid(centre, radiusKm) {
   );
   const startIdx = nowIndex >= 0 ? nowIndex : 0;
 
-  const values = [];
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [];
   for (let h = 0; h < MAP_FORECAST_HOURS; h++) {
-    const frame = [];
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [];
     for (let r = 0; r < rows; r++) {
-      const row = [];
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [];
       for (let c = 0; c < cols; c++) {
         const point = points[r * cols + c];
-        const v = point.hourly.precipitation[startIdx + h];
-        row.push(v === null || v === undefined ? 0 : v);
+        const i = startIdx + h;
+        const v = point.hourly.precipitation[i];
+        rainRow.push(v === null || v === undefined ? 0 : v);
+        tempRow.push(point.hourly.temperature_2m[i] ?? null);
+        pressureRow.push(point.hourly.pressure_msl[i] ?? null);
+        speedRow.push(point.hourly.wind_speed_10m[i] ?? null);
+        dirRow.push(point.hourly.wind_direction_10m[i] ?? null);
       }
-      frame.push(row);
+      rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
+      speedFrame.push(speedRow); dirFrame.push(dirRow);
     }
-    values.push(frame);
+    rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
+    windSpeed.push(speedFrame); windDir.push(dirFrame);
   }
 
-  return { lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS, values, stub: false };
+  return {
+    lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
+    rain, temp, pressure, windSpeed, windDir, stub: false
+  };
 }
 
 async function ensureGrid(centre, radiusKm, force) {
@@ -420,7 +533,9 @@ async function ensureGrid(centre, radiusKm, force) {
   }
 }
 
-function sampleGrid(grid, hour, lat, lon) {
+// field: "rain" | "temp" | "pressure" | "windSpeed" | "windDir" — each a
+// same-shaped [hour][row][col] array off the grid object.
+function sampleGrid(grid, field, hour, lat, lon) {
   if (!grid) return null;
   const fr = (lat - grid.lat0) / grid.dLat;
   const fc = (lon - grid.lon0) / grid.dLon;
@@ -428,7 +543,14 @@ function sampleGrid(grid, hour, lat, lon) {
   const r0 = Math.floor(fr), c0 = Math.floor(fc);
   const r1 = Math.min(r0 + 1, grid.rows - 1), c1 = Math.min(c0 + 1, grid.cols - 1);
   const tr = fr - r0, tc = fc - c0;
-  const f = grid.values[Math.min(hour, grid.hours - 1)];
+  const f = grid[field][Math.min(hour, grid.hours - 1)];
+  if (f[r0][c0] === null || f[r0][c1] === null || f[r1][c0] === null || f[r1][c1] === null) {
+    // Wind direction is angular — averaging raw degrees across a wrap
+    // (e.g. 350° and 10°) would bilinear-blend to 180°, exactly
+    // backwards. Nearest-point lookup sidesteps that entirely rather
+    // than doing circular interpolation for one field only.
+    return f[Math.round(fr)]?.[Math.round(fc)] ?? null;
+  }
   // Bilinear. Legitimate here in a way that sampling postcodes was not:
   // the model holds a continuous field that its grid samples, so
   // interpolating between cell centres recovers the field rather than
@@ -437,6 +559,21 @@ function sampleGrid(grid, hour, lat, lon) {
     f[r0][c0] * (1 - tr) * (1 - tc) + f[r0][c1] * (1 - tr) * tc +
     f[r1][c0] * tr * (1 - tc) + f[r1][c1] * tr * tc
   );
+}
+
+// windDir specifically: bilinear-interpolating raw compass degrees is
+// wrong across the 0°/360° wrap, so this always samples the nearest
+// grid point rather than blending — a small loss of smoothness that a
+// sparse arrow layout would hide anyway.
+function sampleWindDir(grid, hour, lat, lon) {
+  if (!grid) return null;
+  const fr = (lat - grid.lat0) / grid.dLat;
+  const fc = (lon - grid.lon0) / grid.dLon;
+  if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) return null;
+  const r = Math.round(Math.min(Math.max(fr, 0), grid.rows - 1));
+  const c = Math.round(Math.min(Math.max(fc, 0), grid.cols - 1));
+  const v = grid.windDir[Math.min(hour, grid.hours - 1)][r][c];
+  return v === null || v === undefined ? null : v;
 }
 
 // ---------------------------------------------------------------------
@@ -495,9 +632,47 @@ function rainBandIndex(value) {
 }
 
 registerMapLayer({
+  id: "temperature",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("temperature")) return;
+    const hour = mapHourValue();
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const value = sampleGrid(mapGrid, "temp", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
+        if (value === null || value === undefined) continue;
+        ctx.fillStyle = MAP_TEMP_RAMP[bandIndexFor(value, MAP_TEMP_THRESHOLDS)];
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(px, py, cell, cell);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
+registerMapLayer({
+  id: "pressure",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("pressure")) return;
+    const hour = mapHourValue();
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const value = sampleGrid(mapGrid, "pressure", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
+        if (value === null || value === undefined) continue;
+        ctx.fillStyle = MAP_PRESSURE_RAMP[bandIndexFor(value, MAP_PRESSURE_THRESHOLDS)];
+        ctx.globalAlpha = 0.5;
+        ctx.fillRect(px, py, cell, cell);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
+registerMapLayer({
   id: "rain",
   draw(ctx, view) {
-    if (!mapGrid) return;
+    if (!mapGrid || !mapLayerVisible("rain")) return;
     const p = mapPalette();
     const hour = mapHourValue();
     // 6px cells. Small enough that the model's own grid doesn't show as
@@ -505,7 +680,7 @@ registerMapLayer({
     const cell = 6;
     for (let px = 0; px < view.w; px += cell) {
       for (let py = 0; py < view.h; py += cell) {
-        const value = sampleGrid(mapGrid, hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
+        const value = sampleGrid(mapGrid, "rain", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
         const band = rainBandIndex(value);
         if (band < 0) continue;
         ctx.fillStyle = p.ramp[band];
@@ -517,29 +692,177 @@ registerMapLayer({
   }
 });
 
+// Sparse arrows rather than one per grid cell — a 6px-spaced field of
+// arrows would be solid ink at this zoom. Spacing is in screen pixels,
+// not world distance, so the arrow density looks the same at every
+// zoom level rather than thinning out or clumping as radiusKm changes.
+const MAP_WIND_ARROW_SPACING_PX = 46;
+
+// Downwind, not meteorological "from" — matches the headline wind
+// arrow's own convention elsewhere in the app (anyRealWindDirection() /
+// the rotating arrow in app.js), on the same reasoning: "which way will
+// this push me" is more directly useful here than the raw met reading.
+function windArrowAngleRad(metFromDegrees) {
+  return ((metFromDegrees + 180) % 360) * Math.PI / 180;
+}
+
+registerMapLayer({
+  id: "wind",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("wind")) return;
+    const p = mapPalette();
+    const hour = mapHourValue();
+    const dashOffset = mapWindAnimOffset;
+    ctx.strokeStyle = p.ink;
+    ctx.fillStyle = p.ink;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+    for (let px = MAP_WIND_ARROW_SPACING_PX / 2; px < view.w; px += MAP_WIND_ARROW_SPACING_PX) {
+      for (let py = MAP_WIND_ARROW_SPACING_PX / 2; py < view.h; py += MAP_WIND_ARROW_SPACING_PX) {
+        const lat = view.lat(py), lon = view.lon(px);
+        const speed = sampleGrid(mapGrid, "windSpeed", hour, lat, lon);
+        const dir = sampleWindDir(mapGrid, hour, lat, lon);
+        if (speed === null || dir === null) continue;
+        const angle = windArrowAngleRad(dir);
+        // Length scales with speed but is clamped at both ends — a calm
+        // shouldn't disappear to a dot, and a gale shouldn't overrun the
+        // next arrow's own cell.
+        const len = 8 + Math.min(1, speed / 40) * 14;
+        const dx = Math.sin(angle), dy = -Math.cos(angle);
+        const x0 = px - dx * len * 0.5, y0 = py - dy * len * 0.5;
+        const x1 = px + dx * len * 0.5, y1 = py + dy * len * 0.5;
+
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        // The animated dash: a short "travelling" segment along the
+        // shaft rather than a static line, so the arrow reads as a flow
+        // direction rather than a fixed vector — a lightweight stand-in
+        // for a full particle animation, cheap enough to redraw every
+        // frame on a phone.
+        ctx.setLineDash([4, 5]);
+        ctx.lineDashOffset = -dashOffset;
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Arrowhead, fixed (not dashed) so the direction stays readable
+        // even mid-animation-cycle.
+        const headLen = 4.5;
+        const headAngle = Math.PI / 7;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(
+          x1 - Math.sin(angle - headAngle) * headLen,
+          y1 + Math.cos(angle - headAngle) * headLen
+        );
+        ctx.lineTo(
+          x1 - Math.sin(angle + headAngle) * headLen,
+          y1 + Math.cos(angle + headAngle) * headLen
+        );
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+});
+
 // The legend is DOM, not canvas — same reasoning as the crosshair: it
 // never needs redrawing mid-pan, and real text is sharper and far
 // cheaper to keep accessible than canvas-drawn labels would be. Called
-// from renderMap() so a palette change (paper/night/mono) is reflected
-// immediately rather than only on next page load.
-function renderRainLegend() {
-  const el = document.getElementById("mapRainLegend");
-  if (!el) return;
-  const p = mapPalette();
-  el.innerHTML = "";
-  RAIN_BAND_THRESHOLDS.forEach((threshold, i) => {
-    const swatch = document.createElement("span");
-    swatch.className = "map-legend-swatch";
-    swatch.style.background = p.ramp[i];
-    const label = document.createElement("span");
-    label.className = "map-legend-label";
-    label.textContent = i === RAIN_BAND_THRESHOLDS.length - 1 ? `${threshold}+` : `${threshold}`;
-    const item = document.createElement("span");
-    item.className = "map-legend-item";
-    item.append(swatch, label);
-    el.appendChild(item);
-  });
+// from renderMap() so a palette change (paper/night/mono) or a layer
+// toggle is reflected immediately rather than only on next page load.
+//
+// One row per VISIBLE colour-wash layer — rain, temperature, pressure —
+// each labelled so a legend showing up under the map always says which
+// quantity it's for; wind gets a plain caption instead, since an arrow
+// field's "value" is a direction and rough length, not a colour scale.
+function renderMapLegends() {
+  const container = document.getElementById("mapLegends");
+  if (!container) return;
+  container.innerHTML = "";
+
+  function addRow(labelText, thresholds, ramp, unit) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = labelText;
+    row.appendChild(caption);
+    const strip = document.createElement("div");
+    strip.className = "map-legend";
+    thresholds.forEach((threshold, i) => {
+      const swatch = document.createElement("span");
+      swatch.className = "map-legend-swatch";
+      swatch.style.background = ramp[i];
+      const label = document.createElement("span");
+      label.className = "map-legend-label";
+      if (threshold === -Infinity) {
+        label.textContent = `<${thresholds[1]}${unit}`;
+      } else if (i === thresholds.length - 1) {
+        label.textContent = `${threshold}+${unit}`;
+      } else {
+        label.textContent = `${threshold}${unit}`;
+      }
+      const item = document.createElement("span");
+      item.className = "map-legend-item";
+      item.append(swatch, label);
+      strip.appendChild(item);
+    });
+    row.appendChild(strip);
+    container.appendChild(row);
+  }
+
+  if (mapLayerVisible("rain")) {
+    const p = mapPalette();
+    addRow("Rain, mm/hr", RAIN_BAND_THRESHOLDS, p.ramp, "");
+  }
+  if (mapLayerVisible("temperature")) {
+    addRow("Temperature, °C", MAP_TEMP_THRESHOLDS, MAP_TEMP_RAMP, "");
+  }
+  if (mapLayerVisible("pressure")) {
+    addRow("Pressure, hPa", MAP_PRESSURE_THRESHOLDS, MAP_PRESSURE_RAMP, "");
+  }
+  if (mapLayerVisible("wind")) {
+    const note = document.createElement("div");
+    note.className = "map-legend-row map-legend-note";
+    note.textContent = "Wind — arrow points downwind, longer = stronger";
+    container.appendChild(note);
+  }
 }
+
+// ---------------------------------------------------------------------
+// Wind animation
+//
+// A single shared offset, advanced on a plain interval and read by
+// every arrow the wind layer draws — not a per-arrow animation, so
+// hundreds of arrows cost one running timer rather than hundreds.
+// Runs only while the wind layer is actually visible and the tab is in
+// the foreground; there is no point spending battery animating
+// something nobody can see.
+// ---------------------------------------------------------------------
+let mapWindAnimOffset = 0;
+let mapWindAnimTimer = null;
+
+function mapWindAnimShouldRun() {
+  return mapLayerVisible("wind") && document.visibilityState !== "hidden";
+}
+
+function startOrStopMapWindAnim() {
+  const shouldRun = mapWindAnimShouldRun();
+  if (shouldRun && !mapWindAnimTimer) {
+    mapWindAnimTimer = setInterval(() => {
+      mapWindAnimOffset = (mapWindAnimOffset + 1) % 9;
+      renderMap();
+    }, 90);
+  } else if (!shouldRun && mapWindAnimTimer) {
+    clearInterval(mapWindAnimTimer);
+    mapWindAnimTimer = null;
+  }
+}
+
+document.addEventListener("visibilitychange", startOrStopMapWindAnim);
 
 registerMapLayer({
   id: "rings",
@@ -770,7 +1093,7 @@ function renderMap() {
     try { layer.draw(ctx, view); } catch { /* one bad layer must not blank the map */ }
     ctx.restore();
   });
-  renderRainLegend();
+  renderMapLegends();
   updateMapChrome();
 }
 
@@ -911,9 +1234,28 @@ mapHourInput?.addEventListener("input", renderMap);
 
 window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
 
+// Layer toggle checkboxes — built once from MAP_LAYER_IDS rather than
+// four near-identical listeners, so adding a fifth layer later is one
+// entry in that array plus a matching checkbox in map.html, not another
+// hand-written block here.
+const mapLayerToggleEls = {};
+MAP_LAYER_IDS.forEach(id => {
+  const el = document.getElementById(`mapLayer_${id}`);
+  if (!el) return;
+  mapLayerToggleEls[id] = el;
+  const toggles = loadMapLayerToggles();
+  el.checked = !!toggles[id];
+  el.addEventListener("change", () => {
+    saveMapLayerToggle(id, el.checked);
+    if (id === "wind") startOrStopMapWindAnim();
+    renderMap();
+  });
+});
+
 (async function initMap() {
   sizeMapCanvas();
   renderMap();
+  startOrStopMapWindAnim();
 
   await resolveMapHome();
   // Only recentre if nothing was stored — a remembered position must

@@ -52,10 +52,21 @@
       <div id="mapScale" class="map-scale"></div>
     </div>
 
-    <!-- Reads current mm/hr against the exact same colour ramp the rain
-         layer just painted — see RAIN_BAND_THRESHOLDS / renderRainLegend()
-         in map.js, the single source of truth for both. -->
-    <div id="mapRainLegend" class="map-legend" aria-label="Rain intensity, mm per hour"></div>
+    <!-- Independent toggles, not a single-layer picker — see the note by
+         MAP_LAYER_DEFAULTS in map.js for why they can all be on together
+         (and what that costs visually when they are). -->
+    <div class="map-layer-toggles">
+      <label class="check"><input type="checkbox" id="mapLayer_rain"><span>Rain</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_wind"><span>Wind</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_temperature"><span>Temperature</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_pressure"><span>Pressure</span></label>
+    </div>
+
+    <!-- One row per active colour-wash layer, built by renderMapLegends()
+         in map.js — reads the exact same threshold/ramp arrays the
+         layers themselves paint with, so this can never drift out of
+         sync with what's actually on screen. -->
+    <div id="mapLegends" aria-live="polite"></div>
 
     <p id="mapStatus" class="actual-status status-error-only"></p>
 
