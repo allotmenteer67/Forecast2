@@ -40,16 +40,16 @@ const MAP_BACK_ENABLED_KEY = "forecast-compare:map:backButton";
 // refetching at arbitrary extents. It also avoids fighting the sheet's
 // own dismiss gesture, and one-handed tapping beats a two-finger
 // gesture when you are stood at the allotment holding a spade.
-const MAP_ZOOM_RADII_KM = [25, 50, 100];
+const MAP_ZOOM_RADII_KM = [25, 50, 100, 150];
 
 // Ring radii per zoom level. Fixed rings would be either invisible at
 // the widest level or off-canvas at the closest.
-const MAP_RING_RADII_KM = { 25: [10, 20], 50: [15, 30], 100: [30, 60] };
+const MAP_RING_RADII_KM = { 25: [10, 20], 50: [15, 30], 100: [30, 60], 150: [50, 100] };
 // A separate table of genuinely round MILE values, not the km ones
 // converted — 30km becomes "19mi" when converted, which reads as an
 // oddly specific measurement nobody actually thinks in. 20mi is what
 // someone using miles would actually expect to see there.
-const MAP_RING_RADII_MI = { 25: [5, 10], 50: [10, 20], 100: [20, 40] };
+const MAP_RING_RADII_MI = { 25: [5, 10], 50: [10, 20], 100: [20, 40], 150: [30, 60] };
 
 // The grid is fetched wider than it is displayed, so ordinary panning
 // reveals data already in hand rather than triggering a refetch. Only
@@ -68,7 +68,7 @@ const MAP_FETCH_MARGIN = 1.5;
 // response was routinely taking longer to arrive than the fetch
 // timeout allowed, especially on a slower connection. Detail that
 // dense was never visible at that zoom anyway.
-const MAP_GRID_SPACING_KM = { 25: 10, 50: 14, 100: 20 };
+const MAP_GRID_SPACING_KM = { 25: 10, 50: 14, 100: 20, 150: 25 };
 
 const MAP_STALE_MS = 30 * 60 * 1000;
 
@@ -901,8 +901,12 @@ const MAP_WIND_ARROW_SPACING_PX = 46;
 // arrows are randomly bigger" without a key to compare against. Bands
 // follow the everyday language for wind (calm/breezy/windy/gale)
 // rather than an arbitrary split.
-const MAP_WIND_SPEED_THRESHOLDS = [0, 8, 20, 35]; // mph, lower bound per band
-const MAP_WIND_ARROW_LENGTHS = [7, 13, 19, 25]; // px, one per band above
+// 10mph divisions, as many as comfortably fit across an iPhone-width
+// legend without crowding — six bands reads cleanly at a glance (the
+// whole point of banding rather than a continuous scale) and covers
+// everything from calm to a genuine severe gale.
+const MAP_WIND_SPEED_THRESHOLDS = [0, 10, 20, 30, 40, 50]; // mph, lower bound per band
+const MAP_WIND_ARROW_LENGTHS = [8, 12, 16, 20, 24, 28]; // px, one per band above
 
 function windArrowLength(speedMph) {
   return MAP_WIND_ARROW_LENGTHS[bandIndexFor(speedMph, MAP_WIND_SPEED_THRESHOLDS)];
@@ -1078,26 +1082,33 @@ function renderMapLegends() {
     const strip = document.createElement("div");
     strip.className = "map-legend";
     const svgNS = "http://www.w3.org/2000/svg";
+    // Horizontal, not the map's own vertical arrows — a vertical arrow
+    // tall enough to show the longest band's real length was taller
+    // than the icon box, clipping its own point off. Horizontal gives
+    // it the width to grow into instead, which a legend row has plenty
+    // of, and doesn't need to match the compass-direction arrows on the
+    // map itself (this key is about relative LENGTH = speed, not
+    // direction).
+    const svgW = 44, svgH = 20, cy = 10, startX = 4;
     MAP_WIND_SPEED_THRESHOLDS.forEach((threshold, i) => {
       const len = MAP_WIND_ARROW_LENGTHS[i];
+      const tipX = startX + len;
       const item = document.createElement("span");
       item.className = "map-legend-item";
 
       const svg = document.createElementNS(svgNS, "svg");
-      svg.setAttribute("width", "28");
-      svg.setAttribute("height", "26");
-      svg.setAttribute("viewBox", "0 0 28 26");
-      const cx = 14, cy = 18;
-      const tipY = cy - len;
+      svg.setAttribute("width", String(svgW));
+      svg.setAttribute("height", String(svgH));
+      svg.setAttribute("viewBox", `0 0 ${svgW} ${svgH}`);
       const line = document.createElementNS(svgNS, "line");
-      line.setAttribute("x1", String(cx)); line.setAttribute("y1", String(cy));
-      line.setAttribute("x2", String(cx)); line.setAttribute("y2", String(tipY));
+      line.setAttribute("x1", String(startX)); line.setAttribute("y1", String(cy));
+      line.setAttribute("x2", String(tipX)); line.setAttribute("y2", String(cy));
       line.setAttribute("stroke", p.ink);
       line.setAttribute("stroke-width", "1.8");
       line.setAttribute("stroke-linecap", "round");
       svg.appendChild(line);
       const head = document.createElementNS(svgNS, "polygon");
-      head.setAttribute("points", `${cx},${tipY - 6} ${cx - 4},${tipY + 1} ${cx + 4},${tipY + 1}`);
+      head.setAttribute("points", `${tipX + 6},${cy} ${tipX - 1},${cy - 4} ${tipX - 1},${cy + 4}`);
       head.setAttribute("fill", p.ink);
       svg.appendChild(head);
       item.appendChild(svg);
