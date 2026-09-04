@@ -26,7 +26,7 @@
   <main class="app">
     <header>
       <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <h1>Map</h1>
+      <h1 class="map-page-title">Map</h1>
     </header>
 
     <!-- Controls sit ABOVE the map, not beside or below it: there is more
@@ -82,7 +82,10 @@
           <strong>Hour</strong>
           <span id="mapHourLabel">Now</span>
         </div>
-        <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
+        <div class="map-hour-row">
+          <button id="mapHourPlay" type="button" class="map-nav-button map-hour-play">Play</button>
+          <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
+        </div>
         <div class="range-labels">
           <span>Now</span>
           <span>+24h</span>

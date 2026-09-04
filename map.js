@@ -386,8 +386,16 @@ function buildGridShape(centre, radiusKm) {
 function buildStubGrid(centre, radiusKm) {
   const { lat0, lon0, dLat, dLon, rows, cols } = buildGridShape(centre, radiusKm);
   const hours = 48;
+  // Rounded down to the top of the current hour — real Open-Meteo data
+  // is always bucketed on the hour, and the stub should behave the same
+  // way rather than showing minute-precise labels the live data never
+  // would.
+  const startOfHour = new Date();
+  startOfHour.setMinutes(0, 0, 0);
+  const times = [];
   const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [];
   for (let t = 0; t < hours; t++) {
+    times.push(new Date(startOfHour.getTime() + t * 3600000).toISOString());
     const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [];
     for (let r = 0; r < rows; r++) {
       const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [];
@@ -406,7 +414,7 @@ function buildStubGrid(centre, radiusKm) {
     rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
     windSpeed.push(speedFrame); windDir.push(dirFrame);
   }
-  return { lat0, lon0, dLat, dLon, rows, cols, hours, rain, temp, pressure, windSpeed, windDir, stub: true };
+  return { lat0, lon0, dLat, dLon, rows, cols, hours, times, rain, temp, pressure, windSpeed, windDir, stub: true };
 }
 
 const MAP_FORECAST_HOURS = 48;
@@ -507,6 +515,7 @@ async function fetchWeatherGrid(centre, radiusKm) {
 
   return {
     lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
+    times: points[0].hourly.time.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
     rain, temp, pressure, windSpeed, windDir, stub: false
   };
 }
@@ -698,6 +707,19 @@ registerMapLayer({
 // zoom level rather than thinning out or clumping as radiusKm changes.
 const MAP_WIND_ARROW_SPACING_PX = 46;
 
+// Fixed length per speed band, not a continuous scale — same reasoning
+// as rain's discrete bands: a handful of clearly different sizes reads
+// at a glance, where a continuous gradient just looks like "some
+// arrows are randomly bigger" without a key to compare against. Bands
+// follow the everyday language for wind (calm/breezy/windy/gale)
+// rather than an arbitrary split.
+const MAP_WIND_SPEED_THRESHOLDS = [0, 8, 20, 35]; // mph, lower bound per band
+const MAP_WIND_ARROW_LENGTHS = [7, 13, 19, 25]; // px, one per band above
+
+function windArrowLength(speedMph) {
+  return MAP_WIND_ARROW_LENGTHS[bandIndexFor(speedMph, MAP_WIND_SPEED_THRESHOLDS)];
+}
+
 // Downwind, not meteorological "from" — matches the headline wind
 // arrow's own convention elsewhere in the app (anyRealWindDirection() /
 // the rotating arrow in app.js), on the same reasoning: "which way will
@@ -712,10 +734,9 @@ registerMapLayer({
     if (!mapGrid || !mapLayerVisible("wind")) return;
     const p = mapPalette();
     const hour = mapHourValue();
-    const dashOffset = mapWindAnimOffset;
     ctx.strokeStyle = p.ink;
     ctx.fillStyle = p.ink;
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.8;
     ctx.lineCap = "round";
     for (let px = MAP_WIND_ARROW_SPACING_PX / 2; px < view.w; px += MAP_WIND_ARROW_SPACING_PX) {
       for (let py = MAP_WIND_ARROW_SPACING_PX / 2; py < view.h; py += MAP_WIND_ARROW_SPACING_PX) {
@@ -724,32 +745,21 @@ registerMapLayer({
         const dir = sampleWindDir(mapGrid, hour, lat, lon);
         if (speed === null || dir === null) continue;
         const angle = windArrowAngleRad(dir);
-        // Length scales with speed but is clamped at both ends — a calm
-        // shouldn't disappear to a dot, and a gale shouldn't overrun the
-        // next arrow's own cell.
-        const len = 8 + Math.min(1, speed / 40) * 14;
+        const len = windArrowLength(speed);
         const dx = Math.sin(angle), dy = -Math.cos(angle);
         const x0 = px - dx * len * 0.5, y0 = py - dy * len * 0.5;
         const x1 = px + dx * len * 0.5, y1 = py + dy * len * 0.5;
 
         ctx.globalAlpha = 0.8;
         ctx.beginPath();
-        // The animated dash: a short "travelling" segment along the
-        // shaft rather than a static line, so the arrow reads as a flow
-        // direction rather than a fixed vector — a lightweight stand-in
-        // for a full particle animation, cheap enough to redraw every
-        // frame on a phone.
-        ctx.setLineDash([4, 5]);
-        ctx.lineDashOffset = -dashOffset;
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
         ctx.stroke();
-        ctx.setLineDash([]);
 
-        // Arrowhead, fixed (not dashed) so the direction stays readable
-        // even mid-animation-cycle.
-        const headLen = 4.5;
-        const headAngle = Math.PI / 7;
+        // Bigger head than a typical arrowhead so the direction reads
+        // clearly at map size, even for the shortest (calm) arrows.
+        const headLen = 8;
+        const headAngle = Math.PI / 6;
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         ctx.lineTo(
@@ -824,45 +834,7 @@ function renderMapLegends() {
   if (mapLayerVisible("pressure")) {
     addRow("Pressure, hPa", MAP_PRESSURE_THRESHOLDS, MAP_PRESSURE_RAMP, "");
   }
-  if (mapLayerVisible("wind")) {
-    const note = document.createElement("div");
-    note.className = "map-legend-row map-legend-note";
-    note.textContent = "Wind — arrow points downwind, longer = stronger";
-    container.appendChild(note);
-  }
 }
-
-// ---------------------------------------------------------------------
-// Wind animation
-//
-// A single shared offset, advanced on a plain interval and read by
-// every arrow the wind layer draws — not a per-arrow animation, so
-// hundreds of arrows cost one running timer rather than hundreds.
-// Runs only while the wind layer is actually visible and the tab is in
-// the foreground; there is no point spending battery animating
-// something nobody can see.
-// ---------------------------------------------------------------------
-let mapWindAnimOffset = 0;
-let mapWindAnimTimer = null;
-
-function mapWindAnimShouldRun() {
-  return mapLayerVisible("wind") && document.visibilityState !== "hidden";
-}
-
-function startOrStopMapWindAnim() {
-  const shouldRun = mapWindAnimShouldRun();
-  if (shouldRun && !mapWindAnimTimer) {
-    mapWindAnimTimer = setInterval(() => {
-      mapWindAnimOffset = (mapWindAnimOffset + 1) % 9;
-      renderMap();
-    }, 90);
-  } else if (!shouldRun && mapWindAnimTimer) {
-    clearInterval(mapWindAnimTimer);
-    mapWindAnimTimer = null;
-  }
-}
-
-document.addEventListener("visibilitychange", startOrStopMapWindAnim);
 
 registerMapLayer({
   id: "rings",
@@ -1058,8 +1030,19 @@ function mapHourValue() {
 // question being asked is "will it be raining when I get there", and
 // that is a clock time. Days are named once they stop being today,
 // because "09:00" alone is ambiguous over a 48-hour slider.
+//
+// Reads the grid's own hourly timestamps rather than adding
+// hoursAhead*3600000 to the exact current instant — Open-Meteo's hourly
+// buckets always land on the hour, but "now" usually doesn't, so that
+// arithmetic used to show things like "03:36" for the +1h mark. That
+// implies a precision (rain arriving at exactly 03:36, not 03:00 or
+// 04:00) the forecast never claimed — same hour-only convention as the
+// front page's own hourly slider and every other scrolling view in the
+// app. Falls back to the old arithmetic only in the brief window before
+// the first grid has loaded.
 function mapHourClock(hoursAhead) {
-  const when = new Date(Date.now() + hoursAhead * 3600000);
+  const iso = mapGrid?.times?.[hoursAhead];
+  const when = iso ? new Date(iso) : new Date(Date.now() + hoursAhead * 3600000);
   const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const isToday = when.toDateString() === new Date().toDateString();
   if (hoursAhead === 0) return `Now, ${time}`;
@@ -1230,7 +1213,47 @@ document.getElementById("mapZoomOut")?.addEventListener("click", () => {
   renderMap();
 });
 
-mapHourInput?.addEventListener("input", renderMap);
+// Manual dragging always wins — the "input" listener below stops
+// playback the instant someone touches the slider themselves, the same
+// "a deliberate action beats an automatic one" rule the front page's
+// own hourly view already follows for its 5-second-hold-turned-
+// persistent behaviour.
+let mapHourPlayTimer = null;
+const mapHourPlayButton = document.getElementById("mapHourPlay");
+
+function stopMapHourPlay() {
+  if (mapHourPlayTimer) {
+    clearInterval(mapHourPlayTimer);
+    mapHourPlayTimer = null;
+  }
+  if (mapHourPlayButton) mapHourPlayButton.textContent = "Play";
+}
+
+function startMapHourPlay() {
+  if (mapHourPlayTimer || !mapHourInput) return;
+  mapHourPlayTimer = setInterval(() => {
+    const next = (parseInt(mapHourInput.value, 10) || 0) + 1;
+    mapHourInput.value = next > 47 ? 0 : next;
+    renderMap();
+  }, 700);
+  if (mapHourPlayButton) mapHourPlayButton.textContent = "Pause";
+}
+
+mapHourPlayButton?.addEventListener("click", () => {
+  if (mapHourPlayTimer) stopMapHourPlay(); else startMapHourPlay();
+});
+
+// Stops playback rather than fighting it — a background tab advancing
+// the slider with nobody watching serves no purpose and just wastes a
+// timer.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") stopMapHourPlay();
+});
+
+mapHourInput?.addEventListener("input", () => {
+  stopMapHourPlay();
+  renderMap();
+});
 
 window.addEventListener("resize", () => { sizeMapCanvas(); renderMap(); });
 
@@ -1247,7 +1270,6 @@ MAP_LAYER_IDS.forEach(id => {
   el.checked = !!toggles[id];
   el.addEventListener("change", () => {
     saveMapLayerToggle(id, el.checked);
-    if (id === "wind") startOrStopMapWindAnim();
     renderMap();
   });
 });
@@ -1255,7 +1277,6 @@ MAP_LAYER_IDS.forEach(id => {
 (async function initMap() {
   sizeMapCanvas();
   renderMap();
-  startOrStopMapWindAnim();
 
   await resolveMapHome();
   // Only recentre if nothing was stored — a remembered position must

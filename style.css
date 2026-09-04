@@ -122,6 +122,16 @@ h1 {
   color: var(--accent-dark);
 }
 
+/* Map only, not every page's title — the back-link above it already
+   sits top-left, and this is the one page where a left-aligned title
+   sits directly under whatever iOS/Safari chrome occupies that corner
+   (share/tabs icons in-browser, or the notch/camera area once
+   installed as a home-screen app). Centring moves it clear of both
+   without touching the layout anywhere else. */
+.map-page-title {
+  text-align: center;
+}
+
 header p {
   margin: 0;
   color: #5b6b60;
@@ -572,7 +582,11 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 32px;
+  /* Was 32px. The visible track is still thin, but the wider hit area
+     was still landing short of a reliable drag target on iPad — see
+     the enlarged thumb below, which is what actually grows the tappable
+     region, this just gives it room to sit centred. */
+  height: 44px;
   background: transparent;
   touch-action: none;
 }
@@ -585,9 +599,13 @@ input[type="range"]::-webkit-slider-runnable-track {
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 20px;
-  height: 20px;
-  margin-top: -8px;
+  /* Was 20px. Apple's own minimum recommended touch target is 44px;
+     this doesn't go quite that far (it would visually dwarf the thin
+     track) but it's a meaningful step up from a target people were
+     visibly missing. */
+  width: 26px;
+  height: 26px;
+  margin-top: -11px;
   border-radius: 50%;
   background: white;
   border: 2px solid var(--accent);
@@ -612,8 +630,8 @@ input[type="range"]::-moz-range-progress {
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: white;
   border: 2px solid var(--accent);
@@ -1993,6 +2011,25 @@ footer {
 }
 .place-ambiguity-option:last-child { margin-bottom: 0; }
 
+/* A single small nudge, not a full picker — deliberately lighter-weight
+   than .place-ambiguity-picker above it, since accepting or ignoring
+   this costs nothing (no wrong choice to make, unlike disambiguating a
+   place name) and it shouldn't compete visually with the status line
+   it sits next to. */
+.add-to-other-prompt {
+  margin-top: 6px;
+}
+
+.add-to-other-button {
+  padding: 6px 12px;
+  border: 1px solid #c3d0c6;
+  border-radius: 999px;
+  background: white;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* ---- Appearance: colour theme swatches (Settings) ----
    Each swatch shows its OWN theme's accent colour regardless of
    whichever theme is currently active — so these can't just read
@@ -2189,6 +2226,21 @@ footer {
   white-space: nowrap;
   font-size: 11px;
   color: var(--accent-muted);
+}
+
+.map-hour-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.map-hour-play {
+  flex: 0 0 auto;
+  min-width: 60px;
+}
+
+.map-hour-row input[type="range"] {
+  flex: 1 1 auto;
 }
 
 .map-zoom-row {

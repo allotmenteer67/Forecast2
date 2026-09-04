@@ -993,46 +993,137 @@ function renderTideLocationsList() {
   if (typeof renderFishingMarkTypeList === "function") renderFishingMarkTypeList();
 }
 
-if (addTideLocationButton) {
-  addTideLocationButton.addEventListener("click", async () => {
-    const input = (tideLocationInput?.value || "").trim();
-    if (!input) {
-      setTideLocationStatus("Enter a postcode or place name first.", true);
-      return;
-    }
-    setTideLocationStatus("Looking up location…", false);
-    try {
-      const resolved = await resolveLocation(input);
-      const station = nearestTideStation(resolved.lat, resolved.lon);
-      const locations = loadTideLocations();
-      const newLocation = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        label: resolved.label || input,
-        // This location's OWN coordinates, distinct from the nearest EA
-        // gauge's (station.lat/lon) — needed so an Admiralty check
-        // searches near the actual saved place (e.g. Lyme Regis) rather
-        // than near its nearest gauge (Weymouth), which are often not
-        // the same station and can be tens of km apart. Without this,
-        // "nearest Admiralty station" was silently resolving to the
-        // gauge's own station instead of the real target location.
-        lat: resolved.lat,
-        lon: resolved.lon,
-        station
-      };
-      locations.push(newLocation);
-      saveTideLocations(locations);
-      if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
-      if (tideLocationInput) tideLocationInput.value = "";
-      setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
-      renderTideLocationsList();
-    } catch (err) {
-      if (err && err.name === "AmbiguousLocationError") {
-        setTideLocationStatus(`That place name matches more than one UK location — try adding a county.`, true);
-      } else {
-        setTideLocationStatus(err.message || "Couldn't look up that location.", true);
-      }
-    }
+// ---- Ambiguity picker, mirroring checkPlaceAmbiguity/AmbiguousLocationError
+// in app.js — a separate copy rather than generalising the original,
+// since that one is hardcoded to the weather page's own `postcode`
+// input and touching it risks the one flow that's already known to
+// work. Same behaviour, different input/picker elements. ----
+const tideLocationAmbiguityPicker = document.getElementById("tideLocationAmbiguityPicker");
+
+function clearTideLocationAmbiguityPicker() {
+  if (!tideLocationAmbiguityPicker) return;
+  tideLocationAmbiguityPicker.hidden = true;
+  tideLocationAmbiguityPicker.innerHTML = "";
+}
+
+async function checkTideLocationAmbiguity(trimmed, onChosen) {
+  clearTideLocationAmbiguityPicker();
+  if (!trimmed || looksLikePostcode(trimmed) || trimmed.includes(",")) return false;
+
+  try {
+    await resolveLocation(trimmed);
+    return false; // resolved cleanly — not ambiguous
+  } catch (err) {
+    if (!(err instanceof AmbiguousLocationError)) return false;
+    if (!tideLocationAmbiguityPicker) return false;
+
+    const heading = document.createElement("p");
+    heading.className = "place-ambiguity-heading";
+    heading.textContent = `More than one "${trimmed}" in the UK — which one?`;
+    tideLocationAmbiguityPicker.appendChild(heading);
+
+    err.candidates.forEach(candidate => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "place-ambiguity-option";
+      const qualified = [candidate.name, candidate.admin2 || candidate.admin1].filter(Boolean).join(", ");
+      button.textContent = [candidate.name, candidate.admin2, candidate.admin1, candidate.country].filter(Boolean).join(", ");
+      button.addEventListener("click", () => {
+        if (tideLocationInput) tideLocationInput.value = qualified;
+        clearTideLocationAmbiguityPicker();
+        onChosen(qualified);
+      });
+      tideLocationAmbiguityPicker.appendChild(button);
+    });
+
+    tideLocationAmbiguityPicker.hidden = false;
+    return true;
+  }
+}
+
+// ---- "Add to weather?" — one-way only. A tide spot is very often
+// somewhere worth checking the weather for too (a beach, a harbour), so
+// it's worth a nudge; the reverse isn't offered — most weather places
+// (home, work, the allotment) have no tide relevance at all, and
+// prompting for one every time would just be noise on the far more
+// common flow. ----
+const tideAddToWeatherPrompt = document.getElementById("tideAddToWeatherPrompt");
+
+function renderAddToWeatherPrompt(resolved, rawInput) {
+  if (!tideAddToWeatherPrompt) return;
+  tideAddToWeatherPrompt.innerHTML = "";
+  tideAddToWeatherPrompt.hidden = true;
+
+  if (typeof loadPlaces !== "function" || typeof savePlaces !== "function") return;
+  if (typeof looksLikePostcode !== "function") return;
+
+  const pc = looksLikePostcode(rawInput) ? rawInput.toUpperCase() : rawInput;
+  const places = loadPlaces();
+  if (places.some(place => place.postcode === pc)) return; // already a weather place
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "add-to-other-button";
+  button.textContent = "Add to weather?";
+  button.addEventListener("click", () => {
+    places.push({ postcode: pc, label: resolved.label || pc });
+    savePlaces(places);
+    tideAddToWeatherPrompt.hidden = true;
+    if (typeof renderPlacesList === "function") renderPlacesList();
+    if (typeof renderPlaceMenu === "function") renderPlaceMenu();
   });
+  tideAddToWeatherPrompt.appendChild(button);
+  tideAddToWeatherPrompt.hidden = false;
+}
+
+async function performAddTideLocation() {
+  const input = (tideLocationInput?.value || "").trim();
+  if (!input) {
+    setTideLocationStatus("Enter a postcode or place name first.", true);
+    return;
+  }
+
+  const isAmbiguous = await checkTideLocationAmbiguity(input, performAddTideLocation);
+  if (isAmbiguous) return;
+
+  setTideLocationStatus("Looking up location…", false);
+  if (tideAddToWeatherPrompt) tideAddToWeatherPrompt.hidden = true;
+  try {
+    const resolved = await resolveLocation(input);
+    const station = nearestTideStation(resolved.lat, resolved.lon);
+    const locations = loadTideLocations();
+    const newLocation = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: resolved.label || input,
+      // This location's OWN coordinates, distinct from the nearest EA
+      // gauge's (station.lat/lon) — needed so an Admiralty check
+      // searches near the actual saved place (e.g. Lyme Regis) rather
+      // than near its nearest gauge (Weymouth), which are often not
+      // the same station and can be tens of km apart. Without this,
+      // "nearest Admiralty station" was silently resolving to the
+      // gauge's own station instead of the real target location.
+      lat: resolved.lat,
+      lon: resolved.lon,
+      station
+    };
+    locations.push(newLocation);
+    saveTideLocations(locations);
+    if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
+    if (tideLocationInput) tideLocationInput.value = "";
+    setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
+    renderTideLocationsList();
+    renderAddToWeatherPrompt(resolved, input);
+  } catch (err) {
+    if (err && err.name === "AmbiguousLocationError") {
+      setTideLocationStatus(`That place name matches more than one UK location — try adding a county.`, true);
+    } else {
+      setTideLocationStatus(err.message || "Couldn't look up that location.", true);
+    }
+  }
+}
+
+if (addTideLocationButton) {
+  addTideLocationButton.addEventListener("click", performAddTideLocation);
 }
 
 if (tideLocationsList) renderTideLocationsList();

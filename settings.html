@@ -68,10 +68,12 @@
             <input id="tideLocationInput" type="text" placeholder="Postcode or place name" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false">
           </div>
         </label>
+        <div id="tideLocationAmbiguityPicker" class="place-ambiguity-picker" hidden></div>
         <div class="location-actions">
           <button id="addTideLocationButton" type="button">Add</button>
         </div>
         <p id="tideLocationStatus" class="actual-status status-error-only"></p>
+        <div id="tideAddToWeatherPrompt" class="add-to-other-prompt" hidden></div>
 
         <p class="note">Card colour</p>
         <div id="tideCardColorSwatches" class="theme-swatches"></div>
