@@ -70,10 +70,13 @@
 
     <p id="mapStatus" class="actual-status status-error-only"></p>
 
+    <!-- Buttons removed — double-tap the map itself to zoom (in,
+         centred on where you tapped; a further tap once already at the
+         closest level wraps back out to the widest view). The label
+         stays as a plain read-out of the current zoom, no longer a
+         control. -->
     <div class="map-zoom-row">
-      <button id="mapZoomIn" type="button" class="map-nav-button">Zoom in</button>
       <span id="mapZoomLabel" class="map-zoom-label"></span>
-      <button id="mapZoomOut" type="button" class="map-nav-button">Zoom out</button>
     </div>
 
     <section class="controls">

@@ -45,6 +45,11 @@ const MAP_ZOOM_RADII_KM = [25, 50, 100];
 // Ring radii per zoom level. Fixed rings would be either invisible at
 // the widest level or off-canvas at the closest.
 const MAP_RING_RADII_KM = { 25: [10, 20], 50: [15, 30], 100: [30, 60] };
+// A separate table of genuinely round MILE values, not the km ones
+// converted — 30km becomes "19mi" when converted, which reads as an
+// oddly specific measurement nobody actually thinks in. 20mi is what
+// someone using miles would actually expect to see there.
+const MAP_RING_RADII_MI = { 25: [5, 10], 50: [10, 20], 100: [20, 40] };
 
 // The grid is fetched wider than it is displayed, so ordinary panning
 // reveals data already in hand rather than triggering a refetch. Only
@@ -844,21 +849,24 @@ registerMapLayer({
     if (!home) return;
     const hx = view.x(home.lon), hy = view.y(home.lat);
     const imperial = usingMiles();
+    // Pick the table already in the right unit rather than picking a km
+    // radius and converting it for the label — see MAP_RING_RADII_MI's
+    // own comment for why that produced odd numbers like "19mi".
+    const radii = imperial ? (MAP_RING_RADII_MI[view.radiusKm] || [20, 40]) : (MAP_RING_RADII_KM[view.radiusKm] || [30, 60]);
+    const kmPerUnit = imperial ? 1.60934 : 1;
     ctx.save();
     ctx.setLineDash([3, 4]);
     ctx.strokeStyle = p.ring;
     ctx.lineWidth = 1;
     ctx.globalAlpha = 0.7;
-    (MAP_RING_RADII_KM[view.radiusKm] || [30, 60]).forEach(km => {
+    radii.forEach(value => {
+      const km = value * kmPerUnit;
       ctx.beginPath();
       ctx.arc(hx, hy, km * view.pxPerKm, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      // Units follow the choice already made in Settings rather than
-      // introducing a map-specific one.
-      const shown = imperial ? Math.round(km * 0.621371) : km;
-      const text = `${shown} ${imperial ? "mi" : "km"}`;
+      const text = `${value} ${imperial ? "mi" : "km"}`;
       ctx.font = "600 13px -apple-system, system-ui, sans-serif";
       // Outlined in the base colour first: these labels sit on top of
       // whatever the rain layer drew, which at the heavy end is dark
@@ -951,9 +959,16 @@ async function resolveMapHome() {
 function usingMiles() {
   try {
     const units = loadConditionUnits();
-    // Rain's unit is the closest thing to a distance preference the app
-    // already stores; no new setting is introduced for the map.
-    return units.rain === "imperial";
+    // Wind, not Rain — a UK user very commonly has mm for rain and mph
+    // for wind at the same time (the app's own README notes exactly
+    // this as a real user's actual settings), so Rain's unit was often
+    // giving the wrong answer for anyone in that entirely normal
+    // combination. Wind's unit is the one actually about distance/speed
+    // rather than a depth measurement, making it the closer proxy for
+    // "does this person think in miles or km" — still no new map-
+    // specific setting introduced, just reading the more relevant one
+    // of the two that already exist.
+    return units.wind === "imperial";
   } catch {
     return false;
   }
@@ -1120,25 +1135,46 @@ function updateMapChrome() {
 }
 
 // ---------------------------------------------------------------------
-// Panning
+// Panning, tap, and double-tap-to-zoom
 //
 // Single-finger drag, which means touch-action: none on the canvas —
 // the canvas stops the page scrolling over itself. That is why drag
 // exists ONLY on this page and the front-page strip is tap-only: a
 // scroll-blocking canvas inside a scrolling column feels broken.
+//
+// Zoom buttons were tried first and didn't work well in practice — a
+// double-tap (in, recentring on wherever was tapped) plus wrapping back
+// out to the widest view once already at the closest level covers both
+// directions from one gesture, with no dedicated zoom-out needed and no
+// extra button added to a page already growing a few "back to
+// somewhere" controls (see the Home/Back buttons above).
 // ---------------------------------------------------------------------
 let panPointerId = null;
 let panLast = null;
+let panStart = null;
+let panMoved = false;
+let lastTapAt = 0;
+let lastTapPos = null;
+
+const MAP_TAP_MOVE_TOLERANCE_PX = 10; // beyond this it's a drag, not a tap
+const MAP_TAP_MAX_DURATION_MS = 400;
+const MAP_DOUBLE_TAP_WINDOW_MS = 350;
+const MAP_DOUBLE_TAP_DISTANCE_PX = 40; // two taps in roughly the same spot, not two unrelated taps
 
 if (mapCanvas) {
   mapCanvas.addEventListener("pointerdown", e => {
     panPointerId = e.pointerId;
     panLast = { x: e.clientX, y: e.clientY };
+    panStart = { x: e.clientX, y: e.clientY, time: Date.now() };
+    panMoved = false;
     mapCanvas.setPointerCapture(e.pointerId);
   });
 
   mapCanvas.addEventListener("pointermove", e => {
     if (e.pointerId !== panPointerId || !panLast) return;
+    if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
+      panMoved = true;
+    }
     // No dpr correction here any more: pointer coordinates and the
     // view are both in CSS pixels now.
     const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
@@ -1152,10 +1188,50 @@ if (mapCanvas) {
     renderMap();
   });
 
+  // Zooms in centred on wherever was tapped — repeated double-taps on
+  // the same spot walk progressively closer to it, matching how this
+  // gesture behaves everywhere else (Photos, Maps). Wrapping back out
+  // to the widest level deliberately does NOT recentre: that one reads
+  // as "show me everything again", not "look closer here".
+  function handleDoubleTap(e) {
+    const rect = mapCanvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+    const tappedLat = view.lat(py);
+    const tappedLon = view.lon(px);
+
+    if (mapZoomIndex > 0) {
+      mapZoomIndex--;
+      mapCentre = { lat: tappedLat, lon: tappedLon };
+    } else {
+      mapZoomIndex = MAP_ZOOM_RADII_KM.length - 1;
+    }
+    saveMapZoom(mapZoomIndex);
+    saveMapCentre(mapCentre);
+    renderMap();
+    ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+  }
+
   function endPan(e) {
     if (e.pointerId !== panPointerId) return;
     panPointerId = null;
+    const wasTap = !panMoved && Date.now() - panStart.time < MAP_TAP_MAX_DURATION_MS;
     panLast = null;
+
+    if (wasTap) {
+      const now = Date.now();
+      const dist = lastTapPos ? Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y) : Infinity;
+      if (now - lastTapAt < MAP_DOUBLE_TAP_WINDOW_MS && dist < MAP_DOUBLE_TAP_DISTANCE_PX) {
+        lastTapAt = 0;
+        lastTapPos = null;
+        handleDoubleTap(e);
+        return; // handleDoubleTap already saves/refetches/renders — the plain single-tap bookkeeping below is skipped
+      }
+      lastTapAt = now;
+      lastTapPos = { x: e.clientX, y: e.clientY };
+    }
+
     saveMapCentre(mapCentre);
     // Only refetches if the drag left the margin — panning back and
     // forth over the same ground costs nothing.
@@ -1197,20 +1273,6 @@ document.getElementById("mapAdopt")?.addEventListener("click", () => {
     localStorage.setItem(CURRENT_POSTCODE_KEY, `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`);
   } catch {}
   location.href = "index.html";
-});
-
-document.getElementById("mapZoomIn")?.addEventListener("click", () => {
-  if (mapZoomIndex > 0) mapZoomIndex--;
-  saveMapZoom(mapZoomIndex);
-  ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-  renderMap();
-});
-
-document.getElementById("mapZoomOut")?.addEventListener("click", () => {
-  if (mapZoomIndex < MAP_ZOOM_RADII_KM.length - 1) mapZoomIndex++;
-  saveMapZoom(mapZoomIndex);
-  ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-  renderMap();
 });
 
 // Manual dragging always wins — the "input" listener below stops
