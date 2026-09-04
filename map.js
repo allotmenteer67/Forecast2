@@ -734,16 +734,29 @@ const TERRAIN_SPACING_KM = { 25: 3, 50: 5, 100: 8, 150: 12 };
 // localStorage's ~5MB ceiling is shared with FFV history, tide data and
 // settings — filling it with terrain could break those. IndexedDB is
 // built for exactly this and gives far more headroom.
+// Cached at module scope rather than opened fresh in every
+// terrainCacheGet/Set call — panning and zooming call these often, and
+// indexedDB.open() left uncached was quietly leaving one connection
+// open per call for the life of the page (nothing ever closed them),
+// which is exactly the kind of slow leak that only shows up after a
+// long session. One shared connection, opened once, fixes it.
+let terrainDbPromise = null;
 function terrainDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(TERRAIN_DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(TERRAIN_STORE)) db.createObjectStore(TERRAIN_STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!terrainDbPromise) {
+    terrainDbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(TERRAIN_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(TERRAIN_STORE)) db.createObjectStore(TERRAIN_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        terrainDbPromise = null; // let a later call retry rather than staying broken forever
+        reject(req.error);
+      };
+    });
+  }
+  return terrainDbPromise;
 }
 
 async function terrainCacheGet(key) {
@@ -824,23 +837,32 @@ async function fetchTerrainGrid(centre, radiusKm) {
   for (let r = 0; r < rows; r++) {
     values.push(elevations.slice(r * cols, (r + 1) * cols));
   }
-  return { lat0, lon0, dLat, dLon, rows, cols, values };
+  return { lat0, lon0, dLat, dLon, rows, cols, values, spacingKm };
 }
 
 async function ensureTerrain(centre, radiusKm) {
   const key = terrainKey(centre, radiusKm);
   if (mapTerrain && mapTerrain.key === key) return;
-  if (terrainFetchInFlight === key) return; // already being fetched — don't stack duplicate batch runs
+  if (terrainFetchInFlight === key) return; // already being fetched or checked — don't stack duplicate batch runs
 
-  const cached = await terrainCacheGet(key);
-  if (cached) {
-    mapTerrain = { key, ...cached };
-    renderMap();
-    return;
-  }
-
+  // Claimed synchronously, before the first await below. This function
+  // is called from several places close together (pan-end, double-tap
+  // zoom, initial page load) — with the claim made only after the
+  // IndexedDB cache check (as it was before), two calls for the same
+  // area arriving within that check's own round-trip both saw nothing
+  // in flight yet, both found no cache hit, and both went on to run a
+  // full 7-16-request batched elevation fetch at once. Claiming the key
+  // up front closes that window: nothing here awaits anything before
+  // the flag is set, so a second call always sees it.
   terrainFetchInFlight = key;
   try {
+    const cached = await terrainCacheGet(key);
+    if (cached) {
+      mapTerrain = { key, ...cached };
+      renderMap();
+      return;
+    }
+
     const grid = await fetchTerrainGrid(centre, radiusKm);
     await terrainCacheSet(key, grid);
     mapTerrain = { key, ...grid };
@@ -865,14 +887,38 @@ function terrainShadeAt(grid, r, c) {
   const zN = grid.values[rN][c], zS = grid.values[rS][c];
   const zW = grid.values[r][cW], zE = grid.values[r][cE];
   if ([zN, zS, zW, zE].some(v => v === null || v === undefined)) return 0;
-  // Rate of change north-south and east-west, in metres per grid step.
+  // Elevation change north-south and east-west, in raw metres between
+  // cells 2 grid-steps apart (one either side of this cell).
   const dzdx = (zE - zW) / 2;
   const dzdy = (zS - zN) / 2;
-  // Dot product against a north-west light vector, normalised roughly
-  // into -1..1. The divisor is a vertical exaggeration constant — UK
-  // terrain is gentle enough that true-scale shading is nearly
-  // invisible at these grid spacings.
-  const shade = (dzdx - dzdy) / 60;
+  // Normalised into an actual slope (rise/run) by dividing by the real
+  // ground distance between those cells, rather than left as a raw
+  // metres-per-grid-step figure. That distance is 2 grid steps —
+  // grid.spacingKm each way — converted to metres.
+  //
+  // This matters because grid spacing itself varies 3-12km across the
+  // four zoom tiers (see TERRAIN_SPACING_KM): left unnormalised, the
+  // same real hillside produces a much bigger raw number at a wide
+  // zoom (bigger km per grid step) than a close one, so a fixed
+  // divisor can't calibrate both at once. Worse, checked against
+  // plausible UK relief (Fens ~3m/km up to Lake District/Snowdonia
+  // ~90m/km), the old raw-metres version divided by 60 clipped to the
+  // ±1 clamp for anything past gentle countryside at EVERY zoom
+  // level — meaning most of Britain rendered as one flat maximum-alpha
+  // block with no graduation, not the subtle shaded relief intended.
+  // A true slope value is small and well-behaved regardless of zoom
+  // (typically 0.003 for flat ground up to ~0.09 for a steep
+  // mountainside), so the same exaggeration constant now produces a
+  // sensible spread at every zoom tier instead of clipping almost
+  // everywhere.
+  const stepMetres = grid.spacingKm * 1000;
+  const slopeX = dzdx / stepMetres;
+  const slopeY = dzdy / stepMetres;
+  // Tuned against that same real-relief range so gentle ground stays
+  // subtle, rolling hills read as mild shading, and only genuinely
+  // steep ground (mountainsides, cliffs) reaches full intensity.
+  const EXAGGERATION = 8;
+  const shade = (slopeX - slopeY) * EXAGGERATION;
   return Math.max(-1, Math.min(1, shade));
 }
 
