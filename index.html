@@ -29,6 +29,16 @@
   <main class="app">
     <header>
       <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
         <h1>Cloude</h1>
         <button id="placeChip" class="place-chip" type="button" aria-haspopup="true" aria-expanded="false">
           <span id="placeChipLabel">TA6</span>
@@ -39,7 +49,6 @@
           <a class="place-menu-manage" href="settings.html">Manage places</a>
         </div>
       </div>
-      <div id="placeDots" class="place-dots"></div>
     </header>
 
     <section class="headline">
@@ -100,20 +109,6 @@
         </div>
       </div>
     </section>
-
-    <!-- Compare, Solar and Help are all reached through the tab bar
-         app.js adds to the top of those pages — places you visit now and
-         then rather than every time the app opens.
-
-         Map is still here ONLY until the front-page map strip exists.
-         Once tapping the strip opens the map, this drops to a single
-         Settings entry and the bottom row can go, which is most of the
-         height the strip needs. Removing it before then would leave the
-         map with no way in at all. -->
-    <nav class="bottom-nav">
-      <a href="map.html">Map</a>
-      <a href="settings.html">Settings</a>
-    </nav>
   </main>
 
   <div class="sheet-backdrop" id="sheetBackdrop"></div>

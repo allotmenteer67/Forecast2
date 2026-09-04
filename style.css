@@ -141,7 +141,12 @@ header p {
 .comparison {
   background: white;
   border-radius: 14px;
-  padding: 15px;
+  /* Was 15px all round. Tightened on this card specifically (see
+     .rollback-title below too) — the slider's own 44px touch target is
+     NOT part of this reduction and stays exactly as it is; that was a
+     real accessibility fix for a genuine "hard to grab" complaint, not
+     decoration to trim back. */
+  padding: 10px 15px;
   margin-bottom: 12px;
   box-shadow: 0 1px 2px rgba(31, 42, 36, .05), 0 10px 24px -16px rgba(31, 42, 36, .18);
   border: 1px solid #e7ede6;
@@ -156,11 +161,6 @@ header p {
   padding: 14px 15px;
   margin-bottom: 12px;
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
-  /* Lets the browser keep handling vertical page scrolling natively from
-     inside this card — the swipe-between-places gesture only ever looks
-     at horizontal movement, so this avoids the two fighting over the
-     same touch. */
-  touch-action: pan-y;
 }
 
 .headline-grid {
@@ -222,7 +222,12 @@ header p {
   display: flex;
   align-items: stretch;
   gap: 12px;
-  margin-bottom: 12px;
+  /* Was 12px, the same rhythm every full-height card uses — but the
+     row immediately below this one is only 16px of dot icons, not
+     another card, so that much space read as a proper gap between
+     sections rather than "these two things belong together". Tightened
+     to pair with the matching reduction on #tideDots below it. */
+  margin-bottom: 6px;
 }
 
 .tide-card {
@@ -878,7 +883,12 @@ legend {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  /* Was 8px margin, default (inherited ~16px) text size — shrunk
+     explicitly since "Date"/"Today" is a label for the control below
+     it, not a heading in its own right, and didn't need to be as
+     prominent as the rest of the reduction implied it should be. */
+  margin-bottom: 4px;
+  font-size: 14px;
 }
 
 .range-labels {
@@ -1465,6 +1475,27 @@ footer {
   justify-self: center;
 }
 
+/* The header grid has always been 1fr / auto / 1fr — column 3 held the
+   place chip, column 1 sat empty purely to keep the title centred by
+   symmetry. That empty column is what Settings moves into now that
+   Map's gone from the bottom nav: no new layout needed, just finally
+   using the slot that was already there. */
+.settings-icon-button {
+  grid-column: 1;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--accent-dark);
+}
+
+.settings-icon-button:hover {
+  background: var(--accent-light);
+}
+
 .place-chip {
   grid-column: 3;
   justify-self: end;
@@ -1513,8 +1544,14 @@ footer {
    location — they govern both cards, so centring them under just one
    would have implied otherwise. */
 #tideDots {
+  /* Was 12px bottom (and 0 top, since it undid the shared .place-dots
+     top margin). Both sides tightened now that this row is flagged
+     specifically as feeling loose — the ABOVE gap comes from
+     .tide-fishing-pair's own margin-bottom, tightened to match, so the
+     two changes land as one consistent 6px gap on each side rather than
+     stacking into something bigger than before. */
   margin-top: 0;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 .place-dot {
   width: 16px;

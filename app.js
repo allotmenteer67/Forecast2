@@ -4841,7 +4841,6 @@ async function performSwitch() {
   saveCurrentPostcode(state.postcode);
   resetForLocationChange();
   renderPlaceChip();
-  renderPlaceDots();
   renderPlacesList();
   loadLocationData();
 }
@@ -4982,124 +4981,8 @@ function switchToPostcode(pc) {
   saveCurrentPostcode(pc);
   resetForLocationChange();
   renderPlaceChip();
-  renderPlaceDots();
   renderPlacesList();
   loadLocationData();
-}
-
-// ---- Swipe between saved places (front page) ----
-// The whole "Today" card is the swipe zone — a much bigger, more
-// discoverable target than the header chip alone — except the Hour
-// slider itself, which already owns a horizontal drag gesture in the
-// same card. Layering a second horizontal gesture directly on top of it
-// would make both ambiguous, so touches starting on the slider are left
-// alone entirely and it keeps behaving exactly as it always has.
-//
-// touch-action: pan-y on the card (see style.css) tells the browser to
-// keep handling vertical page scrolling natively here — this code only
-// ever looks at horizontal movement, so scrolling the page from inside
-// the card is never intercepted or fought over.
-const headlineSwipeZone = document.querySelector(".headline");
-if (headlineSwipeZone) {
-  const SWIPE_THRESHOLD_PX = 40;
-  let swipeStartX = null;
-  let swipeStartY = null;
-  let swiping = false;
-  // The direction is now decided the MOMENT the threshold is first
-  // crossed (see pointermove) and frozen here, rather than recomputed
-  // from scratch at pointerup — see the comment on pointerup below for
-  // why recomputing it there was the actual "moves the wrong way" bug.
-  let swipeDirection = null;
-  // Pointer events only keep targeting the element they started on for
-  // as long as the pointer stays over it — without explicitly capturing
-  // it, a fast real-world flick that drifts even slightly outside the
-  // card's bounds (very easy near a screen edge, or once the finger
-  // moves diagonally enough) silently stops delivering pointermove/
-  // pointerup to this listener entirely. That left swipeStartX stuck
-  // non-null with no pointerup ever arriving to clear it — which is the
-  // actual explanation for BOTH reported symptoms: "unresponsive" was
-  // gestures getting silently dropped this way, and "moves the wrong
-  // way" was the NEXT gesture's dx being measured against that stale,
-  // leftover start position from the dropped one instead of its own.
-  // Capturing the pointer on down guarantees this element keeps
-  // receiving every move/up for that finger regardless of where it
-  // wanders, so a gesture always ends with a real pointerup or
-  // pointercancel to clean up after itself.
-  let swipePointerId = null;
-
-  function resetSwipeTracking() {
-    swipeStartX = null;
-    swipeStartY = null;
-    swiping = false;
-    swipeDirection = null;
-    swipePointerId = null;
-  }
-
-  headlineSwipeZone.addEventListener("pointerdown", e => {
-    if (e.target.closest(".hour-slider")) return; // the slider owns its own drag entirely
-    // A second finger touching down mid-gesture (very easy to do by
-    // accident while holding a phone) used to silently reset
-    // swipeStartX to the NEW finger's position, corrupting whatever the
-    // first finger's gesture was already tracking. Once a gesture is
-    // underway, only its own pointerId is ever listened to again until
-    // it ends.
-    if (swipePointerId !== null) return;
-    swipePointerId = e.pointerId;
-    swipeStartX = e.clientX;
-    swipeStartY = e.clientY;
-    swiping = false;
-    swipeDirection = null;
-    try {
-      headlineSwipeZone.setPointerCapture(e.pointerId);
-    } catch {
-      // Pointer capture isn't available on every platform — the gesture
-      // still works via normal event delivery, just without the
-      // drift-outside-the-card protection described above.
-    }
-  });
-
-  headlineSwipeZone.addEventListener("pointermove", e => {
-    if (swipeStartX === null || e.pointerId !== swipePointerId) return;
-    const dx = e.clientX - swipeStartX;
-    const dy = e.clientY - swipeStartY;
-    // Horizontal has to clearly dominate before this counts as a swipe
-    // rather than the start of a vertical scroll or a plain tap on one
-    // of the headline cells (which still needs to open its own graph
-    // sheet normally — this only intervenes once movement is unambiguous).
-    if (!swiping && Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      swiping = true;
-      // Freeze direction right here, at the moment the gesture first
-      // became unambiguous — see the note above on swipeDirection for
-      // why pointerup must NOT recompute this from a fresh dx.
-      swipeDirection = dx < 0 ? 1 : -1;
-    }
-  });
-
-  headlineSwipeZone.addEventListener("pointerup", e => {
-    if (swipeStartX === null || e.pointerId !== swipePointerId) return;
-    if (swiping && swipeDirection !== null) {
-      swipeToAdjacentPlace(swipeDirection);
-    }
-    resetSwipeTracking();
-  });
-
-  headlineSwipeZone.addEventListener("pointercancel", e => {
-    if (e.pointerId !== swipePointerId) return;
-    resetSwipeTracking();
-  });
-}
-
-// Cycles to the next/previous saved place relative to whichever one is
-// currently showing, wrapping around at either end. Does nothing if the
-// current location isn't itself a saved place (nothing to cycle
-// relative to) or there are fewer than two saved places to cycle between.
-function swipeToAdjacentPlace(direction) {
-  const places = loadPlaces();
-  if (places.length < 2) return;
-  const currentIndex = places.findIndex(place => place.postcode === state.postcode);
-  if (currentIndex === -1) return;
-  const nextIndex = (currentIndex + direction + places.length) % places.length;
-  switchToPostcode(places[nextIndex].postcode);
 }
 
 function renderPlaceChip() {
@@ -5114,34 +4997,6 @@ function renderPlaceChip() {
   // those exist yet (e.g. the very first paint, before any lookup has
   // had a chance to run at all).
   placeChipLabel.textContent = match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
-}
-
-const placeDots = document.getElementById("placeDots");
-
-// A small position indicator — the same idea as a photo carousel's dots
-// — so the swipe gesture (see swipeToAdjacentPlace above) isn't
-// completely invisible: nothing else on screen hints that swiping the
-// card does anything. Only shown with two or more saved places, since a
-// single dot (or none) would just be visual noise for nothing to
-// indicate. Rebuilt from scratch on every call rather than diffed —
-// there are only ever a handful of saved places, so this is cheap.
-function renderPlaceDots() {
-  if (!placeDots) return;
-  placeDots.innerHTML = "";
-
-  const places = loadPlaces();
-  if (places.length < 2) return;
-
-  places.forEach(place => {
-    // icon-192.png rather than a fresh SVG redraw — there's no source
-    // artwork for the mark other than the existing PNGs, and downscaling
-    // a 192px source to this size stays perfectly crisp.
-    const icon = document.createElement("img");
-    icon.src = "icon-192.png";
-    icon.alt = "";
-    icon.className = "place-dot" + (place.postcode === state.postcode ? " is-current" : "");
-    placeDots.appendChild(icon);
-  });
 }
 
 function closePlaceMenu() {
@@ -5176,7 +5031,6 @@ function renderPlaceMenu() {
 
 if (placeChip) {
   renderPlaceChip();
-  renderPlaceDots();
   placeChip.addEventListener("click", () => {
     if (!placeMenu) return;
     if (placeMenu.hidden) {
@@ -5245,7 +5099,6 @@ function renderPlacesList() {
       savePlaces(places);
       renderPlaceMenu();
       renderPlaceChip();
-      renderPlaceDots();
     });
     nameLine.appendChild(labelInput);
 
@@ -5409,7 +5262,6 @@ if (useMyLocationButton) {
           // "fix itself" once a slider was nudged.
           resetForLocationChange();
           renderPlaceChip();
-          renderPlaceDots();
           renderPlacesList();
           loadLocationData();
         } catch (err) {
