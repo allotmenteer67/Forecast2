@@ -152,16 +152,46 @@ header p {
   border: 1px solid #e7ede6;
 }
 
+/* Front page only — .app stays plain block flow on every other page,
+   since flex items stop collapsing margins with each other and this
+   session's whole spacing pass (12px card rhythm, the 2px dot-row
+   tightening above) was tuned assuming normal block layout. Scoped to
+   .app-home specifically rather than changing .app itself so nothing
+   about Compare/Settings/Solar/Help/Map's own layouts is touched.
+   min-height ensures the map strip has real leftover space to grow
+   into on a short page, rather than this only mattering on a page tall
+   enough to already be scrolling. */
+.app-home {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+/* Flex items default to flex-shrink:1 — without this, EVERY direct
+   child of .app-home (the header, the headline card, tide/fishing, all
+   of it) would be able to shrink under pressure, not just the map
+   strip. This keeps everything else at its natural size regardless of
+   available space; only .map-strip's own flex:1 1 auto (below) is
+   meant to grow or shrink. */
+.app-home > *:not(.map-strip) {
+  flex: 0 0 auto;
+}
+
 /* A static preview, same card language as .headline below it (rounded
    corners, the same shadow) so it reads as part of the same page
    rather than a bolted-on widget — but shorter and a plain link rather
    than a card full of controls, since tapping it is the only thing it
-   does. Height is content-driven via aspect-ratio rather than a fixed
-   px value, so it scales sensibly across phone widths instead of being
-   tuned for one screen size. */
+   does. Grows to fill whatever vertical space the rest of the page
+   ISN'T using (see .app-home above) — turning off Tide/Fishing or a
+   few headline cells in Settings used to just leave that freed space
+   empty at the bottom of the screen; now the map takes it instead of
+   staying a fixed size regardless of what's around it. min-height is a
+   floor, not a fixed size, for when the rest of the page already fills
+   the screen on its own. */
 .map-strip {
   display: block;
-  aspect-ratio: 3 / 1;
+  flex: 1 1 auto;
+  min-height: 130px;
   border-radius: 14px;
   overflow: hidden;
   margin-bottom: 12px;
@@ -244,12 +274,12 @@ header p {
   display: flex;
   align-items: stretch;
   gap: 12px;
-  /* Was 12px, the same rhythm every full-height card uses — but the
-     row immediately below this one is only 16px of dot icons, not
-     another card, so that much space read as a proper gap between
-     sections rather than "these two things belong together". Tightened
-     to pair with the matching reduction on #tideDots below it. */
-  margin-bottom: 6px;
+  /* Was 12px, then 6px — still flagged as too much surrounding a row
+     that's only 16px of dot icons. Down to 2px: barely more than
+     touching, which is what a page-position indicator like this
+     conventionally looks like (an iOS photo carousel's dots sit right
+     under the image, not floating in their own section). */
+  margin-bottom: 2px;
 }
 
 .tide-card {
@@ -1585,14 +1615,10 @@ footer {
    location — they govern both cards, so centring them under just one
    would have implied otherwise. */
 #tideDots {
-  /* Was 12px bottom (and 0 top, since it undid the shared .place-dots
-     top margin). Both sides tightened now that this row is flagged
-     specifically as feeling loose — the ABOVE gap comes from
-     .tide-fishing-pair's own margin-bottom, tightened to match, so the
-     two changes land as one consistent 6px gap on each side rather than
-     stacking into something bigger than before. */
+  /* Was 12px, then 6px each side — same reasoning as
+     .tide-fishing-pair's margin-bottom above, tightened to match. */
   margin-top: 0;
-  margin-bottom: 6px;
+  margin-bottom: 2px;
 }
 .place-dot {
   width: 16px;

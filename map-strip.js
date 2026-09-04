@@ -41,10 +41,14 @@ function rainBandIndex(value) {
 // Only the palette's own colours are duplicated (not the whole
 // MAP_PALETTES structure) — reads the same MAP_PALETTE_KEY map.js
 // saves to, so a palette chosen on the map page is honoured here too
-// without needing map.js loaded to get at it.
+// without needing map.js loaded to get at it. Land is deliberately
+// BOLDER than the full map page's own land colour — at strip size,
+// map.js's soft #e4efe6 sat too close to the sea colour to read as two
+// different things at a glance, which matters more here than on the
+// full map (where there's more screen and more time to look).
 const MAP_STRIP_PALETTES = {
-  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
-  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
+  paper: { land: "#9fcbae", sea: "#EEF5FA", coast: "#5c8a6d", ink: "#2b2a26", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
+  slate: { land: "#2f6b4c", sea: "#33454f", coast: "#7a7a72", ink: "#f2f1ec", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
   mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
 };
 function mapStripPalette() {
@@ -55,6 +59,7 @@ function mapStripPalette() {
 
 const mapStripCanvas = document.getElementById("mapStripCanvas");
 let mapStripCoastline = null;
+let mapStripPlaces = null;
 let mapStripLastCentre = null;
 let mapStripLastGrid = null;
 
@@ -136,6 +141,35 @@ async function renderMapStrip(centre, grid) {
     }
   }
 
+  // A few names for scale — "is this 5 miles across or 50" is hard to
+  // judge from an unlabelled outline. Nearest-and-biggest few only:
+  // this is a strip, not the full map's places layer, so crowding it
+  // with everything nearby would defeat the point.
+  if (mapStripPlaces) {
+    const withDistance = mapStripPlaces
+      .map(place => ({ place, d: Math.hypot(place.lat - centre.lat, place.lon - centre.lon) }))
+      .filter(({ d }) => d < 0.35) // roughly within the strip's own view, degrees not km, but fine at this latitude/scale
+      .sort((a, b) => (a.place.rank - b.place.rank) || (a.d - b.d))
+      .slice(0, 4);
+
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    withDistance.forEach(({ place }) => {
+      const x = view.x(place.lon), y = view.y(place.lat);
+      if (x < 0 || x > view.w || y < 0 || y > view.h) return;
+      ctx.fillStyle = p.ink;
+      ctx.beginPath();
+      ctx.arc(x, y, 2, 0, Math.PI * 2);
+      ctx.fill();
+      // Outlined in the land colour first — same trick map.js's own
+      // ring labels use — so a name stays readable whether it lands on
+      // sea, land, or a rain-coloured cell.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(place.name, x + 5, y + 4);
+      ctx.fillText(place.name, x + 5, y + 4);
+    });
+  }
+
   // Centre marker, same small dot map.html itself uses for Home.
   ctx.fillStyle = p.ink;
   ctx.beginPath();
@@ -195,13 +229,18 @@ async function initMapStrip(centre) {
       const res = await fetchWithTimeout("data/coastline-50m.json", {}, 15000);
       if (res.ok) mapStripCoastline = await res.json();
     }
+    if (!mapStripPlaces) {
+      const res = await fetchWithTimeout("data/places.json", {}, 15000);
+      if (res.ok) mapStripPlaces = await res.json();
+    }
   } catch {
-    // No coastline this time — the strip still renders sea colour plus
-    // rain (or just sea colour) and is still tappable through to the
-    // full map, so this stays silent rather than showing an error for
-    // what is, on the front page, a secondary feature.
+    // No coastline/places this time — the strip still renders sea
+    // colour plus rain (or just sea colour) and is still tappable
+    // through to the full map, so this stays silent rather than
+    // showing an error for what is, on the front page, a secondary
+    // feature.
   }
-  renderMapStrip(centre, null); // coastline (if it arrived) shown immediately, rain follows once fetched
+  renderMapStrip(centre, null); // whatever arrived (coastline/places) shown immediately, rain follows once fetched
 
   try {
     const grid = await fetchMapStripGrid(centre);
