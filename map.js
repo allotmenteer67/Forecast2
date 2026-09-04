@@ -854,6 +854,29 @@ function terrainKey(centre, radiusKm) {
 
 let mapTerrain = null;
 let terrainFetchInFlight = null;
+const mapTerrainStatusEl = document.getElementById("mapTerrainStatus");
+
+function setTerrainStatus(message) {
+  if (!mapTerrainStatusEl) return;
+  mapTerrainStatusEl.textContent = message || "";
+  mapTerrainStatusEl.classList.toggle("is-error", !!message);
+}
+
+// Same style of named reason as describeMapFetchError below it (which
+// this deliberately doesn't just reuse — that one's regex checks for
+// "Map weather fetch failed: …", not "Elevation fetch failed: …", so a
+// shared function would silently mis-describe every terrain error as
+// "connection problem"). A 400 here almost always means a malformed
+// coordinate list (see fetchTerrainGrid) rather than anything about
+// the connection, so it's called out on its own rather than lumped in
+// with "server error".
+function describeTerrainFetchError(err) {
+  if (err instanceof Error && /^Timed out/.test(err.message)) return "timed out";
+  if (err instanceof Error && /^Elevation fetch failed: 429/.test(err.message)) return "rate limited";
+  if (err instanceof Error && /^Elevation fetch failed: 400/.test(err.message)) return "bad request — see console";
+  if (err instanceof Error && /^Elevation fetch failed: \d+/.test(err.message)) return err.message.replace("Elevation fetch failed: ", "server error ");
+  return "connection problem";
+}
 
 async function fetchTerrainGrid(centre, radiusKm) {
   const spacingKm = TERRAIN_SPACING_KM[radiusKm] || 8;
@@ -885,7 +908,18 @@ async function fetchTerrainGrid(centre, radiusKm) {
       longitude: batchLons.map(v => v.toFixed(4)).join(",")
     });
     const res = await fetchWithTimeout(`${TERRAIN_ELEVATION_URL}?${params.toString()}`, {}, 20000);
-    if (!res.ok) throw new Error(`Elevation fetch failed: ${res.status}`);
+    if (!res.ok) {
+      // The response body on a 400 names the actual problem (e.g. a
+      // coordinate out of range) — logged here even though nothing
+      // shows it on-screen (see setTerrainStatus/describeTerrainFetchError
+      // for what the person actually sees), purely so a future session
+      // with real remote-debugging access has something concrete to
+      // look at instead of just a status code.
+      let detail = "";
+      try { detail = await res.text(); } catch {}
+      console.error(`Elevation fetch failed: ${res.status}`, detail);
+      throw new Error(`Elevation fetch failed: ${res.status}`);
+    }
     const data = await res.json();
     elevations.push(...data.elevation);
   }
@@ -916,6 +950,7 @@ async function ensureTerrain(centre, radiusKm) {
     const cached = await terrainCacheGet(key);
     if (cached) {
       mapTerrain = { key, ...cached };
+      setTerrainStatus("");
       renderMap();
       return;
     }
@@ -923,12 +958,18 @@ async function ensureTerrain(centre, radiusKm) {
     const grid = await fetchTerrainGrid(centre, radiusKm);
     await terrainCacheSet(key, grid);
     mapTerrain = { key, ...grid };
+    setTerrainStatus("");
     renderMap();
   } catch (err) {
     console.error("Terrain fetch failed:", err);
-    // Silent on screen: terrain is decoration. The map is entirely
-    // usable without it, and a visible error for missing texture would
-    // be noise on top of the weather-fetch messages that actually matter.
+    // No longer console-only: on an iPad/iPhone with no dev tools
+    // attached, console.error is completely invisible, so a failure
+    // here had no way to ever be diagnosed from the device itself.
+    // Terrain is still decoration — the map stays fully usable without
+    // it — but "usable without it" and "impossible to tell why it's
+    // missing" are different things, and only the first one was
+    // actually intended.
+    setTerrainStatus(`Terrain didn't load (${describeTerrainFetchError(err)}).`);
   } finally {
     terrainFetchInFlight = null;
   }

@@ -70,6 +70,16 @@
 
     <p id="mapStatus" class="actual-status status-error-only"></p>
 
+    <!-- Terrain has no toggle (it's always-on decoration, not a data
+         layer — see map.js), so it had no way at all to tell you
+         something had gone wrong fetching it: failures were console-only,
+         invisible on a phone/tablet with no way to open dev tools. This
+         surfaces exactly what map.js's own weather-grid status already
+         does (a plain named reason, not a generic "something went
+         wrong"), purely so a silent decoration failure is actually
+         diagnosable from the device itself. -->
+    <p id="mapTerrainStatus" class="actual-status status-error-only"></p>
+
     <!-- Buttons removed — double-tap the map itself to zoom (in,
          centred on where you tapped; a further tap once already at the
          closest level wraps back out to the widest view). The label

@@ -11,7 +11,22 @@
 // update the cache for next time. Deliberately needs no manual "bump the
 // cache version" step on every deploy — each update to app.js/style.css
 // gets picked up automatically the next time the app opens online.
-const CACHE_NAME = "cloude-shell-v1";
+//
+// BUT: "picked up automatically" only means the NEXT open gets a fresh
+// copy in the background — THIS open still serves whatever was cached
+// from before, stale-while-revalidate's whole point. That's invisible
+// for small tweaks, but map.js isn't even in SHELL_FILES below (it's
+// still cached anyway — the fetch handler applies this strategy to
+// every same-origin request, not just the precached list) and a
+// substantial change to it (new layers, new fetch/dedupe logic) landing
+// on top of an old cached copy is a real way for things to look like
+// they've silently broken or reverted after a deploy, with no error
+// anywhere to explain why. Bumping this version string forces every
+// old cache to be dropped on the next activate (see below) and
+// everything refetched fresh — do this on any deploy where "it looks
+// like an old version" is a live possibility, not just for
+// SHELL_FILES changes.
+const CACHE_NAME = "cloude-shell-v2";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
