@@ -1281,11 +1281,16 @@ async function fetchHourlyForecast(lat, lon) {
   state.hourly.error = null;
 
   try {
-    const perSource = {};
-    let from = 0;
-    let sharedTimes = [];
-
-    for (const { id, model } of REAL_SOURCES) {
+    // Fetched in parallel now, not one-at-a-time. Awaiting each of the
+    // nine REAL_SOURCES fully before starting the next meant a single
+    // slow or hung request added its own full timeout to the wait for
+    // every source after it in the list — worst case, up to nine
+    // timeouts stacked end to end, which is the actual explanation for
+    // loads stretching toward minutes ("weather lookup failed, or
+    // taking longer than usual") rather than genuine rate limiting.
+    // Fetched together, the whole function is bounded by the SLOWEST
+    // single request rather than the sum of all nine.
+    const results = await Promise.all(REAL_SOURCES.map(async ({ id, model }) => {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
@@ -1300,25 +1305,36 @@ async function fetchHourlyForecast(lat, lon) {
       const res = await fetchWithTimeout(`${WEATHER_URL}?${params.toString()}`);
       if (!res.ok) throw new Error(`Hourly forecast lookup failed for ${id}`);
       const data = await res.json();
+      return { id, data };
+    }));
 
-      if (id === "metoffice") {
-        const now = new Date();
-        const startIdx = data.hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
-        from = startIdx >= 0 ? startIdx : 0;
-        sharedTimes = data.hourly.time.slice(from);
+    // metoffice sets the shared time axis every other source gets
+    // sliced against — pulled out by id rather than relying on
+    // request order (parallel requests can settle in any order), but
+    // otherwise unchanged: metoffice was always first in REAL_SOURCES
+    // and so always the one that set `from`/sharedTimes before.
+    const byId = new Map(results.map(({ id, data }) => [id, data]));
+    const metofficeData = byId.get("metoffice");
 
-        state.hourly.uvIndex = data.hourly.uv_index.slice(from);
-        state.hourly.cloudCover = data.hourly.cloud_cover.slice(from);
-        state.hourly.sunriseByDate = {};
-        state.hourly.sunsetByDate = {};
-        state.hourly.uvMaxByDate = {};
-        data.daily.time.forEach((date, i) => {
-          state.hourly.sunriseByDate[date] = data.daily.sunrise[i];
-          state.hourly.sunsetByDate[date] = data.daily.sunset[i];
-          state.hourly.uvMaxByDate[date] = data.daily.uv_index_max[i];
-        });
-      }
+    const now = new Date();
+    const startIdx = metofficeData.hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
+    const from = startIdx >= 0 ? startIdx : 0;
+    const sharedTimes = metofficeData.hourly.time.slice(from);
 
+    state.hourly.uvIndex = metofficeData.hourly.uv_index.slice(from);
+    state.hourly.cloudCover = metofficeData.hourly.cloud_cover.slice(from);
+    state.hourly.sunriseByDate = {};
+    state.hourly.sunsetByDate = {};
+    state.hourly.uvMaxByDate = {};
+    metofficeData.daily.time.forEach((date, i) => {
+      state.hourly.sunriseByDate[date] = metofficeData.daily.sunrise[i];
+      state.hourly.sunsetByDate[date] = metofficeData.daily.sunset[i];
+      state.hourly.uvMaxByDate[date] = metofficeData.daily.uv_index_max[i];
+    });
+
+    const perSource = {};
+    REAL_SOURCES.forEach(({ id }) => {
+      const data = byId.get(id);
       perSource[id] = {
         temperature: data.hourly.temperature_2m.slice(from, from + sharedTimes.length || undefined),
         precipitation: data.hourly.precipitation.slice(from, from + sharedTimes.length || undefined),
@@ -1329,7 +1345,7 @@ async function fetchHourlyForecast(lat, lon) {
         soilTemperature: data.hourly.soil_temperature_0cm.slice(from, from + sharedTimes.length || undefined),
         dewPoint: data.hourly.dewpoint_2m.slice(from, from + sharedTimes.length || undefined)
       };
-    }
+    });
 
     state.hourly.times = sharedTimes;
     const count = sharedTimes.length;

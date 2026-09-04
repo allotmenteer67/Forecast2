@@ -103,6 +103,11 @@ const MAP_PALETTES = [
     // needs to actually stand out against it, and the old sea tone sat
     // too close to that band's own colour.
     land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ring: "#8a887f",
+    // A warm burnt-orange for isobars — previously these shared the
+    // plain "ink" colour, which sat too close to the coastline/label
+    // tone to read as its own thing at a glance. Distinct from rain's
+    // blue ramp, temperature's purple-to-red scale, and land's green.
+    isobar: "#B5541C",
     // Starts at mid-blue, not near-white: on a light base the palest
     // stops of a conventional radar ramp read as "no rain".
     ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"]
@@ -117,6 +122,10 @@ const MAP_PALETTES = [
     // sea change, since a dark theme needs MORE separation from black
     // to show a pale colour, not less.
     land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ring: "#8f8f86",
+    // A warm amber rather than Paper's burnt-orange — needs to pop
+    // against dark green land and dark blue-grey sea alike, which a
+    // darker orange wouldn't on this theme.
+    isobar: "#E8A33D",
     // Dark base, so the full range including the pale end is usable.
     ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"]
   },
@@ -128,6 +137,11 @@ const MAP_PALETTES = [
     // anyone who can't reliably separate colours by shade. Introducing
     // green here would undermine the one thing this palette is for.
     land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ring: "#777777",
+    // Pure black rather than a hue — same "no colour at all" rule the
+    // rest of this palette follows. Isobars still read as distinct from
+    // the coastline here because they're drawn heavier (see the
+    // pressure layer's own lineWidth), not because of a different tone.
+    isobar: "#000000",
     // No hue at all. For bright daylight, and for anyone who can't
     // reliably separate the blues.
     ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"]
@@ -583,12 +597,49 @@ async function fetchWeatherGrid(centre, radiusKm) {
   };
 }
 
+// No in-flight guard existed here at all — unlike ensureTerrain,
+// ensureGrid could be, and was being, called multiple times in close
+// succession (pan-end, double-tap zoom, and the initial page load's
+// own forced call could all land within moments of each other) with
+// nothing to stop each one starting its own completely independent
+// fetch-plus-retry sequence. Several of those firing at once is a
+// realistic way to trip Open-Meteo's own rate limiting on a free
+// endpoint — which is likely the actual cause of the "rate limited"
+// messages users were seeing — and then each of THOSE independent
+// sequences runs its own 1.5s-wait-then-retry dance on top, with
+// results landing at staggered times and overwriting each other. That
+// combination is what could stretch into several minutes of the map
+// appearing stuck. Fixed the same way ensureTerrain now works: only
+// one fetch runs at a time, and a call that arrives while one is
+// already in flight is coalesced into "run once more when this one
+// finishes" rather than starting its own parallel attempt.
+let mapGridInFlight = null;
+let mapGridQueuedArgs = null;
+
 async function ensureGrid(centre, radiusKm, force) {
   const stale = Date.now() - mapGridFetchedAt > MAP_STALE_MS;
   const moved = !mapGridCentre || haversineKm(
     mapGridCentre.lat, mapGridCentre.lon, centre.lat, centre.lon
   ) > radiusKm * (MAP_FETCH_MARGIN - 1);
   if (!force && mapGrid && !stale && !moved) return;
+
+  if (mapGridInFlight) {
+    mapGridQueuedArgs = { centre, radiusKm, force };
+    return;
+  }
+
+  mapGridInFlight = runGridFetch(centre, radiusKm);
+  await mapGridInFlight;
+  mapGridInFlight = null;
+
+  if (mapGridQueuedArgs) {
+    const next = mapGridQueuedArgs;
+    mapGridQueuedArgs = null;
+    await ensureGrid(next.centre, next.radiusKm, next.force);
+  }
+}
+
+async function runGridFetch(centre, radiusKm) {
   try {
     mapGrid = await fetchWeatherGrid(centre, radiusKm);
     mapGridCentre = { ...centre };
@@ -606,7 +657,6 @@ async function ensureGrid(centre, radiusKm, force) {
       mapGridCentre = { ...centre };
       mapGridFetchedAt = Date.now();
       setMapStatus("");
-      return;
     } catch (retryErr) {
       // Keep whatever was last drawn rather than blanking. If the daily
       // limit is ever hit, a slightly stale map beats a broken one —
@@ -624,6 +674,13 @@ async function ensureGrid(centre, radiusKm, force) {
         : `Couldn't load map data just now (${reason}).`);
     }
   }
+  // Every caller used to chain .then(renderMap) onto ensureGrid itself,
+  // which broke the moment a call could return early (coalesced into
+  // the queue above) without ever actually fetching anything new.
+  // Rendering here instead, once the real fetch (whichever call
+  // actually triggered it) finishes, means the screen always reflects
+  // the latest data regardless of which caller's promise resolves when.
+  renderMap();
 }
 
 // fetchWithTimeout (app.js) already converts its own AbortError into a
@@ -1063,6 +1120,76 @@ function marchingSquaresSegments(grid, hourIdx, view, level) {
   return segments;
 }
 
+// marchingSquaresSegments produces one independent little segment per
+// grid cell, in no particular order — fine for a straight-line render,
+// but it means there's no continuous line to smooth. The two cells
+// either side of any shared grid edge compute that edge's crossing
+// point identically (same interpolation, same inputs), so segments
+// that belong to the same contour share EXACT endpoint coordinates.
+// This chains them back into ordered polylines by walking outward from
+// each segment's endpoints until nothing more matches, so each
+// contour can be drawn — and smoothed — as one continuous line rather
+// than a pile of disconnected cell-sized strokes.
+function chainSegmentsIntoPaths(segments) {
+  const key = pt => `${pt.x.toFixed(2)},${pt.y.toFixed(2)}`;
+  const byPoint = new Map();
+  segments.forEach((seg, i) => {
+    [0, 1].forEach(end => {
+      const k = key(seg[end]);
+      if (!byPoint.has(k)) byPoint.set(k, []);
+      byPoint.get(k).push({ i, end });
+    });
+  });
+
+  const used = new Array(segments.length).fill(false);
+  const paths = [];
+
+  function extend(path, atEnd) {
+    for (;;) {
+      const tip = atEnd ? path[path.length - 1] : path[0];
+      const candidates = (byPoint.get(key(tip)) || []).filter(m => !used[m.i]);
+      if (!candidates.length) return;
+      const { i, end } = candidates[0];
+      used[i] = true;
+      const next = segments[i][end === 0 ? 1 : 0];
+      if (atEnd) path.push(next); else path.unshift(next);
+    }
+  }
+
+  segments.forEach((seg, i) => {
+    if (used[i]) return;
+    used[i] = true;
+    const path = [seg[0], seg[1]];
+    extend(path, true);
+    extend(path, false);
+    paths.push(path);
+  });
+
+  return paths;
+}
+
+// Rounds a polyline's corners by drawing a quadratic curve through the
+// midpoint of each pair of points, rather than straight lines between
+// the raw grid-cell crossings — a standard, cheap smoothing trick (no
+// spline maths needed) that turns the model grid's own faceted,
+// stair-stepped contour into something that reads as hand-drawn.
+function drawSmoothPath(ctx, points) {
+  if (points.length < 2) return;
+  if (points.length === 2) {
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    return;
+  }
+  ctx.moveTo(points[0].x, points[0].y);
+  ctx.lineTo((points[0].x + points[1].x) / 2, (points[0].y + points[1].y) / 2);
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+  }
+  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+}
+
 registerMapLayer({
   id: "pressure",
   draw(ctx, view) {
@@ -1077,34 +1204,41 @@ registerMapLayer({
     const hi = Math.ceil(maxP / MAP_ISOBAR_INTERVAL_HPA) * MAP_ISOBAR_INTERVAL_HPA;
 
     ctx.save();
-    ctx.strokeStyle = p.ink;
-    ctx.lineWidth = 1.2;
-    ctx.globalAlpha = 0.75;
-    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    // A dedicated colour (see MAP_PALETTES) rather than the plain "ink"
+    // tone used elsewhere — that blended into the coastline/label
+    // colour too easily. Text uses the same colour as the line it
+    // labels, and both are a size up from before (1.2→1.8 stroke,
+    // 11→13px text) so isobars read clearly at a glance rather than
+    // needing a squint.
+    ctx.strokeStyle = p.isobar;
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.85;
+    ctx.font = "700 13px -apple-system, system-ui, sans-serif";
 
     for (let level = lo; level <= hi; level += MAP_ISOBAR_INTERVAL_HPA) {
       const segments = marchingSquaresSegments(mapGrid, hour, view, level);
       if (!segments.length) continue;
+      const paths = chainSegmentsIntoPaths(segments);
 
       ctx.beginPath();
-      segments.forEach(([a, b]) => {
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      });
+      paths.forEach(path => drawSmoothPath(ctx, path));
       ctx.stroke();
 
-      // One label per level, near a representative segment — a label
-      // on every segment would be as cluttered as the colour wash this
-      // replaced.
-      const mid = segments[Math.floor(segments.length / 2)];
-      const mx = (mid[0].x + mid[1].x) / 2, my = (mid[0].y + mid[1].y) / 2;
+      // One label per level, near the middle of the longest chained
+      // contour — a label on every little segment would be as
+      // cluttered as the colour wash this replaced, and the longest
+      // path is the one most likely to still be on screen wherever the
+      // map happens to be panned.
+      const longest = paths.reduce((a, b) => (b.length > a.length ? b : a), paths[0]);
+      const mid = longest[Math.floor(longest.length / 2)];
       ctx.lineWidth = 3;
       ctx.strokeStyle = p.land;
-      ctx.strokeText(String(level), mx + 3, my - 3);
-      ctx.fillStyle = p.ink;
-      ctx.fillText(String(level), mx + 3, my - 3);
-      ctx.lineWidth = 1.2;
-      ctx.strokeStyle = p.ink;
+      ctx.strokeText(String(level), mid.x + 3, mid.y - 3);
+      ctx.fillStyle = p.isobar;
+      ctx.fillText(String(level), mid.x + 3, mid.y - 3);
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = p.isobar;
     }
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -1433,12 +1567,45 @@ registerMapLayer({
   }
 });
 
+// Rough visual footprint for the largest towns/cities only (population
+// rank 1-2 — see places.json/prepare-map-data). There's no real
+// building-footprint or built-up-area boundary data behind this
+// (places.json is just a point, a name, and a population rank), so
+// this is deliberately NOT presented as an accurate boundary — it's a
+// soft "this dot is a substantial urban area, not a village" visual
+// cue, sized loosely by rank rather than to true survey scale.
+const MAP_LARGE_TOWN_OUTLINE_KM = { 1: 5, 2: 3 };
+
 registerMapLayer({
   id: "places",
   draw(ctx, view) {
     const places = mapVectorData.places;
     if (!places || !places.length) return;
     const p = mapPalette();
+    const maxRank = view.radiusKm <= 25 ? 6 : view.radiusKm <= 50 ? 4 : 2;
+
+    // Drawn first, underneath the dots/labels below, and in a plain
+    // neutral grey independent of the current palette — it needs to
+    // read as "decoration around the marker", never as a real map
+    // feature (a lake, a boundary) that could be confused with an
+    // actual data layer.
+    ctx.save();
+    ctx.strokeStyle = "rgba(120,120,120,0.55)";
+    ctx.lineWidth = 1;
+    places
+      .filter(place => (place.rank || 0) <= 2 && (place.rank || 0) <= maxRank)
+      .forEach(place => {
+        const radiusKm = MAP_LARGE_TOWN_OUTLINE_KM[place.rank];
+        if (!radiusKm) return;
+        const px = view.x(place.lon), py = view.y(place.lat);
+        const r = radiusKm * view.pxPerKm;
+        if (px < -r || px > view.w + r || py < -r || py > view.h + r) return;
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+    ctx.restore();
+
     ctx.font = "11px -apple-system, system-ui, sans-serif";
     ctx.fillStyle = p.ink;
     // Label thinning does more work than the rings at the wider levels.
@@ -1446,7 +1613,6 @@ registerMapLayer({
     // source data) and collision (whatever is left must not overlap).
     // Rank alone leaves a mess in dense areas; collision alone drops
     // cities in favour of whichever village happened to draw first.
-    const maxRank = view.radiusKm <= 25 ? 6 : view.radiusKm <= 50 ? 4 : 2;
     const drawn = [];
     places
       .filter(place => (place.rank || 0) <= maxRank)
