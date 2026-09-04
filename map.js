@@ -705,6 +705,205 @@ registerMapLayer({
   }
 });
 
+// --- terrain slot (see the registry comment above) ---
+//
+// Registered AFTER coastline rather than in the slot marked above it:
+// the coastline layer FILLS the land with a solid colour, so anything
+// drawn before it gets painted straight over. Hillshading has to sit
+// on top of that fill to be visible at all — but still below rain/
+// wind/isobars, which is what the slot was really about.
+//
+// Shaded relief rather than colour bands, deliberately: this is
+// texture, not a data layer. Green land stays green and just gains
+// shadow, so it adds detail without introducing a fourth colour field
+// competing with rain, temperature and pressure for the same pixels.
+// ---------------------------------------------------------------------
+
+const TERRAIN_DB_NAME = "cloude-terrain";
+const TERRAIN_STORE = "tiles";
+const TERRAIN_ELEVATION_URL = "https://api.open-meteo.com/v1/elevation";
+// Open-Meteo's elevation endpoint caps each request at 100 coordinates,
+// so a usable grid needs batching (see fetchTerrainGrid). Kept modest
+// per zoom: finer than this multiplies request count fast for detail
+// that isn't visible anyway at the wider radii.
+const TERRAIN_MAX_COORDS_PER_REQUEST = 100;
+const TERRAIN_SPACING_KM = { 25: 3, 50: 5, 100: 8, 150: 12 };
+
+// IndexedDB, NOT localStorage (which everything else in Cloude uses):
+// terrain is bulk data measured in megabytes across a few areas, and
+// localStorage's ~5MB ceiling is shared with FFV history, tide data and
+// settings — filling it with terrain could break those. IndexedDB is
+// built for exactly this and gives far more headroom.
+function terrainDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(TERRAIN_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(TERRAIN_STORE)) db.createObjectStore(TERRAIN_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function terrainCacheGet(key) {
+  try {
+    const db = await terrainDb();
+    return await new Promise(resolve => {
+      const tx = db.transaction(TERRAIN_STORE, "readonly");
+      const req = tx.objectStore(TERRAIN_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null; // private browsing, quota refusal, or no IndexedDB at all — terrain just won't be cached
+  }
+}
+
+async function terrainCacheSet(key, value) {
+  try {
+    const db = await terrainDb();
+    const tx = db.transaction(TERRAIN_STORE, "readwrite");
+    tx.objectStore(TERRAIN_STORE).put(value, key);
+  } catch {
+    // Same as above — a failed cache write only costs a refetch later.
+  }
+}
+
+// Elevation never changes, so a tile is keyed purely by where it is and
+// how coarse it is — no timestamp, no staleness check. Once fetched, an
+// area is permanently done.
+function terrainKey(centre, radiusKm) {
+  const spacing = TERRAIN_SPACING_KM[radiusKm] || 8;
+  // Snapped to the grid spacing so small pans reuse the same tile
+  // instead of each one counting as a brand-new area to fetch.
+  const snapLat = (Math.round(centre.lat / 0.25) * 0.25).toFixed(2);
+  const snapLon = (Math.round(centre.lon / 0.25) * 0.25).toFixed(2);
+  return `${snapLat},${snapLon},${radiusKm},${spacing}`;
+}
+
+let mapTerrain = null;
+let terrainFetchInFlight = null;
+
+async function fetchTerrainGrid(centre, radiusKm) {
+  const spacingKm = TERRAIN_SPACING_KM[radiusKm] || 8;
+  const spanKm = radiusKm * MAP_FETCH_MARGIN;
+  const dLat = spacingKm / KM_PER_DEG_LAT;
+  const dLon = spacingKm / kmPerDegLon(centre.lat);
+  const rows = Math.ceil((spanKm * 2) / spacingKm) + 1;
+  const cols = rows;
+  const lat0 = centre.lat - (rows - 1) / 2 * dLat;
+  const lon0 = centre.lon - (cols - 1) / 2 * dLon;
+
+  const lats = [], lons = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      lats.push(lat0 + r * dLat);
+      lons.push(lon0 + c * dLon);
+    }
+  }
+
+  // Batched to the API's 100-coordinate limit, sequentially rather than
+  // all at once — a dozen simultaneous requests to a free public service
+  // is exactly the kind of burst that gets rate-limited.
+  const elevations = [];
+  for (let i = 0; i < lats.length; i += TERRAIN_MAX_COORDS_PER_REQUEST) {
+    const batchLats = lats.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
+    const batchLons = lons.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
+    const params = new URLSearchParams({
+      latitude: batchLats.map(v => v.toFixed(4)).join(","),
+      longitude: batchLons.map(v => v.toFixed(4)).join(",")
+    });
+    const res = await fetchWithTimeout(`${TERRAIN_ELEVATION_URL}?${params.toString()}`, {}, 20000);
+    if (!res.ok) throw new Error(`Elevation fetch failed: ${res.status}`);
+    const data = await res.json();
+    elevations.push(...data.elevation);
+  }
+
+  const values = [];
+  for (let r = 0; r < rows; r++) {
+    values.push(elevations.slice(r * cols, (r + 1) * cols));
+  }
+  return { lat0, lon0, dLat, dLon, rows, cols, values };
+}
+
+async function ensureTerrain(centre, radiusKm) {
+  const key = terrainKey(centre, radiusKm);
+  if (mapTerrain && mapTerrain.key === key) return;
+  if (terrainFetchInFlight === key) return; // already being fetched — don't stack duplicate batch runs
+
+  const cached = await terrainCacheGet(key);
+  if (cached) {
+    mapTerrain = { key, ...cached };
+    renderMap();
+    return;
+  }
+
+  terrainFetchInFlight = key;
+  try {
+    const grid = await fetchTerrainGrid(centre, radiusKm);
+    await terrainCacheSet(key, grid);
+    mapTerrain = { key, ...grid };
+    renderMap();
+  } catch (err) {
+    console.error("Terrain fetch failed:", err);
+    // Silent on screen: terrain is decoration. The map is entirely
+    // usable without it, and a visible error for missing texture would
+    // be noise on top of the weather-fetch messages that actually matter.
+  } finally {
+    terrainFetchInFlight = null;
+  }
+}
+
+// Standard hillshade: light from the north-west (the cartographic
+// convention — it reads as raised rather than sunken, which a
+// south-east light famously inverts for most people), shading each
+// cell by the slope it faces.
+function terrainShadeAt(grid, r, c) {
+  const rN = Math.max(0, r - 1), rS = Math.min(grid.rows - 1, r + 1);
+  const cW = Math.max(0, c - 1), cE = Math.min(grid.cols - 1, c + 1);
+  const zN = grid.values[rN][c], zS = grid.values[rS][c];
+  const zW = grid.values[r][cW], zE = grid.values[r][cE];
+  if ([zN, zS, zW, zE].some(v => v === null || v === undefined)) return 0;
+  // Rate of change north-south and east-west, in metres per grid step.
+  const dzdx = (zE - zW) / 2;
+  const dzdy = (zS - zN) / 2;
+  // Dot product against a north-west light vector, normalised roughly
+  // into -1..1. The divisor is a vertical exaggeration constant — UK
+  // terrain is gentle enough that true-scale shading is nearly
+  // invisible at these grid spacings.
+  const shade = (dzdx - dzdy) / 60;
+  return Math.max(-1, Math.min(1, shade));
+}
+
+registerMapLayer({
+  id: "terrain",
+  draw(ctx, view) {
+    const grid = mapTerrain;
+    if (!grid) return;
+    const cell = 4;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
+        const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
+        if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
+        const r = Math.round(fr), c = Math.round(fc);
+        const z = grid.values[r][c];
+        // At or below sea level is water, not flat land — skip it so
+        // the sea stays clean rather than picking up noise from the
+        // DEM's own coastal edges.
+        if (z === null || z === undefined || z <= 0) continue;
+        const shade = terrainShadeAt(grid, r, c);
+        if (Math.abs(shade) < 0.02) continue; // flat ground: leave the land colour alone entirely
+        ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
+        ctx.globalAlpha = Math.min(0.32, Math.abs(shade) * 0.4);
+        ctx.fillRect(px, py, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+});
+
 registerMapLayer({
   id: "lakes",
   draw(ctx, view) {
@@ -1548,6 +1747,7 @@ if (mapCanvas) {
     saveMapCentre(mapCentre);
     renderMap();
     ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+    ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
   }
 
   function endPan(e) {
@@ -1573,6 +1773,7 @@ if (mapCanvas) {
     // Only refetches if the drag left the margin — panning back and
     // forth over the same ground costs nothing.
     ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+    ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
   }
   mapCanvas.addEventListener("pointerup", endPan);
   mapCanvas.addEventListener("pointercancel", endPan);
@@ -1586,6 +1787,7 @@ function goTo(centre, { remember } = {}) {
   mapCentre = { lat: centre.lat, lon: centre.lon };
   saveMapCentre(mapCentre);
   ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+  ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
   renderMap();
 }
 
@@ -1688,5 +1890,9 @@ MAP_LAYER_IDS.forEach(id => {
   await loadMapVectors();
   renderMap();
   await ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex], true);
+  // Terrain is static and cached forever once fetched, so this is
+  // fire-and-forget rather than awaited — it renders itself the
+  // moment it lands, and must never hold up the weather map.
+  ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
   renderMap();
 })();
