@@ -1,0 +1,113 @@
+name: Build elevation data
+
+# Manual only — no schedule. Elevation never changes, so this is a
+# one-off job you run once and then forget about. Trigger it from the
+# Actions tab: select this workflow, then "Run workflow".
+#
+# It takes roughly an hour, because it deliberately paces itself to stay
+# under Open-Meteo's rate limit (see scripts/build-elevation.mjs). That's
+# fine — it runs on GitHub's machines, not yours, and public repos get
+# Actions minutes free. You can close the tab and come back to it.
+#
+# DIAGNOSTICS ON THE SUMMARY PAGE
+# Every step below writes what it found to $GITHUB_STEP_SUMMARY, which
+# renders directly on the run's Summary page. That page is the one that's
+# actually readable on an iPad — drilling into per-step logs is fiddly to
+# impossible on a small screen, and the summary otherwise shows nothing
+# but "Process completed with exit code 1", which is true of every
+# possible failure and therefore useless for telling them apart.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Runs regardless of outcome so the summary always records what was
+      # actually in the repo — half of debugging a misplaced upload is
+      # just seeing where the file really went.
+      - name: Record what's in the repo
+        run: |
+          {
+            echo "## Files found"
+            echo ""
+            echo "**Repo root:**"
+            echo '```'
+            ls -1
+            echo '```'
+            echo "**scripts/ directory:**"
+            echo '```'
+            ls -1 scripts 2>/dev/null || echo "(no scripts/ directory exists)"
+            echo '```'
+            echo "Node version: \`$(node --version)\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the script is present
+        run: |
+          if [ ! -f scripts/build-elevation.mjs ]; then
+            {
+              echo "## Result: script not found"
+              echo ""
+              echo "Expected \`scripts/build-elevation.mjs\`, but it isn't there."
+              echo "See the file listing above for where things actually landed."
+              echo ""
+              echo "Most likely: the upload went to the repo root instead of the"
+              echo "\`scripts/\` folder. Fix without re-uploading by opening the file,"
+              echo "tapping the pencil/edit icon, and changing the filename field to"
+              echo "\`scripts/build-elevation.mjs\`, then committing."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Found scripts/build-elevation.mjs." >> "$GITHUB_STEP_SUMMARY"
+
+      # Output is teed to a file as well as the live log, so whatever the
+      # script printed can be lifted onto the summary page afterwards
+      # whether it succeeded or failed.
+      - name: Build the elevation grid
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node scripts/build-elevation.mjs 2>&1 | tee build-output.txt
+
+      - name: Report the outcome
+        run: |
+          {
+            echo "## Build output"
+            echo ""
+            echo '```'
+            # Last 60 lines: enough to capture the real error and the
+            # progress lines before it, without pasting a full hour of
+            # batch counters onto the page.
+            tail -n 60 build-output.txt 2>/dev/null || echo "(the script produced no output at all — it likely never started)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.build.outcome }}" != "success" ]; then
+            echo "**The build step failed.** The output above is the reason." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Commit the elevation data
+        run: |
+          git config user.name "forecast-compare-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/elevation-uk.json
+          git diff --staged --quiet || git commit -m "Build static elevation grid"
+          git push
+          {
+            echo ""
+            echo "## Done"
+            echo "\`data/elevation-uk.json\` has been committed."
+          } >> "$GITHUB_STEP_SUMMARY"
