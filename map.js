@@ -777,119 +777,35 @@ registerMapLayer({
 // competing with rain, temperature and pressure for the same pixels.
 // ---------------------------------------------------------------------
 
-const TERRAIN_DB_NAME = "cloude-terrain";
-const TERRAIN_STORE = "tiles";
-const TERRAIN_ELEVATION_URL = "https://api.open-meteo.com/v1/elevation";
-// Open-Meteo's elevation endpoint caps each request at 100 coordinates,
-// so a usable grid needs batching (see fetchTerrainGrid). Kept modest
-// per zoom: finer than this multiplies request count fast for detail
-// that isn't visible anyway at the wider radii.
-const TERRAIN_MAX_COORDS_PER_REQUEST = 100;
-// Coarsened substantially (was 3/5/8/12) after this was confirmed as the
-// actual cause of "Minutely API request limit exceeded" on a single map
-// open, with nothing else touched.
+// Elevation comes from a STATIC FILE committed to the repo
+// (data/elevation-uk.json), not from a live API call.
 //
-// The numbers make it obvious in hindsight: Open-Meteo weights its rate
-// limit by the number of LOCATIONS requested, and the old spacing asked
-// for 676 coordinates at the closest zoom and 1521 at the widest — many
-// times the weather grid's own 81-361, i.e. terrain alone was several
-// times the entire rest of the app combined, fired as 7-16 back-to-back
-// requests. That is what tripped a 600-weight minutely limit instantly,
-// which is why it happened on a completely fresh quota with only the
-// front page loaded beforehand.
+// It used to be fetched from Open-Meteo's Elevation API on demand,
+// per area, and cached in IndexedDB. That was the wrong shape for this
+// data and caused real damage: elevation is fixed — it doesn't change
+// between forecasts or between years — yet every new area you looked at
+// spent 676-1521 locations of a WEATHER api's rate limit to re-learn
+// the same unchanging hills. Because Open-Meteo weights that limit by
+// number of locations, terrain alone was several times heavier than
+// everything else in the app combined, and a single map open could
+// exhaust the minutely limit and take the actual weather down with it.
 //
-// Halving the resolution costs far less than it sounds: this is shaded
-// relief, a low-frequency visual texture, not a data layer anyone reads
-// values off. At the widest zoom the map is ~250km across, where 26km
-// sampling still resolves every range that reads as a range (the
-// Pennines, Snowdonia, the Highlands) — detail finer than that was
-// being drawn into a handful of screen pixels anyway. Combined with the
-// tighter TERRAIN_FETCH_MARGIN below, worst case drops 1521 -> 225
-// coordinates, an 85% reduction, and 16 requests -> 3.
-const TERRAIN_SPACING_KM = { 25: 6, 50: 10, 100: 18, 150: 26 };
-// Terrain uses a tighter margin than the weather grid's MAP_FETCH_MARGIN
-// (1.5). That margin exists so panning a little doesn't force an
-// immediate refetch — but it costs area, and area is squared in
-// coordinate count: 1.5 fetches 2.25x the visible region, 1.15 fetches
-// 1.32x. Terrain is cached in IndexedDB and never expires, so a refetch
-// after a longer pan is much cheaper here than it is for weather, which
-// makes the trade clearly worth taking on this layer specifically.
-const TERRAIN_FETCH_MARGIN = 1.15;
-// Space the remaining batches out rather than firing them back to back.
-// With only 2-3 requests left this is a small delay in practice, but a
-// minutely limit is specifically about burst rate, so pacing the few
-// requests that remain costs almost nothing and removes the last way
-// this layer can spike.
-const TERRAIN_BATCH_DELAY_MS = 350;
+// Now it's just another data file alongside data/coastline-50m.json and
+// data/places.json: fetched once from the app's own origin, cached by
+// the service worker like every other app file, and costing exactly
+// nothing against any weather API forever after. Panning, zooming, and
+// looking at a forecast a few miles away are all free.
+//
+// The file is built once by scripts/build-elevation.js (a manual
+// GitHub Action) and then never needs touching again.
+const TERRAIN_DATA_URL = "data/elevation-uk.json";
 
-// IndexedDB, NOT localStorage (which everything else in Cloude uses):
-// terrain is bulk data measured in megabytes across a few areas, and
-// localStorage's ~5MB ceiling is shared with FFV history, tide data and
-// settings — filling it with terrain could break those. IndexedDB is
-// built for exactly this and gives far more headroom.
-// Cached at module scope rather than opened fresh in every
-// terrainCacheGet/Set call — panning and zooming call these often, and
-// indexedDB.open() left uncached was quietly leaving one connection
-// open per call for the life of the page (nothing ever closed them),
-// which is exactly the kind of slow leak that only shows up after a
-// long session. One shared connection, opened once, fixes it.
-let terrainDbPromise = null;
-function terrainDb() {
-  if (!terrainDbPromise) {
-    terrainDbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(TERRAIN_DB_NAME, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(TERRAIN_STORE)) db.createObjectStore(TERRAIN_STORE);
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => {
-        terrainDbPromise = null; // let a later call retry rather than staying broken forever
-        reject(req.error);
-      };
-    });
-  }
-  return terrainDbPromise;
-}
-
-async function terrainCacheGet(key) {
-  try {
-    const db = await terrainDb();
-    return await new Promise(resolve => {
-      const tx = db.transaction(TERRAIN_STORE, "readonly");
-      const req = tx.objectStore(TERRAIN_STORE).get(key);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null; // private browsing, quota refusal, or no IndexedDB at all — terrain just won't be cached
-  }
-}
-
-async function terrainCacheSet(key, value) {
-  try {
-    const db = await terrainDb();
-    const tx = db.transaction(TERRAIN_STORE, "readwrite");
-    tx.objectStore(TERRAIN_STORE).put(value, key);
-  } catch {
-    // Same as above — a failed cache write only costs a refetch later.
-  }
-}
-
-// Elevation never changes, so a tile is keyed purely by where it is and
-// how coarse it is — no timestamp, no staleness check. Once fetched, an
-// area is permanently done.
-function terrainKey(centre, radiusKm) {
-  const spacing = TERRAIN_SPACING_KM[radiusKm] || 8;
-  // Snapped to the grid spacing so small pans reuse the same tile
-  // instead of each one counting as a brand-new area to fetch.
-  const snapLat = (Math.round(centre.lat / 0.25) * 0.25).toFixed(2);
-  const snapLon = (Math.round(centre.lon / 0.25) * 0.25).toFixed(2);
-  return `${snapLat},${snapLon},${radiusKm},${spacing}`;
-}
-
+// One grid for the whole country, loaded once into memory. No key, no
+// per-area cache, no staleness check, no in-flight guard — all of that
+// machinery existed only to manage repeated network fetches that no
+// longer happen.
 let mapTerrain = null;
-let terrainFetchInFlight = null;
+let terrainLoadStarted = false;
 const mapTerrainStatusEl = document.getElementById("mapTerrainStatus");
 
 function setTerrainStatus(message) {
@@ -898,177 +814,135 @@ function setTerrainStatus(message) {
   mapTerrainStatusEl.classList.toggle("is-error", !!message);
 }
 
-// Same style of named reason as describeMapFetchError below it (which
-// this deliberately doesn't just reuse — that one's regex checks for
-// "Map weather fetch failed: …", not "Elevation fetch failed: …", so a
-// shared function would silently mis-describe every terrain error as
-// "connection problem"). A 400 here almost always means a malformed
-// coordinate list (see fetchTerrainGrid) rather than anything about
-// the connection, so it's called out on its own rather than lumped in
-// with "server error".
-function describeTerrainFetchError(err) {
-  if (err instanceof Error && /^Timed out/.test(err.message)) return "timed out";
-  if (err instanceof Error && /^Elevation fetch failed: 429/.test(err.message)) return "rate limited";
-  if (err instanceof Error && /^Elevation fetch failed: 400/.test(err.message)) return "bad request — see console";
-  if (err instanceof Error && /^Elevation fetch failed: \d+/.test(err.message)) return err.message.replace("Elevation fetch failed: ", "server error ");
-  return "connection problem";
-}
-
-async function fetchTerrainGrid(centre, radiusKm) {
-  const spacingKm = TERRAIN_SPACING_KM[radiusKm] || 18;
-  const spanKm = radiusKm * TERRAIN_FETCH_MARGIN;
-  const dLat = spacingKm / KM_PER_DEG_LAT;
-  const dLon = spacingKm / kmPerDegLon(centre.lat);
-  const rows = Math.ceil((spanKm * 2) / spacingKm) + 1;
-  const cols = rows;
-  const lat0 = centre.lat - (rows - 1) / 2 * dLat;
-  const lon0 = centre.lon - (cols - 1) / 2 * dLon;
-
-  const lats = [], lons = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      lats.push(lat0 + r * dLat);
-      lons.push(lon0 + c * dLon);
-    }
-  }
-
-  // Batched to the API's 100-coordinate limit, sequentially rather than
-  // all at once — a dozen simultaneous requests to a free public service
-  // is exactly the kind of burst that gets rate-limited. With the
-  // coarser spacing above this is now 2-3 batches rather than 7-16, and
-  // a short pause between them keeps even that from arriving as a spike.
-  const elevations = [];
-  for (let i = 0; i < lats.length; i += TERRAIN_MAX_COORDS_PER_REQUEST) {
-    if (i > 0) await new Promise(resolve => setTimeout(resolve, TERRAIN_BATCH_DELAY_MS));
-    const batchLats = lats.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
-    const batchLons = lons.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
-    const params = new URLSearchParams({
-      latitude: batchLats.map(v => v.toFixed(4)).join(","),
-      longitude: batchLons.map(v => v.toFixed(4)).join(",")
-    });
-    const res = await fetchOpenMeteo(`${TERRAIN_ELEVATION_URL}?${params.toString()}`, {}, 20000);
-    if (!res.ok) {
-      // The response body on a 400 names the actual problem (e.g. a
-      // coordinate out of range) — logged here even though nothing
-      // shows it on-screen (see setTerrainStatus/describeTerrainFetchError
-      // for what the person actually sees), purely so a future session
-      // with real remote-debugging access has something concrete to
-      // look at instead of just a status code.
-      let detail = "";
-      try { detail = await res.text(); } catch {}
-      console.error(`Elevation fetch failed: ${res.status}`, detail);
-      throw new Error(`Elevation fetch failed: ${res.status}`);
-    }
-    const data = await res.json();
-    elevations.push(...data.elevation);
-  }
-
-  const values = [];
-  for (let r = 0; r < rows; r++) {
-    values.push(elevations.slice(r * cols, (r + 1) * cols));
-  }
-  return { lat0, lon0, dLat, dLon, rows, cols, values, spacingKm, radiusKm };
-}
-
-async function ensureTerrain(centre, radiusKm) {
-  const key = terrainKey(centre, radiusKm);
-  if (mapTerrain && mapTerrain.key === key) return;
-  if (terrainFetchInFlight === key) return; // already being fetched or checked — don't stack duplicate batch runs
-
-  // Claimed synchronously, before the first await below. This function
-  // is called from several places close together (pan-end, double-tap
-  // zoom, initial page load) — with the claim made only after the
-  // IndexedDB cache check (as it was before), two calls for the same
-  // area arriving within that check's own round-trip both saw nothing
-  // in flight yet, both found no cache hit, and both went on to run a
-  // full 7-16-request batched elevation fetch at once. Claiming the key
-  // up front closes that window: nothing here awaits anything before
-  // the flag is set, so a second call always sees it.
-  terrainFetchInFlight = key;
+async function loadTerrainData() {
+  if (terrainLoadStarted) return;
+  terrainLoadStarted = true;
   try {
-    const cached = await terrainCacheGet(key);
-    if (cached) {
-      mapTerrain = { key, ...cached };
-      setTerrainStatus("");
-      renderMap();
-      return;
+    const res = await fetchWithTimeout(TERRAIN_DATA_URL, {}, 20000);
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+
+    // Stored flat (row-major) in the file to keep its size down; the
+    // renderer wants rows, so it's reshaped once here rather than doing
+    // index arithmetic on every sampled pixel.
+    const values = [];
+    for (let r = 0; r < data.rows; r++) {
+      values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
     }
 
-    const grid = await fetchTerrainGrid(centre, radiusKm);
-    await terrainCacheSet(key, grid);
-    mapTerrain = { key, ...grid };
+    // terrainShadeAt needs the real ground distance between samples to
+    // turn an elevation difference into a slope. Derived from the grid's
+    // own latitude spacing rather than hardcoded, so changing the
+    // resolution in build-elevation.js needs no matching change here.
+    const spacingKm = data.dLat * KM_PER_DEG_LAT;
+
+    mapTerrain = { ...data, values, spacingKm };
     setTerrainStatus("");
     renderMap();
   } catch (err) {
-    console.error("Terrain fetch failed:", err);
-    // No longer console-only: on an iPad/iPhone with no dev tools
-    // attached, console.error is completely invisible, so a failure
-    // here had no way to ever be diagnosed from the device itself.
-    // Terrain is still decoration — the map stays fully usable without
-    // it — but "usable without it" and "impossible to tell why it's
-    // missing" are different things, and only the first one was
-    // actually intended.
-    setTerrainStatus(`Terrain didn't load (${describeTerrainFetchError(err)})${typeof openMeteoErrorSuffix === "function" ? openMeteoErrorSuffix() : ""}.`);
-  } finally {
-    terrainFetchInFlight = null;
+    console.error("Terrain data load failed:", err);
+    // Almost always means the file hasn't been built and committed yet
+    // (see scripts/build-elevation.js) rather than anything transient,
+    // so the message says so rather than suggesting a retry that won't
+    // help. Terrain is decoration — the map is fully usable without it.
+    setTerrainStatus("Terrain data not available — run the \"Build elevation data\" action once to generate it.");
+    terrainLoadStarted = false; // allow a retry on the next map open
   }
 }
 
-// Standard hillshade: light from the north-west (the cartographic
-// convention — it reads as raised rather than sunken, which a
-// south-east light famously inverts for most people), shading each
-// cell by the slope it faces.
-function terrainShadeAt(grid, r, c) {
-  const rN = Math.max(0, r - 1), rS = Math.min(grid.rows - 1, r + 1);
-  const cW = Math.max(0, c - 1), cE = Math.min(grid.cols - 1, c + 1);
-  const zN = grid.values[rN][c], zS = grid.values[rS][c];
-  const zW = grid.values[r][cW], zE = grid.values[r][cE];
-  if ([zN, zS, zW, zE].some(v => v === null || v === undefined)) return 0;
-  // Elevation change north-south and east-west, in raw metres between
-  // cells 2 grid-steps apart (one either side of this cell).
+// Elevation at a FRACTIONAL grid position, bilinearly interpolated
+// between the four surrounding samples.
+//
+// This replaces nearest-neighbour lookup (Math.round on the grid
+// coordinates), which was the real reason terrain rendered as visibly
+// large blocks: with rounding, every screen pixel falling inside one
+// grid cell got an identical elevation, so the "texture" being drawn
+// was literally the sample grid itself. Interpolating makes elevation
+// vary continuously across each cell, so the shading stops being a
+// mosaic of flat tiles.
+//
+// Worth being clear about what this does and doesn't do: it removes the
+// blockiness, but it cannot invent detail the source grid never had. A
+// ridge narrower than the sample spacing still isn't in the data. This
+// makes the hillshade smooth and plausible, not higher-resolution.
+function terrainElevationAt(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  if (r0 < 0 || c0 < 0 || r0 > grid.rows - 1 || c0 > grid.cols - 1) return null;
+  const tr = fr - r0, tc = fc - c0;
+
+  const z00 = grid.values[r0][c0], z01 = grid.values[r0][c1];
+  const z10 = grid.values[r1][c0], z11 = grid.values[r1][c1];
+  if ([z00, z01, z10, z11].some(v => v === null || v === undefined)) return null;
+
+  const top = z00 + (z01 - z00) * tc;
+  const bottom = z10 + (z11 - z10) * tc;
+  return top + (bottom - top) * tr;
+}
+
+// Hillshade at a fractional grid position, from interpolated elevations
+// one full cell either side. Same north-west light convention and same
+// slope maths as before — only the sampling underneath it changed.
+function terrainShadeAt(grid, fr, fc) {
+  const zN = terrainElevationAt(grid, fr - 1, fc);
+  const zS = terrainElevationAt(grid, fr + 1, fc);
+  const zW = terrainElevationAt(grid, fr, fc - 1);
+  const zE = terrainElevationAt(grid, fr, fc + 1);
+  if ([zN, zS, zW, zE].some(v => v === null)) return 0;
+
+  // Elevation change north-south and east-west, in metres, across two
+  // grid steps (one either side).
   const dzdx = (zE - zW) / 2;
   const dzdy = (zS - zN) / 2;
-  // Normalised into an actual slope (rise/run) by dividing by the real
-  // ground distance between those cells, rather than left as a raw
-  // metres-per-grid-step figure. That distance is 2 grid steps —
-  // grid.spacingKm each way — converted to metres.
+
+  // Normalised by real ground distance into a true slope (rise/run)
+  // rather than left as metres-per-grid-step. Without this the same
+  // hillside reads differently at different grid resolutions, and a
+  // fixed divisor can't calibrate for both — the original version
+  // divided raw metres by 60, which clipped to the clamp for anything
+  // past gentle countryside, rendering most of upland Britain as one
+  // flat maximum-intensity block. A slope value is small and
+  // well-behaved regardless of spacing (~0.003 flat, ~0.09 for a steep
+  // mountainside).
   //
-  // This matters because grid spacing itself varies 3-12km across the
-  // four zoom tiers (see TERRAIN_SPACING_KM): left unnormalised, the
-  // same real hillside produces a much bigger raw number at a wide
-  // zoom (bigger km per grid step) than a close one, so a fixed
-  // divisor can't calibrate both at once. Worse, checked against
-  // plausible UK relief (Fens ~3m/km up to Lake District/Snowdonia
-  // ~90m/km), the old raw-metres version divided by 60 clipped to the
-  // ±1 clamp for anything past gentle countryside at EVERY zoom
-  // level — meaning most of Britain rendered as one flat maximum-alpha
-  // block with no graduation, not the subtle shaded relief intended.
-  // A true slope value is small and well-behaved regardless of zoom
-  // (typically 0.003 for flat ground up to ~0.09 for a steep
-  // mountainside), so the same exaggeration constant now produces a
-  // sensible spread at every zoom tier instead of clipping almost
-  // everywhere.
-  //
-  // spacingKm is only present on grids built AFTER it was added to
-  // fetchTerrainGrid's return value. Entries already sitting in the
-  // IndexedDB cache from before that change don't have it — and since
-  // elevation never changes, those entries never expire, so they'd
-  // stay in use indefinitely. Without this fallback, `undefined * 1000`
-  // gives NaN, every shade value becomes NaN, and the terrain layer
-  // silently draws nothing at all while looking (from the outside)
-  // exactly like a fetch that never happened. Deriving the spacing
-  // from the zoom radius the grid was built for keeps those older
-  // cached entries working rather than needing the cache cleared.
-  const spacingKm = grid.spacingKm ?? TERRAIN_SPACING_KM[grid.radiusKm] ?? 5;
-  const stepMetres = spacingKm * 1000;
+  // spacingKm is set once in loadTerrainData() from the grid file's own
+  // dLat, so changing the resolution in build-elevation.js needs no
+  // matching change here.
+  const stepMetres = grid.spacingKm * 1000;
   const slopeX = dzdx / stepMetres;
   const slopeY = dzdy / stepMetres;
-  // Tuned against that same real-relief range so gentle ground stays
-  // subtle, rolling hills read as mild shading, and only genuinely
-  // steep ground (mountainsides, cliffs) reaches full intensity.
   const EXAGGERATION = 8;
-  const shade = (slopeX - slopeY) * EXAGGERATION;
-  return Math.max(-1, Math.min(1, shade));
+  return Math.max(-1, Math.min(1, (slopeX - slopeY) * EXAGGERATION));
+}
+
+// Smoothly blended shade, instead of "whatever the nearest grid node
+// says". This is what actually fixes the blocky look — and it's a
+// rendering fix, not a data one: the old code rounded to the nearest
+// node, so every screen pixel falling inside the same grid cell got an
+// identical value and painted as one flat square. At a typical zoom a
+// single cell covers roughly 20 screen pixels, which is exactly the size
+// of the boxes that were visible. Fetching a finer grid would have made
+// the boxes smaller without making them any less box-like; interpolating
+// removes them regardless of resolution, and costs nothing extra to
+// download.
+//
+// Standard bilinear blend: take the shade at the four grid nodes
+// surrounding this point and weight each by how close the point is to
+// it, so the value moves continuously across a cell rather than
+// snapping at its edges.
+function terrainShadeBilinear(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0; // 0..1 position within the cell
+
+  const s00 = terrainShadeAt(grid, r0, c0);
+  const s01 = terrainShadeAt(grid, r0, c1);
+  const s10 = terrainShadeAt(grid, r1, c0);
+  const s11 = terrainShadeAt(grid, r1, c1);
+
+  const top = s00 + (s01 - s00) * tc;
+  const bottom = s10 + (s11 - s10) * tc;
+  return top + (bottom - top) * tr;
 }
 
 registerMapLayer({
@@ -1076,19 +950,22 @@ registerMapLayer({
   draw(ctx, view) {
     const grid = mapTerrain;
     if (!grid) return;
-    const cell = 4;
+    // 3px rather than 4: with the interpolation below there is now real
+    // detail to resolve between grid nodes, where before every pixel in
+    // a cell was identical and a smaller step just drew the same value
+    // more times.
+    const cell = 3;
     for (let px = 0; px < view.w; px += cell) {
       for (let py = 0; py < view.h; py += cell) {
         const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
         const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
         if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-        const r = Math.round(fr), c = Math.round(fc);
-        const z = grid.values[r][c];
-        // At or below sea level is water, not flat land — skip it so
-        // the sea stays clean rather than picking up noise from the
-        // DEM's own coastal edges.
+        // Sea check uses the nearest node rather than an interpolated
+        // height: blending across a coastline would produce fractional
+        // "heights" just offshore and paint shadow onto open water.
+        const z = grid.values[Math.round(fr)][Math.round(fc)];
         if (z === null || z === undefined || z <= 0) continue;
-        const shade = terrainShadeAt(grid, r, c);
+        const shade = terrainShadeBilinear(grid, fr, fc);
         if (Math.abs(shade) < 0.02) continue; // flat ground: leave the land colour alone entirely
         ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
         ctx.globalAlpha = Math.min(0.32, Math.abs(shade) * 0.4);
@@ -2051,7 +1928,7 @@ if (mapCanvas) {
     saveMapCentre(mapCentre);
     renderMap();
     ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-    ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+    loadTerrainData();
   }
 
   function endPan(e) {
@@ -2077,7 +1954,7 @@ if (mapCanvas) {
     // Only refetches if the drag left the margin — panning back and
     // forth over the same ground costs nothing.
     ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-    ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+    loadTerrainData();
   }
   mapCanvas.addEventListener("pointerup", endPan);
   mapCanvas.addEventListener("pointercancel", endPan);
@@ -2091,7 +1968,7 @@ function goTo(centre, { remember } = {}) {
   mapCentre = { lat: centre.lat, lon: centre.lon };
   saveMapCentre(mapCentre);
   ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-  ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+  loadTerrainData();
   renderMap();
 }
 
@@ -2204,6 +2081,6 @@ MAP_LAYER_IDS.forEach(id => {
   // heavy requests into one minutely window. Terrain is decoration and
   // nobody is waiting on it, so giving the weather request room to clear
   // first costs nothing visible and removes the overlap entirely.
-  setTimeout(() => ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]), 1200);
+  loadTerrainData();
   renderMap();
 })();
