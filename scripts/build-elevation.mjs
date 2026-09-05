@@ -68,7 +68,32 @@ async function fetchBatch(lats, lons, attempt = 0) {
     latitude: lats.map(v => v.toFixed(4)).join(","),
     longitude: lons.map(v => v.toFixed(4)).join(",")
   });
-  const res = await fetch(`${ELEVATION_URL}?${params.toString()}`);
+
+  // Network-level failures (connection refused, DNS, connect timeout)
+  // reject rather than returning a response, so they need catching
+  // separately from the HTTP status handling further down — an
+  // uncaught one here kills the whole run on its very first request,
+  // which is exactly what happened the first time this was deployed:
+  // UND_ERR_CONNECT_TIMEOUT against api.open-meteo.com, before a single
+  // batch had been fetched.
+  let res;
+  try {
+    res = await fetch(`${ELEVATION_URL}?${params.toString()}`, {
+      // A connection that hasn't opened in 30s isn't going to; failing
+      // here lets the retry below run rather than hanging on undici's
+      // own default.
+      signal: AbortSignal.timeout(30000)
+    });
+  } catch (err) {
+    if (attempt >= 5) {
+      console.error(`Network error after 6 attempts: ${err?.cause?.code || err?.name || err}`);
+      throw err;
+    }
+    const waitMs = 5000 * (attempt + 1);
+    console.log(`  network error (${err?.cause?.code || err?.name}), retrying in ${waitMs / 1000}s…`);
+    await sleep(waitMs);
+    return fetchBatch(lats, lons, attempt + 1);
+  }
 
   if (res.status === 429) {
     // Backs off and retries rather than failing the whole run — an hour
