@@ -15,7 +15,13 @@
       } catch {}
     })();
   </script>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- viewport-fit=cover lets the page draw into the notch/status-bar
+       strip instead of iOS reserving it and leaving it blank — that blank
+       strip was the stubborn gap above "Cloude". Drawing there makes the
+       page responsible for keeping content clear of it, which is what the
+       env(safe-area-inset-top) padding in style.css's .app rule does.
+       map.html already had this; the front page didn't. -->
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">

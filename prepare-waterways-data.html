@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Build waterways data — Cloude</title>
+<!--
+  One-off tool, same pattern as prepare-elevation-data.html. Produces
+  data/waterways.json (rivers + canals) and data/lakes-50m.json (lakes),
+  from OpenStreetMap via the Overpass API.
+
+  MEASURE FIRST, COMMIT SECOND
+  The whole point of "Check sizes" below is to find out what this data
+  actually weighs BEFORE anything lands in the repo. Estimating file
+  sizes from memory is exactly the kind of guessing that wasted a lot of
+  time on the elevation build, so this asks the server instead. Rivers
+  and canals only — no streams, drains or ditches: those outnumber real
+  waterways by a large factor and would be visual noise at a map zoom of
+  60-125 miles across, quite apart from the download.
+
+  ATTRIBUTION — REQUIRED, NOT OPTIONAL
+  OpenStreetMap data is ODbL licensed. Using it means crediting
+  "© OpenStreetMap contributors" somewhere visible. Add that to help.html
+  before shipping this data. (Natural Earth, used for the coastline, is
+  public domain and needs no such credit — this is a genuinely new
+  obligation, not a copy of the existing arrangement.)
+
+  Overpass is a free, shared, heavily-used service. The queries below are
+  large, so they can be slow or refused at busy times. If one times out,
+  wait a few minutes and try again rather than hammering it — and note
+  this only ever needs to run once.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px 20px 60px; max-width: 640px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #666; margin: 0 0 20px; }
+  button { font: inherit; font-weight: 600; padding: 14px 20px; border-radius: 10px; border: 0; background: #2f6f4f; color: #fff; min-height: 48px; }
+  button.secondary { background: #6b6b6b; }
+  button:disabled { opacity: .45; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0; }
+  #log { margin-top: 18px; padding: 12px; border-radius: 8px; background: rgba(127,127,127,.12); font-family: ui-monospace, monospace; font-size: 13px; white-space: pre-wrap; max-height: 340px; overflow-y: auto; }
+  .warn { color: #b5541c; }
+  .done { color: #2f6f4f; font-weight: 600; }
+  table { border-collapse: collapse; margin-top: 12px; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,.3); font-size: 14px; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>Build waterways data</h1>
+<p class="sub">Rivers, canals and lakes for the map — from OpenStreetMap.</p>
+
+<div class="row">
+  <button id="measure">Check sizes first</button>
+  <button id="build" class="secondary" disabled>Build files</button>
+</div>
+<div id="results"></div>
+
+<div class="row">
+  <button id="dlWater" class="secondary" disabled>Download waterways.json</button>
+  <button id="dlLakes" class="secondary" disabled>Download lakes-50m.json</button>
+</div>
+
+<div id="log"></div>
+
+<script>
+// Great Britain + Ireland bounding box, matching the elevation grid.
+const BBOX = "49.8,-8.4,61.0,2.0";
+// Public Overpass instances. If the first is busy or rate-limited the
+// next is tried — this is a free shared service and refusals are normal.
+const ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter"
+];
+
+// Rivers and canals only. `waterway=river` and `waterway=canal` are the
+// navigable/fishable watercourses; stream, drain and ditch are
+// deliberately excluded (see the note at the top of this file).
+const QUERY_WATERWAYS = `[out:json][timeout:600];
+(way["waterway"~"^(river|canal)$"](${BBOX}););
+out geom;`;
+
+// Lakes: natural=water plus the reservoir/lake water types, filtered by
+// size below so the file isn't dominated by farm ponds.
+const QUERY_LAKES = `[out:json][timeout:600];
+(
+  way["natural"="water"]["water"~"^(lake|reservoir)$"](${BBOX});
+  relation["natural"="water"]["water"~"^(lake|reservoir)$"](${BBOX});
+);
+out geom;`;
+
+const $ = id => document.getElementById(id);
+let waterways = null, lakes = null;
+
+function log(m, cls) {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = m;
+  $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+async function overpass(query, label) {
+  for (const url of ENDPOINTS) {
+    try {
+      log(`Querying ${label} from ${new URL(url).hostname}… (can take several minutes)`);
+      const res = await fetch(url, {
+        method: "POST",
+        body: "data=" + encodeURIComponent(query),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }
+      });
+      if (res.status === 429 || res.status === 504) {
+        log(`  server busy (${res.status}) — trying the next one`, "warn");
+        continue;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      log(`  got ${data.elements.length.toLocaleString()} ${label}.`);
+      return data;
+    } catch (err) {
+      log(`  failed: ${err.message}`, "warn");
+    }
+  }
+  throw new Error(`Couldn't fetch ${label} from any Overpass server. Wait a few minutes and try again.`);
+}
+
+// Douglas-Peucker simplification. OSM geometry is far more detailed than
+// a map 60-125 miles across can show — keeping every vertex would cost a
+// lot of bytes to draw sub-pixel wiggles nobody can see.
+function simplify(points, tolerance) {
+  if (points.length < 3) return points;
+  let maxDist = 0, index = 0;
+  const [x1, y1] = points[0], [x2, y2] = points[points.length - 1];
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x0, y0] = points[i];
+    const dx = x2 - x1, dy = y2 - y1;
+    const denom = Math.hypot(dx, dy);
+    const dist = denom === 0
+      ? Math.hypot(x0 - x1, y0 - y1)
+      : Math.abs(dy * x0 - dx * y0 + x2 * y1 - y2 * x1) / denom;
+    if (dist > maxDist) { maxDist = dist; index = i; }
+  }
+  if (maxDist > tolerance) {
+    return simplify(points.slice(0, index + 1), tolerance)
+      .slice(0, -1)
+      .concat(simplify(points.slice(index), tolerance));
+  }
+  return [points[0], points[points.length - 1]];
+}
+
+// ~0.002° is roughly 200m — below what a pixel covers at these zooms.
+const TOLERANCE = 0.002;
+
+function buildWaterways(data) {
+  const features = [];
+  for (const el of data.elements) {
+    if (!el.geometry || el.geometry.length < 2) continue;
+    let coords = el.geometry.map(g => [+g.lon.toFixed(4), +g.lat.toFixed(4)]);
+    coords = simplify(coords, TOLERANCE);
+    if (coords.length < 2) continue;
+    features.push({
+      type: "Feature",
+      // Only the kind is kept — no names, no OSM ids, no other tags. The
+      // map draws these as plain blue lines and never labels them, so
+      // anything else would be bytes downloaded to be ignored.
+      properties: { kind: el.tags?.waterway === "canal" ? "canal" : "river" },
+      geometry: { type: "LineString", coordinates: coords }
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function buildLakes(data) {
+  const features = [];
+  for (const el of data.elements) {
+    if (!el.geometry || el.geometry.length < 4) continue;
+    let coords = el.geometry.map(g => [+g.lon.toFixed(4), +g.lat.toFixed(4)]);
+    coords = simplify(coords, TOLERANCE);
+    if (coords.length < 4) continue;
+    // Rough bounding-box area filter, in square degrees. Small ponds are
+    // invisible at this map's zoom range and would dominate the feature
+    // count — Windermere and Loch Ness are the point of this layer.
+    const lons = coords.map(c => c[0]), lats = coords.map(c => c[1]);
+    const area = (Math.max(...lons) - Math.min(...lons)) * (Math.max(...lats) - Math.min(...lats));
+    if (area < 0.00005) continue;
+    if (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1]) {
+      coords.push(coords[0]); // close the ring
+    }
+    features.push({
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Polygon", coordinates: [coords] }
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function kb(obj) { return (new Blob([JSON.stringify(obj)]).size / 1024).toFixed(0); }
+
+function showResults() {
+  const rows = [];
+  if (waterways) {
+    const rivers = waterways.features.filter(f => f.properties.kind === "river").length;
+    const canals = waterways.features.filter(f => f.properties.kind === "canal").length;
+    rows.push(["Rivers", rivers, ""], ["Canals", canals, ""],
+              ["waterways.json", waterways.features.length, kb(waterways) + " KB"]);
+  }
+  if (lakes) rows.push(["lakes-50m.json", lakes.features.length, kb(lakes) + " KB"]);
+  if (!rows.length) return;
+  $("results").innerHTML =
+    "<table><tr><th>Layer</th><th class='n'>Features</th><th class='n'>Size</th></tr>" +
+    rows.map(r => `<tr><td>${r[0]}</td><td class="n">${r[1].toLocaleString()}</td><td class="n">${r[2]}</td></tr>`).join("") +
+    "</table>";
+}
+
+async function run(measureOnly) {
+  $("measure").disabled = true; $("build").disabled = true;
+  try {
+    const w = await overpass(QUERY_WATERWAYS, "rivers and canals");
+    waterways = buildWaterways(w);
+    const l = await overpass(QUERY_LAKES, "lakes");
+    lakes = buildLakes(l);
+    showResults();
+    log("");
+    log(`Waterways: ${kb(waterways)} KB. Lakes: ${kb(lakes)} KB.`, "done");
+    log("For comparison, coastline-50m.json is about 204 KB and elevation-uk.json about 52 KB.");
+    if (measureOnly) {
+      log("Nothing has been written. Tap Download if these sizes look acceptable.", "done");
+    }
+    $("dlWater").disabled = false;
+    $("dlLakes").disabled = false;
+  } catch (err) {
+    log(err.message, "warn");
+  } finally {
+    $("measure").disabled = false;
+    $("build").disabled = false;
+  }
+}
+
+function download(obj, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(obj)], { type: "application/json" }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+$("measure").onclick = () => run(true);
+$("build").onclick = () => run(false);
+$("dlWater").onclick = () => download(waterways, "waterways.json");
+$("dlLakes").onclick = () => download(lakes, "lakes-50m.json");
+
+log("Ready. Tap \u201cCheck sizes first\u201d \u2014 it fetches and reports sizes without writing anything.");
+log("Overpass is a busy free service; a query can take several minutes or be refused. Retrying later is normal.");
+</script>
+</body>
+</html>

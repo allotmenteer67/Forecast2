@@ -106,7 +106,20 @@ body {
    than the other three sides — see .title-bar below for why phones
    don't need the same top clearance iPad does. */
 @media (max-width: 700px) {
-  .app { padding: 6px 12px 12px; }
+  /* The top value carries env(safe-area-inset-top) because index.html
+     now sets viewport-fit=cover. Without cover, iOS reserves the notch/
+     status-bar strip itself and leaves it blank — that blank strip WAS
+     the stubborn gap above "Cloude". With cover, the page is allowed to
+     draw into that area and becomes responsible for keeping content
+     clear of it, which is what the inset does.
+
+     env() resolves to 0 anywhere there is no inset (older iOS, Android,
+     desktop, and any browser tab that isn't running full-bleed), so this
+     falls back to the previous 6px rather than breaking those. The 6px
+     is added on top of the inset rather than replacing it, so there is
+     still a small breathing gap below the status bar instead of text
+     sitting flush against it. */
+  .app { padding: calc(6px + env(safe-area-inset-top)) 12px 12px; }
 }
 
 header {
@@ -1518,6 +1531,35 @@ footer {
 @media (min-width: 701px) {
   .title-bar {
     padding-top: 6px;
+  }
+}
+
+/* Phones only: Settings moves to the LEFT corner, place chip stays right.
+   The left corner is off-limits on iPad (window chrome sits there — see
+   the note above), but phones have no such overlay, and putting the two
+   controls in opposite corners relieves the crowding that came from
+   having a 44px icon and a variable-width place name sharing one side.
+
+   Done with `display: contents` rather than by moving anything in the
+   HTML: that makes .title-bar-right's children become grid items of
+   .title-bar itself, so they can be placed in its columns directly. The
+   markup stays identical for both layouts, which matters because the
+   iPad arrangement above is already correct and shouldn't be disturbed
+   to fix the phone one.
+
+   .place-menu is absolutely positioned, so it is unaffected by this and
+   still anchors to the chip's corner. */
+@media (max-width: 700px) {
+  .title-bar-right {
+    display: contents;
+  }
+  .settings-icon-button {
+    grid-column: 1;
+    justify-self: start;
+  }
+  .place-chip {
+    grid-column: 3;
+    justify-self: end;
   }
 }
 
