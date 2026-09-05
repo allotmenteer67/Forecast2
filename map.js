@@ -968,7 +968,19 @@ registerMapLayer({
         const shade = terrainShadeBilinear(grid, fr, fc);
         if (Math.abs(shade) < 0.02) continue; // flat ground: leave the land colour alone entirely
         ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
-        ctx.globalAlpha = Math.min(0.32, Math.abs(shade) * 0.4);
+        // Cap raised 0.32 -> 0.50 and the multiplier 0.4 -> 0.7, after
+        // the first look at real terrain showed the whole layer reading
+        // uniformly too pale. Both original numbers were arrived at by
+        // calculation rather than by looking at anything, so this is the
+        // first time they've been set against actual output.
+        //
+        // Both raised together deliberately: the multiplier alone would
+        // only have brightened gentle slopes (steep ground was already
+        // hitting the cap), and the cap alone would only have deepened
+        // the strongest shadows while leaving lowland relief invisible.
+        // The complaint was that everything was too faint, so both the
+        // ramp and its ceiling needed lifting.
+        ctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
         ctx.fillRect(px, py, cell, cell);
       }
     }
