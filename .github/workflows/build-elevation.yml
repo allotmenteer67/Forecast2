@@ -103,19 +103,37 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${{ steps.build.outcome }}" != "success" ]; then
-            echo "**The build step failed.** The output above is the reason." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo "**The build stopped early** — but progress was saved and committed below. Run this workflow again to continue from where it stopped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Commit the elevation data
+      # Committed whether the build finished or stopped early. This is
+      # what makes the job resumable: the partial grid has to be in the
+      # repo for the next run's checkout to find and continue from. A
+      # failed run that committed nothing would be a wasted hour, which
+      # is exactly what happened before.
+      - name: Commit progress
         run: |
           git config user.name "forecast-compare-bot"
           git config user.email "actions@users.noreply.github.com"
           git add data/elevation-uk.json
-          git diff --staged --quiet || git commit -m "Build static elevation grid"
-          git push
-          {
-            echo ""
-            echo "## Done"
-            echo "\`data/elevation-uk.json\` has been committed."
-          } >> "$GITHUB_STEP_SUMMARY"
+          if git diff --staged --quiet; then
+            echo "No change to commit." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git commit -m "Build elevation grid (progress)"
+            # Rebase before pushing in case anything else landed on main
+            # while this long job was running.
+            git pull --rebase --autostash origin main || true
+            git push
+            echo "Progress committed to \`data/elevation-uk.json\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Runs last so the summary ends with the one thing worth knowing:
+      # whether to run it again or not.
+      - name: Say whether it is finished
+        run: |
+          if grep -q '"complete":true' data/elevation-uk.json 2>/dev/null; then
+            echo "## Finished — the grid is complete. No need to run this again." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Not finished yet — run this workflow again to continue." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
