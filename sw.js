@@ -26,7 +26,13 @@
 // everything refetched fresh — do this on any deploy where "it looks
 // like an old version" is a live possibility, not just for
 // SHELL_FILES changes.
-const CACHE_NAME = "cloude-shell-v2";
+//
+// Bumped to v3 for this deploy: the title-bar layout changed (settings
+// icon moved out of .title-bar-right in the HTML, new CSS to match) and
+// the sheet's max-height changed. Both are exactly the kind of change
+// that looks like "nothing happened" if the old shell keeps being
+// served — see the note above.
+const CACHE_NAME = "cloude-shell-v3";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

@@ -114,12 +114,12 @@ body {
      clear of it, which is what the inset does.
 
      env() resolves to 0 anywhere there is no inset (older iOS, Android,
-     desktop, and any browser tab that isn't running full-bleed), so this
-     falls back to the previous 6px rather than breaking those. The 6px
-     is added on top of the inset rather than replacing it, so there is
-     still a small breathing gap below the status bar instead of text
-     sitting flush against it. */
-  .app { padding: calc(6px + env(safe-area-inset-top)) 12px 12px; }
+     desktop, and any browser tab that isn't running full-bleed).
+     Was "6px + inset" — confirmed on a real notched phone as still more
+     gap than wanted above "Cloude". 2px is just enough that text doesn't
+     sit flush against the status bar; the inset itself already does the
+     real clearance work. */
+  .app { padding: calc(2px + env(safe-area-inset-top)) 12px 12px; }
 }
 
 header {
@@ -1513,11 +1513,23 @@ footer {
 
 /* ---- Header place chip (front page) ---- */
 
+/* Rewritten from a CSS Grid + `display: contents` approach. That
+   version placed .settings-icon-button and .place-chip as grid items of
+   .title-bar by collapsing their .title-bar-right wrapper with
+   `display: contents`, so their explicit grid-column/justify-self could
+   apply directly. It never actually worked on-device — confirmed on a
+   real phone the icon stayed grouped with the chip on the right instead
+   of moving to the left corner. `display: contents` on a wrapper around
+   focusable/interactive children (a link, a button) is a known rough
+   edge in WebKit; rather than chase why, this switches to a plain flex
+   row with `order`, which has no such history. The icon is now a direct
+   child of .title-bar in the HTML (a sibling of <h1>, before it) instead
+   of living inside .title-bar-right — no wrapper to collapse, so there
+   is nothing for that bug to attach to. */
 .title-bar {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   position: relative;
 }
 
@@ -1534,59 +1546,62 @@ footer {
   }
 }
 
-/* Phones only: Settings moves to the LEFT corner, place chip stays right.
-   The left corner is off-limits on iPad (window chrome sits there — see
-   the note above), but phones have no such overlay, and putting the two
-   controls in opposite corners relieves the crowding that came from
-   having a 44px icon and a variable-width place name sharing one side.
+/* Default (iPad/desktop) order: title first, then the icon and chip
+   together on the right — icon before chip, matching how they read
+   left-to-right. `order` rather than source position is what controls
+   this, so the phone media query below can simply reassign it rather
+   than needing a second markup arrangement. */
+.settings-icon-button {
+  order: 2;
+}
+.title-bar h1 {
+  order: 1;
+}
+.title-bar-right {
+  order: 3;
+}
 
-   Done with `display: contents` rather than by moving anything in the
-   HTML: that makes .title-bar-right's children become grid items of
-   .title-bar itself, so they can be placed in its columns directly. The
-   markup stays identical for both layouts, which matters because the
-   iPad arrangement above is already correct and shouldn't be disturbed
-   to fix the phone one.
-
-   .place-menu is absolutely positioned, so it is unaffected by this and
-   still anchors to the chip's corner. */
+/* Phones only: Settings moves to the LEFT corner, place chip stays
+   right. The left corner is off-limits on iPad (window chrome sits
+   there — see the note above), but phones have no such overlay, and
+   putting the two controls in opposite corners relieves the crowding
+   that came from having a 44px icon and a variable-width place name
+   sharing one side. */
 @media (max-width: 700px) {
-  .title-bar-right {
-    display: contents;
-  }
   .settings-icon-button {
-    grid-column: 1;
-    justify-self: start;
+    order: 1;
   }
-  .place-chip {
-    grid-column: 3;
-    justify-self: end;
+  .title-bar h1 {
+    order: 2;
+  }
+  .title-bar-right {
+    order: 3;
   }
 }
 
 .title-bar h1 {
   margin: 0;
-  grid-column: 2;
-  justify-self: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
 }
 
-/* Right side only — the left corner is exactly where iPad/Mac window
-   chrome (traffic-light buttons) sits, the same collision already
-   fixed once for the map page's title. Putting the new Settings icon
-   there too just walked straight back into it. The right corner has
-   never had this problem (the chip's sat there safely all along), so
-   Settings joins it there instead of getting its own dedicated corner. */
+/* .place-menu is absolutely positioned, so it sits outside this flex
+   flow entirely and still anchors to the chip's corner regardless of
+   where the chip itself lands in source/order terms. */
+
 .title-bar-right {
-  grid-column: 3;
-  justify-self: end;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  /* Grid items default to a content-based minimum width too, same
+  flex: 0 1 auto;
+  /* Flex items default to a content-based minimum width too, same
      underlying issue as .place-chip below — without this, the wrapper
      itself could refuse to shrink below its content's natural size,
      which would defeat that fix at the next level up. */
   min-width: 0;
-  max-width: 100%;
+  max-width: 60%;
 }
 
 .settings-icon-button {
@@ -1956,7 +1971,21 @@ footer {
   transition: transform .28s cubic-bezier(.32,.72,0,1), visibility 0s linear .28s;
   z-index: 11;
   padding: 10px 20px calc(20px + env(safe-area-inset-bottom));
-  max-height: 78vh;
+  /* Was a flat 78vh. That's a fixed 22% peek of whatever's behind the
+     sheet regardless of how much the sheet actually has to show —
+     confirmed on-device with the fishing detail sheet (chart plus two
+     full factor lists): content taller than 78vh forced an internal
+     scroll to see the bottom, while still leaving a large, mostly-
+     wasted strip of the page visible above it. This still leaves a
+     peek (so it reads as a sheet, not a full-screen takeover) but the
+     peek is now a fixed height rather than a fixed proportion, so a
+     tall sheet gets to use nearly the whole screen instead of always
+     giving up the same 22% no matter how much it needs. dvh rather than
+     vh: vh is fixed to the layout viewport, which on iOS Safari doesn't
+     account for the browser chrome showing/hiding — dvh tracks the
+     actual visible height, which matters more here since it directly
+     sets how much content is reachable without scrolling. */
+  max-height: calc(100dvh - env(safe-area-inset-top) - 48px);
   overflow-y: auto;
 }
 .sheet[hidden] { display: block; } /* transform handles hiding, so it can transition; hidden just removes from a11y tree via JS toggle instead */
