@@ -785,7 +785,42 @@ const TERRAIN_ELEVATION_URL = "https://api.open-meteo.com/v1/elevation";
 // per zoom: finer than this multiplies request count fast for detail
 // that isn't visible anyway at the wider radii.
 const TERRAIN_MAX_COORDS_PER_REQUEST = 100;
-const TERRAIN_SPACING_KM = { 25: 3, 50: 5, 100: 8, 150: 12 };
+// Coarsened substantially (was 3/5/8/12) after this was confirmed as the
+// actual cause of "Minutely API request limit exceeded" on a single map
+// open, with nothing else touched.
+//
+// The numbers make it obvious in hindsight: Open-Meteo weights its rate
+// limit by the number of LOCATIONS requested, and the old spacing asked
+// for 676 coordinates at the closest zoom and 1521 at the widest — many
+// times the weather grid's own 81-361, i.e. terrain alone was several
+// times the entire rest of the app combined, fired as 7-16 back-to-back
+// requests. That is what tripped a 600-weight minutely limit instantly,
+// which is why it happened on a completely fresh quota with only the
+// front page loaded beforehand.
+//
+// Halving the resolution costs far less than it sounds: this is shaded
+// relief, a low-frequency visual texture, not a data layer anyone reads
+// values off. At the widest zoom the map is ~250km across, where 26km
+// sampling still resolves every range that reads as a range (the
+// Pennines, Snowdonia, the Highlands) — detail finer than that was
+// being drawn into a handful of screen pixels anyway. Combined with the
+// tighter TERRAIN_FETCH_MARGIN below, worst case drops 1521 -> 225
+// coordinates, an 85% reduction, and 16 requests -> 3.
+const TERRAIN_SPACING_KM = { 25: 6, 50: 10, 100: 18, 150: 26 };
+// Terrain uses a tighter margin than the weather grid's MAP_FETCH_MARGIN
+// (1.5). That margin exists so panning a little doesn't force an
+// immediate refetch — but it costs area, and area is squared in
+// coordinate count: 1.5 fetches 2.25x the visible region, 1.15 fetches
+// 1.32x. Terrain is cached in IndexedDB and never expires, so a refetch
+// after a longer pan is much cheaper here than it is for weather, which
+// makes the trade clearly worth taking on this layer specifically.
+const TERRAIN_FETCH_MARGIN = 1.15;
+// Space the remaining batches out rather than firing them back to back.
+// With only 2-3 requests left this is a small delay in practice, but a
+// minutely limit is specifically about burst rate, so pacing the few
+// requests that remain costs almost nothing and removes the last way
+// this layer can spike.
+const TERRAIN_BATCH_DELAY_MS = 350;
 
 // IndexedDB, NOT localStorage (which everything else in Cloude uses):
 // terrain is bulk data measured in megabytes across a few areas, and
@@ -880,8 +915,8 @@ function describeTerrainFetchError(err) {
 }
 
 async function fetchTerrainGrid(centre, radiusKm) {
-  const spacingKm = TERRAIN_SPACING_KM[radiusKm] || 8;
-  const spanKm = radiusKm * MAP_FETCH_MARGIN;
+  const spacingKm = TERRAIN_SPACING_KM[radiusKm] || 18;
+  const spanKm = radiusKm * TERRAIN_FETCH_MARGIN;
   const dLat = spacingKm / KM_PER_DEG_LAT;
   const dLon = spacingKm / kmPerDegLon(centre.lat);
   const rows = Math.ceil((spanKm * 2) / spacingKm) + 1;
@@ -899,9 +934,12 @@ async function fetchTerrainGrid(centre, radiusKm) {
 
   // Batched to the API's 100-coordinate limit, sequentially rather than
   // all at once — a dozen simultaneous requests to a free public service
-  // is exactly the kind of burst that gets rate-limited.
+  // is exactly the kind of burst that gets rate-limited. With the
+  // coarser spacing above this is now 2-3 batches rather than 7-16, and
+  // a short pause between them keeps even that from arriving as a spike.
   const elevations = [];
   for (let i = 0; i < lats.length; i += TERRAIN_MAX_COORDS_PER_REQUEST) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, TERRAIN_BATCH_DELAY_MS));
     const batchLats = lats.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
     const batchLons = lons.slice(i, i + TERRAIN_MAX_COORDS_PER_REQUEST);
     const params = new URLSearchParams({
@@ -2159,6 +2197,13 @@ MAP_LAYER_IDS.forEach(id => {
   // Terrain is static and cached forever once fetched, so this is
   // fire-and-forget rather than awaited — it renders itself the
   // moment it lands, and must never hold up the weather map.
-  ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
+  //
+  // Held back a moment longer than that, though: the weather grid that
+  // just finished is itself a large multi-location request, and having
+  // terrain's batches land in the same few seconds is what stacks two
+  // heavy requests into one minutely window. Terrain is decoration and
+  // nobody is waiting on it, so giving the weather request room to clear
+  // first costs nothing visible and removes the overlap entirely.
+  setTimeout(() => ensureTerrain(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]), 1200);
   renderMap();
 })();
