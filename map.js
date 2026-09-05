@@ -884,11 +884,31 @@ function terrainElevationAt(grid, fr, fc) {
 // one full cell either side. Same north-west light convention and same
 // slope maths as before — only the sampling underneath it changed.
 function terrainShadeAt(grid, fr, fc) {
-  const zN = terrainElevationAt(grid, fr - 1, fc);
-  const zS = terrainElevationAt(grid, fr + 1, fc);
-  const zW = terrainElevationAt(grid, fr, fc - 1);
-  const zE = terrainElevationAt(grid, fr, fc + 1);
-  if ([zN, zS, zW, zE].some(v => v === null)) return 0;
+  const zC = terrainElevationAt(grid, fr, fc);
+  if (zC === null) return 0;
+
+  // Sea is stored as 0 in the grid file (build-elevation clamps negative
+  // and null values), which is a REAL number as far as the slope maths
+  // is concerned — and that caused a genuinely misleading bug. At any
+  // coastline, elevation appears to jump from 0 to whatever the land is
+  // across a single 8.3km step: a 200m clifftop reads as a 24 m/km
+  // gradient, indistinguishable from real upland. Every coast and
+  // estuary therefore lit up as strongly as actual mountains — the
+  // Severn estuary shading like Dartmoor was exactly this, artificial
+  // cliffs rather than relief.
+  //
+  // Substituting this cell's own height for any sea neighbour makes the
+  // gradient across that direction zero, so the fake cliff disappears
+  // while genuine relief on coastal land still shades normally from
+  // whichever directions are land. Discarding those cells entirely
+  // (returning 0) was the other option, but that would leave an
+  // unshaded band right around every coast — most of Cornwall and Wales
+  // would go flat, which trades one wrong picture for another.
+  const landOr = v => (v === null || v <= 0 ? zC : v);
+  const zN = landOr(terrainElevationAt(grid, fr - 1, fc));
+  const zS = landOr(terrainElevationAt(grid, fr + 1, fc));
+  const zW = landOr(terrainElevationAt(grid, fr, fc - 1));
+  const zE = landOr(terrainElevationAt(grid, fr, fc + 1));
 
   // Elevation change north-south and east-west, in metres, across two
   // grid steps (one either side).
@@ -945,11 +965,45 @@ function terrainShadeBilinear(grid, fr, fc) {
   return top + (bottom - top) * tr;
 }
 
+// Builds a canvas clip region from the coastline outline so the terrain
+// layer can only paint on land.
+//
+// The previous approach — testing the nearest grid node's elevation and
+// skipping if it was sea — can't work at the edges, because the grid is
+// 8.3km per node while a coastline is far finer than that. A node up to
+// half a cell inland still reads "land", so shading bled several
+// kilometres out over open water. Clipping to the same coastline
+// polygon the base layer already fills gives an exact edge that doesn't
+// depend on grid resolution at all.
+function clipToLand(ctx, view) {
+  const geo = mapVectorData.coastline;
+  if (!geo) return false;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  ctx.beginPath();
+  features.forEach(feature => {
+    eachRing(feature.geometry || feature, ring => {
+      ring.forEach(([lon, lat], i) => {
+        const px = view.x(lon), py = view.y(lat);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+    });
+  });
+  // evenodd so inland water bodies punched out of the outline stay
+  // excluded, matching how the base layer fills it.
+  ctx.clip("evenodd");
+  return true;
+}
+
 registerMapLayer({
   id: "terrain",
   draw(ctx, view) {
     const grid = mapTerrain;
     if (!grid) return;
+    // Save/restore around the clip so it can't leak into any layer drawn
+    // after this one.
+    ctx.save();
+    clipToLand(ctx, view);
     // 3px rather than 4: with the interpolation below there is now real
     // detail to resolve between grid nodes, where before every pixel in
     // a cell was identical and a smaller step just drew the same value
@@ -985,6 +1039,7 @@ registerMapLayer({
       }
     }
     ctx.globalAlpha = 1;
+    ctx.restore();
   }
 });
 
