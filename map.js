@@ -669,9 +669,10 @@ async function runGridFetch(centre, radiusKm) {
       // the connection), and lumping them together made this
       // impossible to tell apart from the outside.
       const reason = describeMapFetchError(retryErr);
+      const suffix = typeof openMeteoErrorSuffix === "function" ? openMeteoErrorSuffix() : "";
       setMapStatus(mapGrid
-        ? `Couldn't refresh the map just now (${reason}) — showing the last one.`
-        : `Couldn't load map data just now (${reason}).`);
+        ? `Couldn't refresh the map just now (${reason})${suffix} — showing the last one.`
+        : `Couldn't load map data just now (${reason})${suffix}.`);
     }
   }
   // Every caller used to chain .then(renderMap) onto ensureGrid itself,
@@ -928,7 +929,7 @@ async function fetchTerrainGrid(centre, radiusKm) {
   for (let r = 0; r < rows; r++) {
     values.push(elevations.slice(r * cols, (r + 1) * cols));
   }
-  return { lat0, lon0, dLat, dLon, rows, cols, values, spacingKm };
+  return { lat0, lon0, dLat, dLon, rows, cols, values, spacingKm, radiusKm };
 }
 
 async function ensureTerrain(centre, radiusKm) {
@@ -969,7 +970,7 @@ async function ensureTerrain(centre, radiusKm) {
     // it — but "usable without it" and "impossible to tell why it's
     // missing" are different things, and only the first one was
     // actually intended.
-    setTerrainStatus(`Terrain didn't load (${describeTerrainFetchError(err)}).`);
+    setTerrainStatus(`Terrain didn't load (${describeTerrainFetchError(err)})${typeof openMeteoErrorSuffix === "function" ? openMeteoErrorSuffix() : ""}.`);
   } finally {
     terrainFetchInFlight = null;
   }
@@ -1009,7 +1010,19 @@ function terrainShadeAt(grid, r, c) {
   // mountainside), so the same exaggeration constant now produces a
   // sensible spread at every zoom tier instead of clipping almost
   // everywhere.
-  const stepMetres = grid.spacingKm * 1000;
+  //
+  // spacingKm is only present on grids built AFTER it was added to
+  // fetchTerrainGrid's return value. Entries already sitting in the
+  // IndexedDB cache from before that change don't have it — and since
+  // elevation never changes, those entries never expire, so they'd
+  // stay in use indefinitely. Without this fallback, `undefined * 1000`
+  // gives NaN, every shade value becomes NaN, and the terrain layer
+  // silently draws nothing at all while looking (from the outside)
+  // exactly like a fetch that never happened. Deriving the spacing
+  // from the zoom radius the grid was built for keeps those older
+  // cached entries working rather than needing the cache cleared.
+  const spacingKm = grid.spacingKm ?? TERRAIN_SPACING_KM[grid.radiusKm] ?? 5;
+  const stepMetres = spacingKm * 1000;
   const slopeX = dzdx / stepMetres;
   const slopeY = dzdy / stepMetres;
   // Tuned against that same real-relief range so gentle ground stays

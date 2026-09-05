@@ -725,12 +725,27 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_FETCH_TIM
 // paces WHEN each request actually goes out, and retries a genuine 429
 // with backoff instead of surfacing it as a hard failure straight away.
 //
+// The cap was originally 4, which turned out to be too conservative:
+// Open-Meteo's own documented limit (600/min) has no problem with a
+// burst of ~19 requests, so capping that hard down to 4-at-a-time just
+// forced them into 5 sequential waves — adding real wall-clock delay of
+// its own on top of whatever the actual rate-limiting cause is, without
+// good evidence it was helping. Raised to 8: still meaningfully gentler
+// than firing all 19 simultaneously, without serialising a load that
+// Open-Meteo's own stated policy says should be fine in one burst.
+//
+// If 429s are still persistent even at this pace, that points away from
+// "Cloude's own burst pattern" and toward something outside this code's
+// control — a shared/congested IP (mobile carrier NAT), or a temporary
+// block from Open-Meteo's own abuse detection after a lot of testing in
+// a short window — neither of which more retry logic here can fix.
+//
 // Every Open-Meteo call site (this file, map.js, map-strip.js, solar.js)
 // goes through fetchOpenMeteo instead of calling fetchWithTimeout
 // directly. Non-Open-Meteo calls (postcodes.io, Nominatim) are
 // deliberately NOT routed through this gate — they're occasional
 // single lookups, not the bursty multi-source pattern this exists for.
-const OPEN_METEO_MAX_CONCURRENT = 4;
+const OPEN_METEO_MAX_CONCURRENT = 8;
 let openMeteoActive = 0;
 const openMeteoQueue = [];
 
@@ -748,12 +763,49 @@ function openMeteoRelease() {
   if (next) next();
 }
 
+// Open-Meteo doesn't just return a bare status on a refusal — the body
+// is JSON with a "reason" field naming the actual cause, e.g. which of
+// the minutely/hourly/daily limits was hit, or that a parameter was
+// invalid. That string is the single most useful piece of diagnostic
+// information available here, and it was being thrown away: every
+// failure surfaced as just "rate limited", which says a 429 happened
+// but not WHY, and the three limits have completely different
+// implications (a minutely limit clears in seconds; a daily one means
+// waiting until UTC midnight).
+//
+// Stashed here rather than threaded through every caller's own error
+// handling — the call sites all just check res.ok and throw their own
+// message, and rewriting all of them to carry a reason through would be
+// a much larger change than the diagnosis warrants.
+let lastOpenMeteoErrorReason = null;
+
+function openMeteoErrorSuffix() {
+  return lastOpenMeteoErrorReason ? ` — Open-Meteo says: ${lastOpenMeteoErrorReason}` : "";
+}
+
 async function fetchOpenMeteo(url, options = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   await openMeteoAcquire();
   try {
     const maxAttempts = 3; // one real attempt + up to two backed-off retries
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const res = await fetchWithTimeout(url, options, timeoutMs);
+
+      if (!res.ok) {
+        // Read from a clone so the caller can still consume the real
+        // response body itself — reading it here would otherwise leave
+        // them with an already-used stream.
+        try {
+          const body = await res.clone().json();
+          if (body && body.reason) lastOpenMeteoErrorReason = String(body.reason);
+        } catch {
+          // Not JSON, or unreadable — leave whatever reason was last
+          // captured rather than clearing it to null, since a previous
+          // real reason is more useful than nothing.
+        }
+      } else {
+        lastOpenMeteoErrorReason = null; // a success means whatever went wrong before is over
+      }
+
       if (res.status !== 429 || attempt === maxAttempts - 1) return res;
       // Respects the server's own Retry-After when it sends one, rather
       // than guessing — falls back to a short exponential backoff
@@ -1939,7 +1991,7 @@ function renderActualStatus() {
   if (headlineStatus) {
     headlineStatus.classList.remove("is-error");
     if (state.actual.status === "error") {
-      headlineStatus.textContent = `Couldn't load weather: ${state.actual.error}`;
+      headlineStatus.textContent = `Couldn't load weather: ${state.actual.error}${openMeteoErrorSuffix()}`;
       headlineStatus.classList.add("is-error");
       if (headlineStatusBlock) headlineStatusBlock.hidden = false;
     } else {
