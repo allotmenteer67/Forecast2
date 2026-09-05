@@ -79,7 +79,15 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          node scripts/build-elevation.mjs 2>&1 | tee build-output.txt
+          # --dns-result-order=ipv4first is the important flag here.
+          # GitHub Actions runners have no working IPv6 route, but
+          # api.open-meteo.com publishes AAAA records — so Node resolving
+          # IPv6 first stalls until the connection times out, which is
+          # what UND_ERR_CONNECT_TIMEOUT on the very first request meant.
+          # Forcing IPv4 resolution avoids the dead path entirely.
+          # (collect-weather.js never hit this because archive-api and
+          # previous-runs-api resolve differently.)
+          node --dns-result-order=ipv4first scripts/build-elevation.mjs 2>&1 | tee build-output.txt
 
       - name: Report the outcome
         run: |
