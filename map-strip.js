@@ -262,6 +262,27 @@ function drawMapStripTerrain(ctx, view, grid) {
   ctx.globalAlpha = 1;
 }
 
+// Bilinear blend of the 4 nearest grid points, same technique that
+// took terrain from hard-edged blocks to smooth shading a few sessions
+// back. No new data needed for this one — it's the same 256-point grid
+// already being fetched, just blended between rather than snapped to
+// whichever single point is nearest. That "snap to nearest" is what
+// actually caused the blockiness: it isn't fixed by a denser grid on
+// its own (that only shrinks the blocks), only by not having hard
+// edges between points at all.
+function mapStripRainAt(grid, fr, fc, hourIndex) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0;
+  const v00 = grid.rainByHour[r0][c0][hourIndex];
+  const v01 = grid.rainByHour[r0][c1][hourIndex];
+  const v10 = grid.rainByHour[r1][c0][hourIndex];
+  const v11 = grid.rainByHour[r1][c1][hourIndex];
+  const top = v00 + (v01 - v00) * tc;
+  const bottom = v10 + (v11 - v10) * tc;
+  return top + (bottom - top) * tr;
+}
+
 async function renderMapStrip(centre, grid) {
   if (!mapStripCanvas) return;
   mapStripLastCentre = centre;
@@ -291,14 +312,18 @@ async function renderMapStrip(centre, grid) {
       grid.startIdx + mapStripHourOffset,
       grid.rainByHour[0][0].length - 1
     );
-    const cell = 6;
+    // Was 6px, matched to the old nearest-neighbour lookup. Smaller
+    // now there's genuine sub-grid-point detail to resolve between —
+    // same reasoning as terrain's own 4px-to-3px change when it first
+    // gained interpolation.
+    const cell = 3;
     for (let px = 0; px < view.w; px += cell) {
       for (let py = 0; py < view.h; py += cell) {
         const lon = centre.lon + (px - view.w / 2) / (view.pxPerKm * kmPerDegLon(centre.lat));
         const lat = centre.lat - (py - view.h / 2) / (view.pxPerKm * KM_PER_DEG_LAT);
         const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
         if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-        const value = grid.rainByHour[Math.round(fr)][Math.round(fc)][hourIndex];
+        const value = mapStripRainAt(grid, fr, fc, hourIndex);
         const band = rainBandIndex(value);
         if (band < 0) continue;
         ctx.fillStyle = p.ramp[band];

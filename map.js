@@ -1831,7 +1831,18 @@ registerMapLayer({
     const places = mapVectorData.places;
     if (!places || !places.length) return;
     const p = mapPalette();
-    const maxRank = view.radiusKm <= 25 ? 6 : view.radiusKm <= 50 ? 4 : 2;
+    // Was 25→6, 50→4, 100/150→2 — the two widest tiers in particular
+    // capped hard at only the biggest cities, which tested as too
+    // sparse for a sense of scale on a real central-UK location where
+    // several genuinely mid-size towns (Leicester/Derby/Coventry-scale)
+    // never became candidates at all, not just ones thinned out by the
+    // collision check below. Raised at every tier, most at the wide
+    // end where the old cap bit hardest. Still self-limiting either
+    // way: more towns become ELIGIBLE, but the existing overlap check
+    // a few lines down still thins whichever of them would actually
+    // collide — raising this cap can't by itself make the map
+    // cluttered, only less sparse.
+    const maxRank = view.radiusKm <= 25 ? 6 : view.radiusKm <= 50 ? 5 : view.radiusKm <= 100 ? 4 : 3;
 
     // Drawn first, underneath the dots/labels below, and in a plain
     // neutral grey independent of the current palette — it needs to
