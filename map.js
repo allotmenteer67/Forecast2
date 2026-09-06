@@ -1000,6 +1000,19 @@ registerMapLayer({
   draw(ctx, view) {
     const grid = mapTerrain;
     if (!grid) return;
+    // Skipped entirely while a drag is in progress. This is the single
+    // heaviest layer on the map by a wide margin — clipToLand() walks
+    // the full coastline geometry to build a clip path, then this loops
+    // over every 3px cell of the canvas doing a bilinear lookup and a
+    // fillRect. Confirmed on-device: dragging could freeze the screen
+    // for several seconds, and stayed slow even with every weather
+    // layer switched off — because none of those toggles touch this
+    // layer at all, it has none. A plain, flat land colour for the
+    // handful of frames a drag actually lasts is far less disruptive
+    // than that freeze; mapIsPanning flips back to false and this
+    // redraws in full once the drag ends (see the panning section
+    // below for exactly where).
+    if (mapIsPanning) return;
     // Save/restore around the clip so it can't leak into any layer drawn
     // after this one.
     ctx.save();
@@ -1655,8 +1668,16 @@ registerMapLayer({
       .sort((a, b) => (a.rank || 0) - (b.rank || 0))
       .forEach(place => {
         const px = view.x(place.lon), py = view.y(place.lat);
-        if (px < 6 || px > view.w - 6 || py < 12 || py > view.h - 4) return;
         const width = ctx.measureText(place.name).width;
+        // Was checking only the DOT's position (px), not where the
+        // label text drawn to its right (px + 5 ... px + 5 + width)
+        // actually ends up. A dot could sit safely inside the canvas
+        // while its name ran past the right edge and got clipped —
+        // exactly the cut-off town names ("Northam...", "Milto...")
+        // seen on a real device. The dot-only checks on the other three
+        // sides are still fine: nothing is ever drawn to the left of,
+        // above, or below the dot.
+        if (px < 6 || px + 5 + width > view.w - 4 || py < 12 || py > view.h - 4) return;
         const box = { x: px, y: py, w: width + 14, h: 14 };
         if (drawn.some(d => Math.abs(d.x - box.x) < (d.w + box.w) / 2 && Math.abs(d.y - box.y) < 14)) return;
         drawn.push(box);
@@ -1873,7 +1894,14 @@ function renderMap() {
     try { layer.draw(ctx, view); } catch { /* one bad layer must not blank the map */ }
     ctx.restore();
   });
-  renderMapLegends();
+  // Legends describe which layers are switched on and their colour
+  // ramps — neither depends on where the map is centred, only on
+  // toggle/palette state. Rebuilding this DOM tree (several elements
+  // per active layer) on every single pointermove frame was pure waste
+  // and part of what made dragging feel frozen — skipped while panning,
+  // rebuilt once more when the drag settles (see endPan below) so it's
+  // never actually stale for more than the length of one drag.
+  if (!mapIsPanning) renderMapLegends();
   updateMapChrome();
 }
 
@@ -1940,6 +1968,33 @@ let panMoved = false;
 let lastTapAt = 0;
 let lastTapPos = null;
 
+// True for the duration of an actual drag (once movement has crossed
+// MAP_TAP_MOVE_TOLERANCE_PX below — a tap never sets this at all). Read
+// by the terrain layer (skips its expensive per-pixel pass entirely
+// while this is true) and by renderMap() (skips the legend DOM rebuild)
+// — see both for why. Reset to false, and both skipped things brought
+// back for one full-quality render, as soon as the drag ends.
+let mapIsPanning = false;
+
+// Coalesces pointermove into at most one renderMap() per animation
+// frame. Previously every single pointermove event called renderMap()
+// directly and synchronously — a touch surface can report far more of
+// these than the screen can actually redraw for, so a fast drag queued
+// up many full redraws back to back with no chance to catch up between
+// them. Confirmed on-device as multi-second freezes during dragging.
+// This keeps only the latest position (mapCentre is already updated
+// synchronously below — cheap arithmetic — only the expensive redraw
+// itself is deferred and coalesced).
+let mapPanRenderQueued = false;
+function scheduleMapRender() {
+  if (mapPanRenderQueued) return;
+  mapPanRenderQueued = true;
+  requestAnimationFrame(() => {
+    mapPanRenderQueued = false;
+    renderMap();
+  });
+}
+
 const MAP_TAP_MOVE_TOLERANCE_PX = 10; // beyond this it's a drag, not a tap
 const MAP_TAP_MAX_DURATION_MS = 400;
 const MAP_DOUBLE_TAP_WINDOW_MS = 350;
@@ -1958,6 +2013,7 @@ if (mapCanvas) {
     if (e.pointerId !== panPointerId || !panLast) return;
     if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
       panMoved = true;
+      mapIsPanning = true;
     }
     // No dpr correction here any more: pointer coordinates and the
     // view are both in CSS pixels now.
@@ -1969,7 +2025,9 @@ if (mapCanvas) {
       lon: mapCentre.lon - dxKm / kmPerDegLon(mapCentre.lat)
     };
     panLast = { x: e.clientX, y: e.clientY };
-    renderMap();
+    // Was a direct renderMap() call here — see scheduleMapRender()'s own
+    // comment above for why that was the main cause of the freeze.
+    scheduleMapRender();
   });
 
   // Zooms in centred on wherever was tapped — repeated double-taps on
@@ -2016,6 +2074,17 @@ if (mapCanvas) {
       lastTapAt = now;
       lastTapPos = { x: e.clientX, y: e.clientY };
     }
+
+    // Drag is genuinely over — restore terrain and the legend rebuild
+    // (both skipped mid-drag, see mapIsPanning's own comment) with one
+    // full-quality render right away, rather than waiting on the
+    // network round-trip below. ensureGrid usually resolves instantly
+    // anyway (it only refetches if the drag left the previously-fetched
+    // margin), but "usually instant" still isn't "synchronous", and
+    // terrain reappearing should never be held up behind a weather
+    // fetch that may not even be happening.
+    mapIsPanning = false;
+    renderMap();
 
     saveMapCentre(mapCentre);
     // Only refetches if the drag left the margin — panning back and
