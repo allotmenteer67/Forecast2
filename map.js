@@ -378,13 +378,58 @@ function eachRing(geometry, visit) {
   else if (t === "MultiPolygon") c.forEach(poly => poly.forEach(visit));
 }
 
+// Bounding box of what the view can actually show, in lon/lat — used
+// below to skip whole rings that can't possibly be on screen before
+// spending any time transforming their points.
+function viewBounds(view) {
+  const lonA = view.lon(0), lonB = view.lon(view.w);
+  const latA = view.lat(0), latB = view.lat(view.h);
+  return {
+    lonMin: Math.min(lonA, lonB), lonMax: Math.max(lonA, lonB),
+    latMin: Math.min(latA, latB), latMax: Math.max(latA, latB)
+  };
+}
+
+function ringIntersectsView(ring, bounds) {
+  let lonMin = Infinity, lonMax = -Infinity, latMin = Infinity, latMax = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [lon, lat] = ring[i];
+    if (lon < lonMin) lonMin = lon;
+    if (lon > lonMax) lonMax = lon;
+    if (lat < latMin) latMin = lat;
+    if (lat > latMax) latMax = lat;
+  }
+  return lonMax >= bounds.lonMin && lonMin <= bounds.lonMax &&
+         latMax >= bounds.latMin && latMin <= bounds.latMax;
+}
+
+// Was walking and transforming EVERY point of EVERY ring in the whole
+// coastline file on every single frame, however far off screen it was —
+// the comment below about "canvas clips for us" was true for drawing
+// correctness, but canvas still has to receive every one of those
+// moveTo/lineTo calls before it can clip anything, so a screen showing
+// one small bay was still paying to transform Scotland, Ireland and
+// everything else in the file, every frame, regardless of which
+// weather layers were on. Confirmed on-device as a real, constant drag
+// cost that persisted even with Temperature and Pressure switched off
+// (the layers already exempted from dragging — see mapIsPanning) —
+// this runs unconditionally, coastline having no toggle at all.
+//
+// A ring's own bounding box (cheap: one pass over its points, no
+// canvas calls) is compared against the current view's bounding box
+// before doing any of the expensive per-point transform-and-draw work.
+// This changes nothing about what ends up on screen — a ring that
+// WOULD be visible is drawn exactly as before — it only skips the ones
+// that provably can't be, which at a typical zoom is most of the file.
 function drawGeoJson(ctx, geo, view, { fill, stroke, lineWidth = 1 }) {
   if (!geo) return;
   const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  const bounds = viewBounds(view);
   ctx.lineWidth = lineWidth;
   features.forEach(feature => {
     const geometry = feature.geometry || feature;
     eachRing(geometry, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
       ctx.beginPath();
       // Skips points far outside the view rather than clipping properly.
       // Canvas clips for us; this only avoids pathological coordinate
@@ -998,9 +1043,17 @@ function clipToLand(ctx, view) {
   const geo = mapVectorData.coastline;
   if (!geo) return false;
   const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  // Same bounding-box skip as drawGeoJson above, and for the same
+  // reason: this runs the instant a drag ends (terrain's own redraw —
+  // see below), which is exactly the "jump" moment, and walking the
+  // full coastline file unculled here made that moment slower than it
+  // needed to be on top of everything drawGeoJson was already costing
+  // mid-drag.
+  const bounds = viewBounds(view);
   ctx.beginPath();
   features.forEach(feature => {
     eachRing(feature.geometry || feature, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
       ring.forEach(([lon, lat], i) => {
         const px = view.x(lon), py = view.y(lat);
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
@@ -1112,6 +1165,15 @@ registerMapLayer({
   id: "temperature",
   draw(ctx, view) {
     if (!mapGrid || !mapLayerVisible("temperature")) return;
+    // Skipped while actively dragging — same treatment as terrain (see
+    // its own draw() for the full reasoning) and for the same reason:
+    // confirmed on-device that dragging could still feel laggy and
+    // unresponsive even after terrain was exempted, specifically when
+    // Temperature or Pressure were switched on. This loops a colour
+    // sample over every 6px cell of the canvas every frame; skipping it
+    // for the handful of frames an actual drag lasts is far less
+    // disruptive than the map appearing to freeze then jump.
+    if (mapIsPanning) return;
     const hour = mapHourValue();
     const cell = 6;
     for (let px = 0; px < view.w; px += cell) {
@@ -1262,6 +1324,15 @@ registerMapLayer({
   id: "pressure",
   draw(ctx, view) {
     if (!mapGrid || !mapLayerVisible("pressure")) return;
+    // Skipped while actively dragging — see temperature's own draw()
+    // just above for the shared reasoning. This is the single most
+    // expensive layer on the whole map: a full marching-squares pass
+    // over the entire grid PER isobar level (often several levels a
+    // frame), each one then chained into paths and smoothed. Confirmed
+    // on-device as the layer most responsible for the drag feeling
+    // unresponsive — worse than temperature, since temperature is one
+    // pass and this is several.
+    if (mapIsPanning) return;
     const p = mapPalette();
     const hour = Math.min(mapHourValue(), mapGrid.hours - 1);
     const field = mapGrid.pressure[hour];
@@ -1901,8 +1972,86 @@ function sizeMapCanvas() {
   mapCanvas.height = Math.round(rect.height * dpr);
 }
 
+// ---------------------------------------------------------------------
+// Drag diagnostics — TEMPORARY, for tracking down the pan lag
+//
+// Four theories about that lag have now been wrong in a row (terrain,
+// then temperature/pressure, then the uncalled coastline geometry,
+// then the remaining data layers), each one "obviously" the culprit
+// and each one disproved by the next test — most recently by dragging
+// with every data layer off, terrain skipped, no coastline in view and
+// barely any place labels, which was still laggy. Guessing again would
+// be the same mistake a fifth time, so this measures instead.
+//
+// Everything here writes to the on-screen mapTerrainStatus line rather
+// than console.log, for the same reason that line exists at all: with
+// no dev tools on an iPad, a diagnostic that can't be read on the
+// device may as well not exist.
+//
+// What each number distinguishes:
+//   ev   — pointermove events actually RECEIVED during the last drag.
+//          If this is healthy (dozens) but the map still lagged, the
+//          events are arriving fine and the problem is downstream in
+//          rendering. If it's tiny (a handful over several seconds),
+//          the events themselves aren't being delivered and NO amount
+//          of render optimisation will help — that would point at the
+//          main thread being blocked by something else entirely
+//          (a fetch, the 30s retry loop in app.js, terrain parsing).
+//   drawn — how many of those events actually reached renderMap, after
+//          the requestAnimationFrame coalescing. A big gap between ev
+//          and drawn is normal and healthy; ev≈drawn with a slow
+//          render means the coalescing isn't doing its job.
+//   last/max — milliseconds INSIDE renderMap itself. If max is small
+//          (a few ms) while the drag still felt like it froze for
+//          seconds, rendering is definitively not the problem and I
+//          have been optimising the wrong thing all along.
+//   gap  — the longest stretch between two consecutive pointermove
+//          events. This is the one that most directly matches what a
+//          freeze FEELS like, and separates "slow rendering" from
+//          "nothing arrived at all for 3 seconds".
+//
+// Delete this whole block, and the two calls into it, once the cause
+// is actually known.
+const MAP_DRAG_DIAGNOSTICS = true;
+
+let dragDiagEvents = 0;
+let dragDiagDrawn = 0;
+let dragDiagLastRenderMs = 0;
+let dragDiagMaxRenderMs = 0;
+let dragDiagLastEventAt = 0;
+let dragDiagMaxGapMs = 0;
+
+function dragDiagReset() {
+  dragDiagEvents = 0;
+  dragDiagDrawn = 0;
+  dragDiagLastRenderMs = 0;
+  dragDiagMaxRenderMs = 0;
+  dragDiagMaxGapMs = 0;
+  dragDiagLastEventAt = performance.now();
+}
+
+function dragDiagNoteEvent() {
+  const now = performance.now();
+  dragDiagEvents++;
+  if (dragDiagLastEventAt) {
+    const gap = now - dragDiagLastEventAt;
+    if (gap > dragDiagMaxGapMs) dragDiagMaxGapMs = gap;
+  }
+  dragDiagLastEventAt = now;
+}
+
+function dragDiagReport() {
+  if (!MAP_DRAG_DIAGNOSTICS || !mapTerrainStatusEl) return;
+  mapTerrainStatusEl.textContent =
+    `drag: ev ${dragDiagEvents} · drawn ${dragDiagDrawn} · ` +
+    `render last ${dragDiagLastRenderMs.toFixed(0)}ms max ${dragDiagMaxRenderMs.toFixed(0)}ms · ` +
+    `worst gap ${dragDiagMaxGapMs.toFixed(0)}ms`;
+  mapTerrainStatusEl.classList.remove("is-error");
+}
+
 function renderMap() {
   if (!mapCanvas) return;
+  const t0 = MAP_DRAG_DIAGNOSTICS ? performance.now() : 0;
   const ctx = mapCanvas.getContext("2d");
   const dpr = mapCanvas.width / (mapCanvas.getBoundingClientRect().width || mapCanvas.width);
   // Everything after this draws in CSS pixels and comes out sharp.
@@ -1922,6 +2071,11 @@ function renderMap() {
   // never actually stale for more than the length of one drag.
   if (!mapIsPanning) renderMapLegends();
   updateMapChrome();
+  if (MAP_DRAG_DIAGNOSTICS) {
+    dragDiagLastRenderMs = performance.now() - t0;
+    if (dragDiagLastRenderMs > dragDiagMaxRenderMs) dragDiagMaxRenderMs = dragDiagLastRenderMs;
+    if (mapIsPanning) dragDiagDrawn++;
+  }
 }
 
 function updateMapChrome() {
@@ -2025,11 +2179,13 @@ if (mapCanvas) {
     panLast = { x: e.clientX, y: e.clientY };
     panStart = { x: e.clientX, y: e.clientY, time: Date.now() };
     panMoved = false;
+    if (MAP_DRAG_DIAGNOSTICS) dragDiagReset();
     mapCanvas.setPointerCapture(e.pointerId);
   });
 
   mapCanvas.addEventListener("pointermove", e => {
     if (e.pointerId !== panPointerId || !panLast) return;
+    if (MAP_DRAG_DIAGNOSTICS) dragDiagNoteEvent();
     if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
       panMoved = true;
       mapIsPanning = true;
@@ -2104,6 +2260,7 @@ if (mapCanvas) {
     // fetch that may not even be happening.
     mapIsPanning = false;
     renderMap();
+    if (MAP_DRAG_DIAGNOSTICS && panMoved) dragDiagReport();
 
     saveMapCentre(mapCentre);
     // Only refetches if the drag left the margin — panning back and
