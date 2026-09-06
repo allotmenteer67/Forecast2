@@ -42,7 +42,34 @@
   <main class="app">
     <header>
       <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <h1 class="map-page-title">Map</h1>
+      <!-- Home and "Go to" moved here from the control row below, the
+           same way index.html's own header pairs its title with a
+           couple of small icon buttons. Frees up the control row for
+           the two things that need to be reachable while actually
+           looking at the map (zoom, add-to-forecast), and Home/Go-to
+           are both "jump somewhere else" actions that make more sense
+           living with the page's own title than sitting in a row of
+           in-the-moment map controls. -->
+      <div class="map-title-bar">
+        <h1 class="map-page-title">Map</h1>
+        <div class="map-title-bar-right">
+          <button id="mapGoTo" type="button" class="map-icon-button" aria-label="Go to a saved place" aria-haspopup="true" aria-expanded="false">
+            <!-- Same downward-pointing triangle as the saved-place
+                 markers on the map itself (see map.js), so the button
+                 visually reads as "open the list of those triangles"
+                 rather than as an unrelated new symbol. -->
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 3 L14 3 L8 13 Z" fill="currentColor"/>
+            </svg>
+          </button>
+          <button id="mapHome" type="button" class="map-icon-button" aria-label="Home">
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M9 2 L16 8 L14 8 L14 16 L4 16 L4 8 L2 8 Z" fill="currentColor"/>
+            </svg>
+          </button>
+        </div>
+        <div id="mapGoToMenu" class="map-goto-menu" hidden></div>
+      </div>
     </header>
 
     <!-- Controls sit ABOVE the map, not beside or below it: there is more
@@ -60,13 +87,15 @@
          own gesture was never reliably reachable — a button can't be
          intercepted by an OS gesture at all. Room was made by dropping
          the distance readout from "Forecast for here" (the crosshair
-         already shows where "here" is) and removing Back entirely,
-         which fast dragging made redundant. -->
+         already shows where "here" is — and now the on-map arrow toward
+         Home covers the same "how far" question when Home itself is
+         off-screen), and by moving Home up to the header above, next to
+         the new Go-to button. -->
     <div class="map-controls">
-      <button id="mapAdopt" type="button" class="map-adopt">Forecast for here</button>
+      <button id="mapAdopt" type="button" class="map-adopt map-adopt-compact">Forecast for here</button>
       <button id="mapZoomIn" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom in">+</button>
       <button id="mapZoomOut" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom out">&minus;</button>
-      <button id="mapHome" type="button" class="map-nav-button">Home</button>
+      <button id="mapAddForecast" type="button" class="map-nav-button">Add to forecast</button>
     </div>
 
     <div class="map-stage">

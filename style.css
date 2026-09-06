@@ -145,6 +145,97 @@ h1 {
   text-align: center;
 }
 
+/* Home and Go-to sit together on the right, mirroring the front page's
+   own title-bar (settings icon + place chip) rather than inventing a
+   second layout pattern for the same basic "title plus a couple of
+   small actions" shape. Kept as its own class rather than reusing
+   .title-bar directly: that one carries index.html-specific responsive
+   rules (the settings icon swapping corners on phones to dodge iPad
+   window chrome on the LEFT) that don't apply here — both new buttons
+   live on the right from the start, so none of that reordering logic
+   is needed. */
+.map-title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: relative;
+}
+
+.map-title-bar .map-page-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.map-title-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.map-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #dfe7e1;
+  background: white;
+  color: var(--accent-dark);
+  touch-action: manipulation;
+}
+
+.map-icon-button:disabled {
+  opacity: 0.4;
+}
+
+/* Anchored under the Go-to button, right-aligned the same way the front
+   page's own .place-menu hangs under its chip. Absolutely positioned
+   against .map-title-bar (position: relative above), not the button
+   itself, so it lines up with the right edge of the header rather than
+   the button's own narrower width. */
+.map-goto-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  background: white;
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 42, 36, .18);
+  padding: 6px;
+  min-width: 180px;
+  max-width: 260px;
+}
+
+.map-goto-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.map-goto-item:hover {
+  background: #f2f6f2;
+}
+
+.map-goto-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--accent-muted);
+  max-width: 220px;
+}
+
 header p {
   margin: 0;
   color: #5b6b60;
@@ -2342,12 +2433,44 @@ footer {
   border-color: transparent;
 }
 
+/* Was the widest thing in the row by a good margin, partly because it
+   used to carry a distance readout too ("Forecast for here (378 km
+   out)") — dropped elsewhere now that the crosshair and the on-map
+   Home arrow both cover "how far/where" more directly. Smaller text
+   and tighter padding here reflect that this button no longer needs to
+   read as the row's dominant element, now that the row also has to fit
+   Add to forecast alongside the zoom buttons. */
+.map-adopt-compact {
+  font-size: 13px;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .map-nav-button {
   flex: 0 0 auto;
 }
 
 .map-nav-button:disabled {
   opacity: 0.4;
+}
+
+/* Scoped to the control row specifically (not .map-nav-button in
+   general — Play, in the Hour section further down, uses the same
+   class and doesn't need any of this). "Add to forecast" is real
+   English words, not a single glyph like the zoom buttons, and now has
+   to share the row with three other controls — tightened text and a
+   cap on how wide it's allowed to get, with an ellipsis as the fallback
+   on anything narrower still, rather than letting it wrap and throw the
+   row's height out. */
+.map-controls .map-nav-button {
+  font-size: 13px;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
 }
 
 /* Square-ish rather than the pill shape the text buttons use — a "+"

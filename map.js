@@ -108,6 +108,11 @@ const MAP_PALETTES = [
     // tone to read as its own thing at a glance. Distinct from rain's
     // blue ramp, temperature's purple-to-red scale, and land's green.
     isobar: "#B5541C",
+    // Same reasoning again for saved-place markers: needs to read as
+    // "yours" at a glance, distinct from both ink (ordinary town
+    // labels) and isobar's orange. A plum/purple has no other claim on
+    // this palette at all.
+    marker: "#7A3E86",
     // Starts at mid-blue, not near-white: on a light base the palest
     // stops of a conventional radar ramp read as "no rain".
     ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"]
@@ -126,6 +131,9 @@ const MAP_PALETTES = [
     // against dark green land and dark blue-grey sea alike, which a
     // darker orange wouldn't on this theme.
     isobar: "#E8A33D",
+    // A soft pink rather than Paper's plum — needs to stay legible
+    // against dark land/sea, which a darker purple wouldn't.
+    marker: "#E37BC4",
     // Dark base, so the full range including the pale end is usable.
     ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"]
   },
@@ -142,6 +150,9 @@ const MAP_PALETTES = [
     // the coastline here because they're drawn heavier (see the
     // pressure layer's own lineWidth), not because of a different tone.
     isobar: "#000000",
+    // Same "no hue" rule — saved places are told apart from towns by
+    // shape (a triangle, not a dot), not colour, on this palette.
+    marker: "#000000",
     // No hue at all. For bright daylight, and for anyone who can't
     // reliably separate the blues.
     ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"]
@@ -1780,12 +1791,168 @@ registerMapLayer({
 });
 
 // ---------------------------------------------------------------------
+// Saved places on the map
+//
+// Reuses the exact same PLACES_KEY store Settings' saved-places list
+// already writes to (app.js) — a place saved here shows up there and
+// vice versa, with no new storage format. Each entry is stored as
+// {postcode, label} where "postcode" is whatever was typed or adopted
+// (a real postcode, a place name, or a "lat,lon" string — see
+// resolveLocation), so it has to be resolved into actual coordinates
+// before it can be plotted; that resolution is cached here rather than
+// repeated every render.
+let mapSavedPlaces = [];
+let mapSavedPlacesRawSignature = null;
+// Screen-space hit areas for the markers just drawn, rebuilt every
+// render — endPan's tap handling checks a tap against these to decide
+// whether it landed on a saved place.
+let mapSavedPlaceHitboxes = [];
+
+async function refreshSavedPlacesForMap() {
+  const raw = loadPlaces();
+  const signature = JSON.stringify(raw);
+  // Re-resolving every entry is a handful of network lookups — skipped
+  // whenever the saved list hasn't actually changed, which is every
+  // render except the first and right after "Add to forecast".
+  if (signature === mapSavedPlacesRawSignature) return;
+  mapSavedPlacesRawSignature = signature;
+
+  const resolved = [];
+  for (const place of raw) {
+    // A place labelled "Home" already gets its own dot and distance
+    // rings (see the "rings" layer) — giving it a second marker here
+    // too would be the same location marked twice.
+    if ((place.label || "").trim().toLowerCase() === "home") continue;
+    try {
+      const r = await resolveLocation(place.postcode);
+      resolved.push({ lat: r.lat, lon: r.lon, label: place.label || place.postcode });
+    } catch {
+      // A saved place that no longer resolves (a postcode that's
+      // stopped working, a deleted area) just doesn't get a marker —
+      // silent, the same way a lot of this map's other decoration
+      // fails rather than surfacing an error for something optional.
+    }
+  }
+  mapSavedPlaces = resolved;
+  renderMap();
+}
+
+registerMapLayer({
+  id: "saved-places",
+  draw(ctx, view) {
+    mapSavedPlaceHitboxes = [];
+    if (!mapSavedPlaces.length) return;
+    const p = mapPalette();
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    mapSavedPlaces.forEach(place => {
+      const x = view.x(place.lon), y = view.y(place.lat);
+      if (x < -20 || x > view.w + 20 || y < -20 || y > view.h + 20) return;
+      // A downward-pointing triangle, tip on the actual coordinate —
+      // the same logic as a classic map pin simplified to its cheapest
+      // possible shape: the POINT is what marks the spot, not the
+      // triangle's centre. A plain dot (like the places layer's towns)
+      // would have been ambiguous next to those — this needs to read
+      // as "yours", not as another town.
+      ctx.fillStyle = p.marker;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 7, y - 12);
+      ctx.lineTo(x + 7, y - 12);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = p.ink;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(place.label, x, y - 16);
+      ctx.fillText(place.label, x, y - 16);
+      ctx.textAlign = "left";
+
+      // Generous hitbox — a triangle tip is a small, precise target for
+      // a fingertip, so this is deliberately bigger than the visible
+      // shape rather than matching it exactly.
+      mapSavedPlaceHitboxes.push({ x, y: y - 8, radius: 22, place });
+    });
+  }
+});
+
+// A subtle pointer toward Home when it's panned out of view, replacing
+// the distance that used to live in "Forecast for here"'s own text
+// (removed — see map.html). That number answered "how far is here from
+// home"; this answers the same question spatially, but only when Home
+// genuinely isn't visible — the existing dot and rings already show it
+// directly whenever it is, and drawing both would be redundant.
+registerMapLayer({
+  id: "home-direction",
+  draw(ctx, view) {
+    if (mapIsPanning) return; // decorative, not data — same treatment as terrain/temperature/pressure
+    const home = homeCoords();
+    if (!home) return;
+    const hx = view.x(home.lon), hy = view.y(home.lat);
+    if (hx >= -4 && hx <= view.w + 4 && hy >= -4 && hy <= view.h + 4) return;
+
+    const angle = Math.atan2(hy - view.cy, hx - view.cx);
+    // Clamps a point along that angle to just inside the canvas edge —
+    // the standard "off-screen compass" technique, done directly with
+    // the line's own slope rather than pulling in any extra geometry
+    // helper for what's ultimately one arrow.
+    const margin = 30;
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (view.w - margin - view.cx) / dx);
+    else if (dx < 0) t = Math.min(t, (margin - view.cx) / dx);
+    if (dy > 0) t = Math.min(t, (view.h - margin - view.cy) / dy);
+    else if (dy < 0) t = Math.min(t, (margin - view.cy) / dy);
+    const ex = view.cx + dx * t, ey = view.cy + dy * t;
+
+    const p = mapPalette();
+    ctx.save();
+    ctx.translate(ex, ey);
+    ctx.rotate(angle);
+    ctx.fillStyle = p.ink;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-7, -7);
+    ctx.lineTo(-7, 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    const away = haversineKm(home.lat, home.lon, view.centre.lat, view.centre.lon);
+    const distText = usingMiles() ? `${Math.round(away * 0.621371)} mi` : `${Math.round(away)} km`;
+    ctx.globalAlpha = 1;
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    ctx.fillStyle = p.ink;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = p.sea;
+    const lx = ex - dx * 18, ly = ey - dy * 18 + 4;
+    ctx.strokeText(`Home ${distText}`, lx, ly);
+    ctx.fillText(`Home ${distText}`, lx, ly);
+    ctx.textAlign = "left";
+  }
+});
+
+// ---------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------
 // Resolved once on load, and cached here for the life of the page.
 let mapHome = null;
+// Set only when a saved place is explicitly labelled "Home" — see
+// resolveMapHome() below. Kept separate from mapHome rather than
+// overwriting it, so the ordinary fallback logic in homeCoords()
+// doesn't need to know or care which case produced an answer.
+let mapHomeExplicit = null;
 
 function homeCoords() {
+  // An explicit "Home" saved place always wins, checked before
+  // anything else — a deliberately-named place is a permanent choice
+  // and should hold regardless of what the front page currently
+  // happens to be showing (see the note on resolveMapHome below for
+  // the coupling this fixes).
+  if (mapHomeExplicit) return mapHomeExplicit;
   if (typeof state === "object" && state && state.lat != null && state.lon != null) {
     return { lat: state.lat, lon: state.lon };
   }
@@ -1802,7 +1969,31 @@ function homeCoords() {
 // So the map resolves it once itself. One extra lookup on a page that
 // already fetches weather, and it fails quietly — the map still pans and
 // still draws rain without it, it just has nothing to measure from.
+//
+// Checks for an explicit "Home" saved place FIRST, and unconditionally —
+// not just as a fallback when state.lat/lon is empty. Without this,
+// Home was silently tied to state.postcode: whatever place happens to
+// be active on the FRONT page when this page loads, which is "wherever
+// I last switched to", not "home". Renaming a saved place "Home"
+// wouldn't have changed anything, and switching your active postcode to
+// "Work" would have quietly moved the distance rings to measure from
+// Work instead. A saved place named "Home" is now a genuine, stable
+// anchor regardless of either of those.
 async function resolveMapHome() {
+  if (!mapHomeExplicit) {
+    try {
+      const explicit = loadPlaces().find(p => (p.label || "").trim().toLowerCase() === "home");
+      if (explicit) {
+        const resolved = await resolveLocation(explicit.postcode);
+        mapHomeExplicit = { lat: resolved.lat, lon: resolved.lon };
+      }
+    } catch {
+      // The saved "Home" place exists but couldn't be resolved (offline,
+      // a postcode that's since stopped working) — falls through to the
+      // ordinary behaviour below rather than leaving Home unavailable
+      // entirely over a place that used to work.
+    }
+  }
   if (homeCoords()) return;
   try {
     const postcode = typeof state === "object" && state ? state.postcode : null;
@@ -2249,6 +2440,19 @@ if (mapCanvas) {
     panLast = null;
 
     if (wasTap) {
+      // Checked before double-tap or the ordinary single-tap bookkeeping
+      // below — landing on a saved place is a more specific
+      // interpretation of a tap than either of those, and jumps
+      // straight there rather than being fed into the double-tap
+      // sequence tracking.
+      const rect = mapCanvas.getBoundingClientRect();
+      const tapX = e.clientX - rect.left, tapY = e.clientY - rect.top;
+      const hitMarker = mapSavedPlaceHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
+      if (hitMarker) {
+        goTo(hitMarker.place, { remember: true });
+        return;
+      }
+
       const now = Date.now();
       const dist = lastTapPos ? Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y) : Infinity;
       if (now - lastTapAt < MAP_DOUBLE_TAP_WINDOW_MS && dist < MAP_DOUBLE_TAP_DISTANCE_PX) {
@@ -2338,6 +2542,124 @@ document.getElementById("mapAdopt")?.addEventListener("click", () => {
     localStorage.setItem(CURRENT_POSTCODE_KEY, `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`);
   } catch {}
   location.href = "index.html";
+});
+
+// Bookmarks wherever the map is currently centred into the SAME saved-
+// places list Settings already manages (PLACES_KEY) — without adopting
+// it (unlike "Forecast for here", this doesn't change what the front
+// page shows, and doesn't navigate away) and without asking for a name
+// upfront, matching Settings' own "Save" button, which already dropped
+// that prompt in favour of renaming afterwards from the list. The
+// difference here is there's no typed name to fall back on at all, so
+// the initial label comes from reverse-geocoding the spot instead of
+// just echoing back a raw "51.234,-2.567" string.
+document.getElementById("mapAddForecast")?.addEventListener("click", async () => {
+  const button = document.getElementById("mapAddForecast");
+  if (!button) return;
+  const originalText = button.textContent;
+  const postcodeStr = `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`;
+
+  const places = loadPlaces();
+  if (places.some(place => place.postcode === postcodeStr)) {
+    button.textContent = "Already saved";
+    setTimeout(() => { button.textContent = originalText; }, 1500);
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    const resolved = await resolveLocation(postcodeStr);
+    places.push({ postcode: postcodeStr, label: resolved.label || postcodeStr });
+    savePlaces(places);
+    // Forces refreshSavedPlacesForMap to actually re-resolve rather
+    // than seeing an unchanged signature and skipping — it compares
+    // against the list AS SAVED, and this place has just been added to
+    // that exact list, so the signature genuinely did change; this
+    // line only matters if that function has never run at all yet.
+    mapSavedPlacesRawSignature = null;
+    refreshSavedPlacesForMap();
+    button.textContent = "Added";
+  } catch {
+    button.textContent = "Couldn't save";
+  } finally {
+    button.disabled = false;
+    setTimeout(() => { button.textContent = originalText; }, 1500);
+  }
+});
+
+// "Go to" — a plain dropdown, not the sheet overlay used elsewhere in
+// the app (tide/fishing detail) — this page has no sheet markup at all,
+// and a short list of saved places doesn't need one. Mirrors the front
+// page's own place-chip menu (index.html/app.js) rather than inventing
+// a second pattern for the same basic interaction.
+const mapGoToButton = document.getElementById("mapGoTo");
+const mapGoToMenu = document.getElementById("mapGoToMenu");
+
+function closeMapGoToMenu() {
+  if (mapGoToMenu) mapGoToMenu.hidden = true;
+  if (mapGoToButton) mapGoToButton.setAttribute("aria-expanded", "false");
+}
+
+function renderMapGoToMenu() {
+  if (!mapGoToMenu) return;
+  mapGoToMenu.innerHTML = "";
+  const places = loadPlaces();
+  if (!places.length) {
+    const empty = document.createElement("p");
+    empty.className = "map-goto-empty";
+    empty.textContent = "No saved places yet — try \u201cAdd to forecast\u201d on the map.";
+    mapGoToMenu.appendChild(empty);
+    return;
+  }
+  places.forEach(place => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "map-goto-item";
+    item.textContent = place.label || place.postcode;
+    item.addEventListener("click", async () => {
+      closeMapGoToMenu();
+      // Not pre-resolved — a saved place is a postcode/name/coordinate
+      // STRING (see the saved-places note above), so jumping to one
+      // needs the same lookup as plotting it does. Usually fast; this
+      // has no separate loading state because the map itself doesn't
+      // move until it resolves, which is feedback enough for a single
+      // deliberate tap.
+      try {
+        const resolved = await resolveLocation(place.postcode);
+        goTo({ lat: resolved.lat, lon: resolved.lon }, { remember: true });
+      } catch {
+        // Couldn't resolve right now (offline, a postcode that's since
+        // stopped working) — the entry stays in the list for next time
+        // rather than being removed over a transient failure.
+      }
+    });
+    mapGoToMenu.appendChild(item);
+  });
+}
+
+mapGoToButton?.addEventListener("click", () => {
+  const isOpen = mapGoToMenu && !mapGoToMenu.hidden;
+  if (isOpen) {
+    closeMapGoToMenu();
+  } else {
+    renderMapGoToMenu();
+    if (mapGoToMenu) mapGoToMenu.hidden = false;
+    mapGoToButton.setAttribute("aria-expanded", "true");
+  }
+});
+
+// Tapping anywhere outside the menu closes it — same convention as the
+// front page's place-chip menu. Deliberately `.contains()` rather than
+// `=== mapGoToButton`: a tap on the button's own SVG icon has that SVG
+// (or its inner <path>) as e.target, not the <button> itself, so a
+// strict reference check treated the button's OWN opening click as an
+// outside click and closed the menu again in the same event — found by
+// actually running this rather than just reading it back.
+document.addEventListener("click", e => {
+  if (!mapGoToMenu || mapGoToMenu.hidden) return;
+  if (mapGoToMenu.contains(e.target) || mapGoToButton.contains(e.target)) return;
+  closeMapGoToMenu();
 });
 
 // Manual dragging always wins — the "input" listener below stops
@@ -2458,6 +2780,12 @@ MAP_LAYER_IDS.forEach(id => {
 
   await loadMapVectors();
   renderMap();
+  // Fire-and-forget, same reasoning as terrain below: saved places are
+  // decoration on top of the weather map, not something worth delaying
+  // it for. Each one needs its own geocoding lookup, so this can take a
+  // moment on a slow connection — the map is fully usable in the
+  // meantime, markers just appear a beat later.
+  refreshSavedPlacesForMap();
   await ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex], true);
   // Terrain is static and cached forever once fetched, so this is
   // fire-and-forget rather than awaited — it renders itself the
