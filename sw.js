@@ -27,13 +27,21 @@
 // like an old version" is a live possibility, not just for
 // SHELL_FILES changes.
 //
-// Bumped to v4: the map page changed substantially again (zoom
-// buttons added, Back removed, the coastline draw path rewritten, drag
-// diagnostics added) and map.js in particular went through several
-// rounds of changes where an old cached copy being served was itself
-// mistaken for the changes not working — exactly the failure this
-// version string exists to prevent. See the note above.
-const CACHE_NAME = "cloude-shell-v4";
+// Bumped to v5: substantial further changes since v4 across map.js,
+// map.html, style.css, app.js and index.html — the whole map header/
+// control-row rebuild (Home and Go-to moved twice, zoom buttons, the
+// merged "Forecast for here" + save-to-places prompt), saved-place
+// markers, two separate crosshair-visibility fixes, the coastline-
+// outline-on-top-of-rain layer, the map-strip density/interpolation
+// work and its hour-slider sync, the front-page Play button, and the
+// map-strip height fix. The drag diagnostics added for v4 have also
+// been removed now that they'd done their job. Same reasoning as v3
+// and v4 above: this much change landing on a stale cached copy is
+// exactly the failure this version string exists to prevent, and it's
+// already caused real confusion once this session (a resolved pan-lag
+// investigation that, in hindsight, was likely just testing an old
+// cached map.js the whole time).
+const CACHE_NAME = "cloude-shell-v5";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

@@ -2166,85 +2166,9 @@ function sizeMapCanvas() {
 }
 
 // ---------------------------------------------------------------------
-// Drag diagnostics — TEMPORARY, for tracking down the pan lag
-//
-// Four theories about that lag have now been wrong in a row (terrain,
-// then temperature/pressure, then the uncalled coastline geometry,
-// then the remaining data layers), each one "obviously" the culprit
-// and each one disproved by the next test — most recently by dragging
-// with every data layer off, terrain skipped, no coastline in view and
-// barely any place labels, which was still laggy. Guessing again would
-// be the same mistake a fifth time, so this measures instead.
-//
-// Everything here writes to the on-screen mapTerrainStatus line rather
-// than console.log, for the same reason that line exists at all: with
-// no dev tools on an iPad, a diagnostic that can't be read on the
-// device may as well not exist.
-//
-// What each number distinguishes:
-//   ev   — pointermove events actually RECEIVED during the last drag.
-//          If this is healthy (dozens) but the map still lagged, the
-//          events are arriving fine and the problem is downstream in
-//          rendering. If it's tiny (a handful over several seconds),
-//          the events themselves aren't being delivered and NO amount
-//          of render optimisation will help — that would point at the
-//          main thread being blocked by something else entirely
-//          (a fetch, the 30s retry loop in app.js, terrain parsing).
-//   drawn — how many of those events actually reached renderMap, after
-//          the requestAnimationFrame coalescing. A big gap between ev
-//          and drawn is normal and healthy; ev≈drawn with a slow
-//          render means the coalescing isn't doing its job.
-//   last/max — milliseconds INSIDE renderMap itself. If max is small
-//          (a few ms) while the drag still felt like it froze for
-//          seconds, rendering is definitively not the problem and I
-//          have been optimising the wrong thing all along.
-//   gap  — the longest stretch between two consecutive pointermove
-//          events. This is the one that most directly matches what a
-//          freeze FEELS like, and separates "slow rendering" from
-//          "nothing arrived at all for 3 seconds".
-//
-// Delete this whole block, and the two calls into it, once the cause
-// is actually known.
-const MAP_DRAG_DIAGNOSTICS = true;
-
-let dragDiagEvents = 0;
-let dragDiagDrawn = 0;
-let dragDiagLastRenderMs = 0;
-let dragDiagMaxRenderMs = 0;
-let dragDiagLastEventAt = 0;
-let dragDiagMaxGapMs = 0;
-
-function dragDiagReset() {
-  dragDiagEvents = 0;
-  dragDiagDrawn = 0;
-  dragDiagLastRenderMs = 0;
-  dragDiagMaxRenderMs = 0;
-  dragDiagMaxGapMs = 0;
-  dragDiagLastEventAt = performance.now();
-}
-
-function dragDiagNoteEvent() {
-  const now = performance.now();
-  dragDiagEvents++;
-  if (dragDiagLastEventAt) {
-    const gap = now - dragDiagLastEventAt;
-    if (gap > dragDiagMaxGapMs) dragDiagMaxGapMs = gap;
-  }
-  dragDiagLastEventAt = now;
-}
-
-function dragDiagReport() {
-  if (!MAP_DRAG_DIAGNOSTICS || !mapTerrainStatusEl) return;
-  mapTerrainStatusEl.textContent =
-    `drag: ev ${dragDiagEvents} · drawn ${dragDiagDrawn} · ` +
-    `render last ${dragDiagLastRenderMs.toFixed(0)}ms max ${dragDiagMaxRenderMs.toFixed(0)}ms · ` +
-    `worst gap ${dragDiagMaxGapMs.toFixed(0)}ms`;
-  mapTerrainStatusEl.classList.remove("is-error");
-}
 
 function renderMap() {
   if (!mapCanvas) return;
-  const t0 = MAP_DRAG_DIAGNOSTICS ? performance.now() : 0;
   const ctx = mapCanvas.getContext("2d");
   const dpr = mapCanvas.width / (mapCanvas.getBoundingClientRect().width || mapCanvas.width);
   // Everything after this draws in CSS pixels and comes out sharp.
@@ -2264,11 +2188,6 @@ function renderMap() {
   // never actually stale for more than the length of one drag.
   if (!mapIsPanning) renderMapLegends();
   updateMapChrome();
-  if (MAP_DRAG_DIAGNOSTICS) {
-    dragDiagLastRenderMs = performance.now() - t0;
-    if (dragDiagLastRenderMs > dragDiagMaxRenderMs) dragDiagMaxRenderMs = dragDiagLastRenderMs;
-    if (mapIsPanning) dragDiagDrawn++;
-  }
 }
 
 function updateMapChrome() {
@@ -2374,13 +2293,11 @@ if (mapCanvas) {
     panLast = { x: e.clientX, y: e.clientY };
     panStart = { x: e.clientX, y: e.clientY, time: Date.now() };
     panMoved = false;
-    if (MAP_DRAG_DIAGNOSTICS) dragDiagReset();
     mapCanvas.setPointerCapture(e.pointerId);
   });
 
   mapCanvas.addEventListener("pointermove", e => {
     if (e.pointerId !== panPointerId || !panLast) return;
-    if (MAP_DRAG_DIAGNOSTICS) dragDiagNoteEvent();
     if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
       panMoved = true;
       mapIsPanning = true;
@@ -2468,7 +2385,6 @@ if (mapCanvas) {
     // fetch that may not even be happening.
     mapIsPanning = false;
     renderMap();
-    if (MAP_DRAG_DIAGNOSTICS && panMoved) dragDiagReport();
 
     saveMapCentre(mapCentre);
     // Only refetches if the drag left the margin — panning back and
