@@ -188,6 +188,23 @@ h1 {
   touch-action: manipulation;
 }
 
+/* Without this, the icon rendered as a sliver a couple of pixels wide
+   instead of the intended shape — confirmed on a real device (one
+   icon showed as a solid over-filled blob, the other as barely a dot)
+   and reproduced in a plain screenshot. Browsers don't reliably treat
+   an inline <svg> as a "replaced element" the way an <img> is for flex
+   sizing purposes, so as a flex item it can shrink well below its own
+   width/height attributes even with plenty of room in the button —
+   flex-shrink: 0 stops that outright, and the explicit width/height
+   here in real CSS (rather than relying on the SVG's own HTML
+   attributes, which is what this looked like it should already do)
+   removes any ambiguity about what size "not shrunk" actually means. */
+.map-icon-button svg {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
 .map-icon-button:disabled {
   opacity: 0.4;
 }

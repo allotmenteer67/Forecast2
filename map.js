@@ -1654,6 +1654,23 @@ function renderMapLegends() {
 }
 
 registerMapLayer({
+  id: "coastline-outline",
+  draw(ctx, view) {
+    const p = mapPalette();
+    // Redraws just the OUTLINE (no fill — the "coastline" layer near
+    // the top already filled the land) on top of every weather colour
+    // layer. Confirmed on a real device: a heavy rain patch sitting
+    // over the coast completely buried the thin coastline stroke
+    // underneath it, leaving no way to tell where the actual shoreline
+    // was — the rain's own colour and opacity are deliberately
+    // untouched by this (asked not to change those), this just gives
+    // the coast edge a second, later chance to still be visible on top
+    // of whatever colour layers happen to be covering it.
+    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1 });
+  }
+});
+
+registerMapLayer({
   id: "rings",
   draw(ctx, view) {
     const p = mapPalette();
@@ -1758,14 +1775,48 @@ registerMapLayer({
 
     ctx.font = "11px -apple-system, system-ui, sans-serif";
     ctx.fillStyle = p.ink;
-    // Label thinning does more work than the rings at the wider levels.
+    // Which places fall within the current view geographically — used
+    // below to judge whether the rank cutoff has left the view too
+    // sparse to give any sense of scale, independent of the later
+    // per-label edge/collision checks.
+    const bounds = {
+      lonMin: view.lon(0), lonMax: view.lon(view.w),
+      latMax: view.lat(0), latMin: view.lat(view.h)
+    };
+    const inView = place => place.lon >= bounds.lonMin && place.lon <= bounds.lonMax &&
+                             place.lat >= bounds.latMin && place.lat <= bounds.latMax;
+
+    // Rank thinning does more work than the rings at the wider levels.
     // Two rules together: rank (a place's own importance, from the
     // source data) and collision (whatever is left must not overlap).
     // Rank alone leaves a mess in dense areas; collision alone drops
     // cities in favour of whichever village happened to draw first.
+    let candidates = places.filter(place => (place.rank || 0) <= maxRank);
+
+    // Sparse-area fallback. Confirmed on a real device: a wide view
+    // dominated by open countryside and a large rain patch left a
+    // single town name on screen — nowhere near enough to judge scale
+    // or location against. Backfills with the nearest smaller places
+    // (any rank) until there are at least a handful, regardless of the
+    // cutoff above. Only engages when the ordinary rank filter has left
+    // the view genuinely sparse — a normally busy view already clears
+    // this count on rank alone, so nothing changes there.
+    const visibleFromRank = candidates.filter(inView).length;
+    if (visibleFromRank < 4) {
+      const already = new Set(candidates);
+      const extra = places
+        .filter(place => inView(place) && !already.has(place))
+        .sort((a, b) => {
+          const da = Math.hypot(a.lon - view.centre.lon, a.lat - view.centre.lat);
+          const db = Math.hypot(b.lon - view.centre.lon, b.lat - view.centre.lat);
+          return da - db;
+        })
+        .slice(0, 4 - visibleFromRank);
+      candidates = candidates.concat(extra);
+    }
+
     const drawn = [];
-    places
-      .filter(place => (place.rank || 0) <= maxRank)
+    candidates
       .sort((a, b) => (a.rank || 0) - (b.rank || 0))
       .forEach(place => {
         const px = view.x(place.lon), py = view.y(place.lat);
@@ -1874,64 +1925,6 @@ registerMapLayer({
       // shape rather than matching it exactly.
       mapSavedPlaceHitboxes.push({ x, y: y - 8, radius: 22, place });
     });
-  }
-});
-
-// A subtle pointer toward Home when it's panned out of view, replacing
-// the distance that used to live in "Forecast for here"'s own text
-// (removed — see map.html). That number answered "how far is here from
-// home"; this answers the same question spatially, but only when Home
-// genuinely isn't visible — the existing dot and rings already show it
-// directly whenever it is, and drawing both would be redundant.
-registerMapLayer({
-  id: "home-direction",
-  draw(ctx, view) {
-    if (mapIsPanning) return; // decorative, not data — same treatment as terrain/temperature/pressure
-    const home = homeCoords();
-    if (!home) return;
-    const hx = view.x(home.lon), hy = view.y(home.lat);
-    if (hx >= -4 && hx <= view.w + 4 && hy >= -4 && hy <= view.h + 4) return;
-
-    const angle = Math.atan2(hy - view.cy, hx - view.cx);
-    // Clamps a point along that angle to just inside the canvas edge —
-    // the standard "off-screen compass" technique, done directly with
-    // the line's own slope rather than pulling in any extra geometry
-    // helper for what's ultimately one arrow.
-    const margin = 30;
-    const dx = Math.cos(angle), dy = Math.sin(angle);
-    let t = Infinity;
-    if (dx > 0) t = Math.min(t, (view.w - margin - view.cx) / dx);
-    else if (dx < 0) t = Math.min(t, (margin - view.cx) / dx);
-    if (dy > 0) t = Math.min(t, (view.h - margin - view.cy) / dy);
-    else if (dy < 0) t = Math.min(t, (margin - view.cy) / dy);
-    const ex = view.cx + dx * t, ey = view.cy + dy * t;
-
-    const p = mapPalette();
-    ctx.save();
-    ctx.translate(ex, ey);
-    ctx.rotate(angle);
-    ctx.fillStyle = p.ink;
-    ctx.globalAlpha = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(9, 0);
-    ctx.lineTo(-7, -7);
-    ctx.lineTo(-7, 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-
-    const away = haversineKm(home.lat, home.lon, view.centre.lat, view.centre.lon);
-    const distText = usingMiles() ? `${Math.round(away * 0.621371)} mi` : `${Math.round(away)} km`;
-    ctx.globalAlpha = 1;
-    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
-    ctx.fillStyle = p.ink;
-    ctx.textAlign = "center";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = p.sea;
-    const lx = ex - dx * 18, ly = ey - dy * 18 + 4;
-    ctx.strokeText(`Home ${distText}`, lx, ly);
-    ctx.fillText(`Home ${distText}`, lx, ly);
-    ctx.textAlign = "left";
   }
 });
 
