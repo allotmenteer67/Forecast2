@@ -27,21 +27,15 @@
 // like an old version" is a live possibility, not just for
 // SHELL_FILES changes.
 //
-// Bumped to v5: substantial further changes since v4 across map.js,
-// map.html, style.css, app.js and index.html — the whole map header/
-// control-row rebuild (Home and Go-to moved twice, zoom buttons, the
-// merged "Forecast for here" + save-to-places prompt), saved-place
-// markers, two separate crosshair-visibility fixes, the coastline-
-// outline-on-top-of-rain layer, the map-strip density/interpolation
-// work and its hour-slider sync, the front-page Play button, and the
-// map-strip height fix. The drag diagnostics added for v4 have also
-// been removed now that they'd done their job. Same reasoning as v3
-// and v4 above: this much change landing on a stale cached copy is
-// exactly the failure this version string exists to prevent, and it's
-// already caused real confusion once this session (a resolved pan-lag
-// investigation that, in hindsight, was likely just testing an old
-// cached map.js the whole time).
-const CACHE_NAME = "cloude-shell-v5";
+// Bumped to v6: waterways/lakes rendering (the new "waterways" layer,
+// lakes folded into clipToLand, the river palette colour) and the
+// place-label rank caps all landed in map.js AFTER v5 was set — v5 was
+// bumped specifically to clear the drag-diagnostics removal, one
+// message before waterways got built, so it never actually included
+// any of this. Textbook case of exactly what these version bumps
+// exist to prevent: real new code sitting unseen behind a cache that
+// looks current but predates it.
+const CACHE_NAME = "cloude-shell-v6";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
