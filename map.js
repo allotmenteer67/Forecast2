@@ -113,6 +113,12 @@ const MAP_PALETTES = [
     // labels) and isobar's orange. A plum/purple has no other claim on
     // this palette at all.
     marker: "#7A3E86",
+    // Rivers/canals — closer to the sea's own hue than a fresh colour,
+    // since a river genuinely IS the same substance as the sea, just
+    // narrower. Deliberately more saturated than the very pale sea
+    // fill: a thin 1px line in that pale a blue would all but disappear
+    // against light land.
+    river: "#8FB9E2",
     // Starts at mid-blue, not near-white: on a light base the palest
     // stops of a conventional radar ramp read as "no rain".
     ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"]
@@ -134,6 +140,10 @@ const MAP_PALETTES = [
     // A soft pink rather than Paper's plum — needs to stay legible
     // against dark land/sea, which a darker purple wouldn't.
     marker: "#E37BC4",
+    // Same reasoning as Paper's river colour — a mid-tone pulled from
+    // this palette's own rain ramp, since a river is the same "water"
+    // concept as the sea and rain, not a new one.
+    river: "#85B7EB",
     // Dark base, so the full range including the pale end is usable.
     ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"]
   },
@@ -153,6 +163,10 @@ const MAP_PALETTES = [
     // Same "no hue" rule — saved places are told apart from towns by
     // shape (a triangle, not a dot), not colour, on this palette.
     marker: "#000000",
+    // No hue at all, same rule as the rest of this palette — told apart
+    // from the coastline by being drawn thinner/dashed rather than by
+    // colour (see the waterways layer's own line style).
+    river: "#7C7C7C",
     // No hue at all. For bright daylight, and for anyone who can't
     // reliably separate the blues.
     ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"]
@@ -292,7 +306,7 @@ function registerMapLayer(layer) {
 // needed, no attribution required. That matters here, because the whole
 // reason for not using a tile service was to avoid both a live
 // dependency and crediting somebody else's weather app.
-const mapVectorData = { coastline: null, lakes: null, places: null };
+const mapVectorData = { coastline: null, lakes: null, places: null, waterways: null };
 
 // A missing file must degrade, not break. If the coastline hasn't been
 // added to the repo yet the map still pans, still draws rain, and still
@@ -302,7 +316,14 @@ async function loadMapVectors() {
   const files = [
     ["coastline", "data/coastline-50m.json"],
     ["lakes", "data/lakes-50m.json"],
-    ["places", "data/places.json"]
+    ["places", "data/places.json"],
+    // Rivers and canals only (no streams/ditches — see
+    // prepare-waterways-data.html for why) plus lakes above. Both were
+    // built once, offline, by that page rather than fetched live —
+    // same pattern as coastline/places. A missing file here degrades
+    // exactly like a missing coastline does: the layer below just
+    // draws nothing.
+    ["waterways", "data/waterways.json"]
   ];
   await Promise.all(files.map(async ([key, path]) => {
     try {
@@ -453,6 +474,37 @@ function drawGeoJson(ctx, geo, view, { fill, stroke, lineWidth = 1 }) {
       if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
     });
   });
+}
+
+// Not built on drawGeoJson above: that function fills-then-strokes each
+// ring identically, but rivers and canals need per-FEATURE styling (a
+// canal drawn dashed, a river solid — the traditional OS-map
+// convention for "this watercourse is man-made"), which a single
+// shared fill/stroke option can't express. Everything else — the
+// bounding-box skip, the point-transform loop — is the same technique.
+function drawMapWaterways(ctx, geo, view, colour) {
+  if (!geo) return;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  const bounds = viewBounds(view);
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = 1;
+  features.forEach(feature => {
+    const geometry = feature.geometry || feature;
+    // A canal is man-made — dashed is the traditional cartographic way
+    // of saying "this watercourse was built, not carved by the land
+    // itself", which a plain solid line (river) doesn't claim.
+    ctx.setLineDash(feature.properties?.kind === "canal" ? [4, 3] : []);
+    eachRing(geometry, ring => {
+      if (!ringIntersectsView(ring, bounds)) return;
+      ctx.beginPath();
+      ring.forEach(([lon, lat], i) => {
+        const px = view.x(lon), py = view.y(lat);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+    });
+  });
+  ctx.setLineDash([]); // reset — later layers must not inherit this
 }
 
 // ---------------------------------------------------------------------
@@ -1072,8 +1124,30 @@ function clipToLand(ctx, view) {
       ctx.closePath();
     });
   });
-  // evenodd so inland water bodies punched out of the outline stay
-  // excluded, matching how the base layer fills it.
+  // Lakes added into the SAME path as the coastline, not a separate
+  // clip — a lake sits above sea level (Loch Ness ~16m, Windermere
+  // ~39m), so nothing about the coastline fix above already excludes
+  // it; without this, terrain shading carried on straight across a
+  // lake's surface as if it were ordinary land. Harmless no-op while
+  // data/lakes-50m.json is still the empty placeholder — this only
+  // starts doing anything once real lake polygons exist there.
+  const lakeGeo = mapVectorData.lakes;
+  if (lakeGeo) {
+    const lakeFeatures = lakeGeo.type === "FeatureCollection" ? lakeGeo.features : [lakeGeo];
+    lakeFeatures.forEach(feature => {
+      eachRing(feature.geometry || feature, ring => {
+        if (!ringIntersectsView(ring, bounds)) return;
+        ring.forEach(([lon, lat], i) => {
+          const px = view.x(lon), py = view.y(lat);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+      });
+    });
+  }
+  // evenodd so inland water bodies (lakes, and sea punched out of the
+  // coastline outline) all stay excluded, matching how the base and
+  // lakes layers fill them.
   ctx.clip("evenodd");
   return true;
 }
@@ -1144,6 +1218,14 @@ registerMapLayer({
   draw(ctx, view) {
     const p = mapPalette();
     drawGeoJson(ctx, mapVectorData.lakes, view, { fill: p.sea, stroke: p.coast });
+  }
+});
+
+registerMapLayer({
+  id: "waterways",
+  draw(ctx, view) {
+    const p = mapPalette();
+    drawMapWaterways(ctx, mapVectorData.waterways, view, p.river);
   }
 });
 
