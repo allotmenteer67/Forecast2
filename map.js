@@ -2327,26 +2327,26 @@ function updateMapChrome() {
 }
 
 // ---------------------------------------------------------------------
-// Panning, tap, and double-tap-to-zoom
+// Panning and tap
 //
 // Single-finger drag, which means touch-action: none on the canvas —
 // the canvas stops the page scrolling over itself. That is why drag
 // exists ONLY on this page and the front-page strip is tap-only: a
 // scroll-blocking canvas inside a scrolling column feels broken.
 //
-// Zoom buttons were tried first and didn't work well in practice — a
-// double-tap (in, recentring on wherever was tapped) plus wrapping back
-// out to the widest view once already at the closest level covers both
-// directions from one gesture, with no dedicated zoom-out needed and no
-// extra button added to a page already growing a few "back to
-// somewhere" controls (see the Home/Back buttons above).
+// Double-tap-to-zoom (in, recentring on wherever was tapped; wrapping
+// back out to the widest view once already at the closest level) was
+// removed after the buttons below took over as the primary way to
+// zoom — the two were colliding: a tap on a saved-place marker,
+// followed shortly by an ordinary tap elsewhere, could read as a
+// double-tap and zoom unexpectedly. One clear way to zoom (the
+// buttons) beat two overlapping ones. Tap itself stays — it's still
+// how a saved-place marker gets hit.
 // ---------------------------------------------------------------------
 let panPointerId = null;
 let panLast = null;
 let panStart = null;
 let panMoved = false;
-let lastTapAt = 0;
-let lastTapPos = null;
 
 // True for the duration of an actual drag (once movement has crossed
 // MAP_TAP_MOVE_TOLERANCE_PX below — a tap never sets this at all). Read
@@ -2377,23 +2377,49 @@ function scheduleMapRender() {
 
 const MAP_TAP_MOVE_TOLERANCE_PX = 10; // beyond this it's a drag, not a tap
 const MAP_TAP_MAX_DURATION_MS = 400;
-const MAP_DOUBLE_TAP_WINDOW_MS = 350;
-const MAP_DOUBLE_TAP_DISTANCE_PX = 40; // two taps in roughly the same spot, not two unrelated taps
 
 if (mapCanvas) {
   mapCanvas.addEventListener("pointerdown", e => {
+    // touch-action: none (style.css) should be enough on its own per
+    // spec, but WebKit has a known history of still letting its own
+    // gesture recognizer briefly arm on touchstart regardless — this
+    // claims the touch as early and explicitly as possible, which is a
+    // stronger, more direct signal than touch-action alone in practice
+    // on some iOS versions. Flagged honestly: this is the standard fix
+    // for exactly the symptom described (a pause before the drag
+    // visibly starts, easing once already moving), not something
+    // verified against the specific device — worth confirming it
+    // actually closes the gap once tried, rather than assuming it does.
+    e.preventDefault();
     panPointerId = e.pointerId;
     panLast = { x: e.clientX, y: e.clientY };
     panStart = { x: e.clientX, y: e.clientY, time: Date.now() };
     panMoved = false;
+    // Set true here, on first touch, rather than waiting for movement
+    // to cross MAP_TAP_MOVE_TOLERANCE_PX (see pointermove below). It
+    // used to wait — meaning every drag's first few pixels of movement
+    // still ran the FULL render (terrain, temperature, pressure all
+    // included), before the fast path this flag exists for had even
+    // switched on. Confirmed on-device as the actual cause of a
+    // specific, repeatable lag: a pause right at the start of every new
+    // touch, real finger movement piling up during it, then a sudden
+    // catch-up once movement crossed the threshold and the fast
+    // renders kicked in. Reset unconditionally at the top of endPan
+    // below — including for a plain tap that never becomes a drag at
+    // all — so this never stays stuck on past the touch that set it.
+    mapIsPanning = true;
     mapCanvas.setPointerCapture(e.pointerId);
   });
 
   mapCanvas.addEventListener("pointermove", e => {
     if (e.pointerId !== panPointerId || !panLast) return;
+    // mapIsPanning is already true from pointerdown — this only needs
+    // to track panMoved now, which distinguishes an actual drag from a
+    // tap (endPan uses it) and has different tolerances for a reason:
+    // a tap should stay a tap even with a pixel or two of natural
+    // finger wobble.
     if (Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y) > MAP_TAP_MOVE_TOLERANCE_PX) {
       panMoved = true;
-      mapIsPanning = true;
     }
     // No dpr correction here any more: pointer coordinates and the
     // view are both in CSS pixels now.
@@ -2410,44 +2436,24 @@ if (mapCanvas) {
     scheduleMapRender();
   });
 
-  // Zooms in centred on wherever was tapped — repeated double-taps on
-  // the same spot walk progressively closer to it, matching how this
-  // gesture behaves everywhere else (Photos, Maps). Wrapping back out
-  // to the widest level deliberately does NOT recentre: that one reads
-  // as "show me everything again", not "look closer here".
-  function handleDoubleTap(e) {
-    const rect = mapCanvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const view = makeView(mapCanvas, mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]);
-    const tappedLat = view.lat(py);
-    const tappedLon = view.lon(px);
-
-    if (mapZoomIndex > 0) {
-      mapZoomIndex--;
-      mapCentre = { lat: tappedLat, lon: tappedLon };
-    } else {
-      mapZoomIndex = MAP_ZOOM_RADII_KM.length - 1;
-    }
-    saveMapZoom(mapZoomIndex);
-    saveMapCentre(mapCentre);
-    renderMap();
-    ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
-    loadTerrainData();
-  }
-
   function endPan(e) {
     if (e.pointerId !== panPointerId) return;
     panPointerId = null;
     const wasTap = !panMoved && Date.now() - panStart.time < MAP_TAP_MAX_DURATION_MS;
     panLast = null;
+    // Reset unconditionally, before any branch below — pointerdown sets
+    // this true on first touch (see its own comment there), so every
+    // exit path from here needs to clear it again, including a plain
+    // tap that hits a saved-place marker and returns early just below.
+    // Left stuck true past this point would mean that marker's own
+    // renderMap() call — and every render after it, until the next
+    // drag completes — silently kept skipping terrain/temperature/
+    // pressure. A real regression, not just a missed optimisation.
+    mapIsPanning = false;
 
     if (wasTap) {
-      // Checked before double-tap or the ordinary single-tap bookkeeping
-      // below — landing on a saved place is a more specific
-      // interpretation of a tap than either of those, and jumps
-      // straight there rather than being fed into the double-tap
-      // sequence tracking.
+      // A tap on a saved-place marker jumps straight there rather than
+      // falling through to the ordinary drag-end handling below.
       const rect = mapCanvas.getBoundingClientRect();
       const tapX = e.clientX - rect.left, tapY = e.clientY - rect.top;
       const hitMarker = mapSavedPlaceHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
@@ -2455,17 +2461,6 @@ if (mapCanvas) {
         goTo(hitMarker.place, { remember: true });
         return;
       }
-
-      const now = Date.now();
-      const dist = lastTapPos ? Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y) : Infinity;
-      if (now - lastTapAt < MAP_DOUBLE_TAP_WINDOW_MS && dist < MAP_DOUBLE_TAP_DISTANCE_PX) {
-        lastTapAt = 0;
-        lastTapPos = null;
-        handleDoubleTap(e);
-        return; // handleDoubleTap already saves/refetches/renders — the plain single-tap bookkeeping below is skipped
-      }
-      lastTapAt = now;
-      lastTapPos = { x: e.clientX, y: e.clientY };
     }
 
     // Drag is genuinely over — restore terrain and the legend rebuild
@@ -2476,7 +2471,6 @@ if (mapCanvas) {
     // margin), but "usually instant" still isn't "synchronous", and
     // terrain reappearing should never be held up behind a weather
     // fetch that may not even be happening.
-    mapIsPanning = false;
     renderMap();
 
     saveMapCentre(mapCentre);
@@ -2506,19 +2500,18 @@ document.getElementById("mapHome")?.addEventListener("click", () => {
   if (home) goTo(home, { remember: true });
 });
 
-// Explicit zoom buttons. Double-tap-to-zoom still works and is
-// unchanged, but it can no longer be the only way in: iOS's own
-// double-tap gesture kept firing through it during ordinary use, so
-// the app's own version was never reliably reachable. A plain button
-// can't be intercepted by an OS gesture at all, which is the whole
-// point of adding them back after they were removed earlier. They fit
-// now because "Forecast for here" gave up its distance readout and the
-// Back button went entirely.
+// Explicit zoom buttons — now the only way to zoom, after double-tap-
+// to-zoom was tried, then kept alongside these once iOS's own
+// double-tap gesture made it unreliable on its own, then removed
+// entirely once it started colliding with taps on saved-place markers
+// (see the panning section above for the full history). A plain
+// button can't be intercepted by an OS gesture, and can't be confused
+// with an unrelated tap elsewhere on the map either.
 //
-// Unlike double-tap, these deliberately do NOT recentre on anything —
-// they zoom around wherever the map is already centred, which is what
-// the crosshair is pointing at. Double-tap recentres because you're
-// pointing at a specific spot; a button press isn't pointing anywhere.
+// Deliberately do NOT recentre on anything — they zoom around wherever
+// the map is already centred, which is what the crosshair is pointing
+// at. There's no tapped point to recentre on any more, since there's
+// no tap gesture driving this at all.
 function stepMapZoom(delta) {
   const next = mapZoomIndex + delta;
   if (next < 0 || next > MAP_ZOOM_RADII_KM.length - 1) return;

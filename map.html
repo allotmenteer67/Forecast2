@@ -15,20 +15,24 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
   <!-- maximum-scale=1/user-scalable=no is deliberately only on THIS
        page, not copied into the other pages' otherwise-identical head.
-       This page has its own deliberate double-tap-to-zoom gesture (see
-       handleDoubleTap in map.js) plus a drag-panning canvas that
-       already blocks the browser's default touch handling
-       (touch-action: none) — iOS's own page-level double-tap/pinch
-       zoom was a real, reported annoyance fighting that custom
-       gesture, landing on the canvas and its surrounding buttons alike
-       during ordinary use ("scrolling around and stabbing at the
-       screen"). Turning off the BROWSER's zoom here doesn't touch
-       iOS's actual accessibility Zoom feature (Settings > Accessibility
-       > Zoom) — that's a separate, OS-level magnifier unaffected by
-       this setting. What it does remove is casual pinch-to-read-small-
-       text as a fallback, which matters on Compare's table or
-       Settings' labels — neither of which lives on this page, so
-       nothing here is scoped more broadly than the actual complaint. -->
+       This page has a drag-panning canvas that already blocks the
+       browser's default touch handling (touch-action: none) — iOS's
+       own page-level double-tap/pinch zoom was a real, reported
+       annoyance regardless, landing on the canvas and its surrounding
+       buttons alike during ordinary use ("scrolling around and
+       stabbing at the screen"). Originally this was ALSO fighting the
+       page's own double-tap-to-zoom gesture specifically, before that
+       gesture was removed entirely (see the panning section of map.js
+       for why) — but the plain iOS-zoom-during-ordinary-use annoyance
+       was real on its own and is reason enough to keep this regardless
+       of that gesture's fate. Turning off the BROWSER's zoom here
+       doesn't touch iOS's actual accessibility Zoom feature (Settings >
+       Accessibility > Zoom) — that's a separate, OS-level magnifier
+       unaffected by this setting. What it does remove is casual
+       pinch-to-read-small-text as a fallback, which matters on
+       Compare's table or Settings' labels — neither of which lives on
+       this page, so nothing here is scoped more broadly than the
+       actual complaint. -->
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -54,13 +58,18 @@
          every time you paused to look at something, which is exactly the
          interrupting behaviour this app deliberately avoids.
 
-         Zoom buttons are back after being removed in favour of
-         double-tap alone. Double-tap still works and is unchanged, but
-         iOS's own double-tap zoom kept firing through it, so the app's
-         own gesture was never reliably reachable — a button can't be
-         intercepted by an OS gesture at all. Room was made by dropping
-         the distance readout from "Forecast for here" (the crosshair
-         already shows where "here" is).
+         Zoom buttons were originally removed in favour of double-tap
+         alone, then brought back after iOS's own double-tap zoom kept
+         firing through it, making the app's own gesture unreliable — a
+         button can't be intercepted by an OS gesture at all. The
+         double-tap gesture itself has SINCE been removed entirely, not
+         just supplemented (see the panning section of map.js): it was
+         colliding with taps on saved-place markers, where a marker tap
+         followed shortly by an ordinary tap elsewhere could read as a
+         double-tap and zoom unexpectedly. Buttons are now the only way
+         to zoom. Room for them was made by dropping the distance
+         readout from "Forecast for here" (the crosshair already shows
+         where "here" is).
 
          An on-map arrow pointing toward Home when it was off-screen was
          tried and removed again — the arrow point clamps to the canvas
@@ -135,11 +144,12 @@
          diagnosable from the device itself. -->
     <p id="mapTerrainStatus" class="actual-status status-error-only"></p>
 
-    <!-- Buttons removed — double-tap the map itself to zoom (in,
-         centred on where you tapped; a further tap once already at the
-         closest level wraps back out to the widest view). The label
-         stays as a plain read-out of the current zoom, no longer a
-         control. -->
+    <!-- A plain read-out of the current zoom level, not a control —
+         zooming happens entirely via the +/- buttons near the top of
+         the page now. (This comment used to describe a double-tap
+         gesture and, before that, dedicated buttons living right here;
+         neither is accurate any more — kept updated rather than
+         removed, since a wrong comment is worse than none.) -->
     <div class="map-zoom-row">
       <span id="mapZoomLabel" class="map-zoom-label"></span>
     </div>

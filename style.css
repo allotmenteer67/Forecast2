@@ -2490,12 +2490,14 @@ footer {
   font-size: 14px;
   /* Belt-and-braces alongside this page's own maximum-scale=1 viewport
      meta (see map.html) — that's the actual fix for iOS's page zoom
-     fighting the map's own double-tap-to-zoom gesture, but a quick
-     double-tap landing on one of these buttons rather than the canvas
-     itself is exactly the kind of near-miss that was reported. This
-     also removes the ~300ms tap delay browsers otherwise add while
-     they wait to see if a second tap is coming, which is a small,
-     free responsiveness win on top of the actual fix. */
+     firing on ordinary use, but a quick double-tap landing on one of
+     these buttons rather than the canvas is exactly the kind of
+     near-miss that was originally reported (back when the map still
+     had its own double-tap-to-zoom gesture — since removed, but iOS's
+     own zoom can still fire here regardless of that gesture's fate).
+     This also removes the ~300ms tap delay browsers otherwise add
+     while they wait to see if a second tap is coming, which is a
+     small, free responsiveness win on top of the actual fix. */
   touch-action: manipulation;
 }
 
