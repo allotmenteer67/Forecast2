@@ -165,6 +165,16 @@ header p {
   border: 1px solid #e7ede6;
 }
 
+/* Scoped to the front page's own Date card, not .controls generally —
+   Compare and Settings reuse the same class for unrelated fieldsets/
+   sections that were never part of the "still have to scroll past the
+   Date slider" complaint, and tightening their padding too was never
+   asked for. .app-home only wraps index.html's <main>, so this can't
+   leak onto those other pages. */
+.app-home .controls {
+  padding: 7px 15px;
+}
+
 /* Front page only — .app stays plain block flow on every other page,
    since flex items stop collapsing margins with each other and this
    session's whole spacing pass (12px card rhythm, the 2px dot-row
@@ -220,10 +230,12 @@ header p {
 .headline {
   background: var(--headline-bg);
   border-radius: 14px;
-  /* Tightened from 20px 22px / 18px. Every card on the front page now
-     sits on a uniform 12px rhythm so the tide/fishing pair's internal
-     gap matches the vertical spacing between cards. */
-  padding: 14px 15px;
+  /* Vertical padding tightened from 14px to 11px (horizontal untouched)
+     as part of reclaiming a few more pixels on the front page — this
+     card's own padding was adding to the same "still have to scroll to
+     see the bottom of the Date slider" gap as the .hour-slider and
+     .rollback-title trims below. */
+  padding: 11px 15px;
   margin-bottom: 12px;
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
 }
@@ -640,14 +652,14 @@ header p {
 }
 
 .hour-slider {
-  /* Was 14px. The range-input height bump (32px → 44px, done for a
-     bigger touch target) added 6px of invisible padding above the
-     visible track along with 6px below it — this trims that back out
-     so the gap between the hour-slider-title row and the track itself
-     stays the same size it always was, rather than quietly growing by
-     6px as an unintended side effect of a touch-target fix. */
-  margin-top: 8px;
-  padding-top: 12px;
+  /* Was margin-top 8px, padding-top 12px. Further tightened as part of
+     reclaiming a few more pixels of front-page height — the actual
+     44px range-input touch target below is deliberately NOT part of
+     this (see the note by .controls/.comparison above: that height is
+     a real accessibility fix, not decoration), only the breathing room
+     above the border and the track itself. */
+  margin-top: 4px;
+  padding-top: 7px;
   border-top: 1px solid rgba(76, 106, 88, 0.25);
 }
 
@@ -657,7 +669,8 @@ header p {
   font-size: 12px;
   font-weight: 600;
   color: var(--accent-muted);
-  margin-bottom: 4px;
+  /* Was 4px — trimmed alongside .hour-slider's own padding above. */
+  margin-bottom: 2px;
 }
 
 input[type="range"] {
@@ -948,11 +961,10 @@ legend {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  /* Was 8px margin, default (inherited ~16px) text size — shrunk
-     explicitly since "Date"/"Today" is a label for the control below
-     it, not a heading in its own right, and didn't need to be as
-     prominent as the rest of the reduction implied it should be. */
-  margin-bottom: 4px;
+  /* Was 8px, then 4px — trimmed once more as part of reclaiming a few
+     more pixels of front-page height. Still a label for the control
+     below it, not a heading, so it can afford to sit close. */
+  margin-bottom: 2px;
   font-size: 14px;
 }
 

@@ -60,6 +60,7 @@ function mapStripPalette() {
 const mapStripCanvas = document.getElementById("mapStripCanvas");
 let mapStripCoastline = null;
 let mapStripPlaces = null;
+let mapStripTerrain = null;
 let mapStripLastCentre = null;
 let mapStripLastGrid = null;
 
@@ -67,10 +68,20 @@ function sizeMapStripCanvas() {
   if (!mapStripCanvas) return;
   const rect = mapStripCanvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  mapStripCanvas.width = Math.round(rect.width * dpr);
-  mapStripCanvas.height = Math.round(rect.height * dpr);
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  // Skip the resize (and the caller's redraw) if nothing actually
+  // changed — ResizeObserver below can fire on subpixel layout
+  // settling that doesn't move the rounded pixel size at all, and
+  // resizing a canvas clears it even when the new size is identical to
+  // the old one, which would mean redrawing every single one of those
+  // for no visible reason.
+  if (mapStripCanvas.width === w && mapStripCanvas.height === h) return false;
+  mapStripCanvas.width = w;
+  mapStripCanvas.height = h;
   const ctx = mapStripCanvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return true;
 }
 
 // A fixed-radius, no-pan-no-zoom view — the strip only ever shows one
@@ -86,7 +97,9 @@ function mapStripView(centre) {
   return {
     w, h, pxPerKm,
     x: lon => w / 2 + (lon - centre.lon) * dLon * pxPerKm,
-    y: lat => h / 2 - (lat - centre.lat) * KM_PER_DEG_LAT * pxPerKm
+    y: lat => h / 2 - (lat - centre.lat) * KM_PER_DEG_LAT * pxPerKm,
+    lat: py => centre.lat - (py - h / 2) / (pxPerKm * KM_PER_DEG_LAT),
+    lon: px => centre.lon + (px - w / 2) / (pxPerKm * dLon)
   };
 }
 
@@ -109,11 +122,72 @@ function drawMapStripCoastline(ctx, view, geojson, fill) {
   });
 }
 
+// Clips to the same coastline outline the land fill uses, so shading
+// stops exactly at the shore rather than bleeding over open water —
+// same reasoning and same technique as clipToLand() in map.js, kept as
+// its own small copy rather than shared (see the file-level note at
+// the top of this file for why nothing here imports from map.js).
+function clipMapStripToLand(ctx, view, geojson) {
+  if (!geojson) return false;
+  ctx.beginPath();
+  geojson.features.forEach(feature => {
+    const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+    polygons.forEach(polygon => {
+      polygon.forEach(ring => {
+        ring.forEach(([lon, lat], i) => {
+          const x = view.x(lon), y = view.y(lat);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+      });
+    });
+  });
+  ctx.clip("evenodd");
+  return true;
+}
+
+// A much coarser version of map.js's terrainShadeBilinear — this strip
+// covers a fixed, small 25km radius at a small on-screen size, so the
+// full elevation grid's ~8.3km spacing plus a plain nearest-neighbour
+// slope (rather than map.js's bilinear interpolation) is already finer
+// than what a strip this size can show. Kept deliberately simple:
+// terrain here is a bit of texture to make the strip feel like the
+// same map, not a serious relief rendering — that job stays on the
+// full map page.
+function drawMapStripTerrain(ctx, view, grid) {
+  if (!grid) return;
+  const cell = 4;
+  for (let px = 0; px < view.w; px += cell) {
+    for (let py = 0; py < view.h; py += cell) {
+      const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
+      const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
+      const r = Math.round(fr), c = Math.round(fc);
+      if (r < 1 || c < 1 || r > grid.rows - 2 || c > grid.cols - 2) continue;
+      const z = grid.values[r][c];
+      if (z === null || z === undefined || z <= 0) continue;
+      // Plain east-west/north-south neighbour difference — a rough
+      // stand-in for the real slope, which is all a handful of pixels
+      // of texture needs.
+      const zE = grid.values[r][c + 1], zW = grid.values[r][c - 1];
+      const zN = grid.values[r + 1][c], zS = grid.values[r - 1][c];
+      const dx = (zE ?? z) - (zW ?? z);
+      const dy = (zN ?? z) - (zS ?? z);
+      // NW-lit convention, same as map.js — negative dx/dy (rising
+      // toward the light) reads as brighter.
+      const shade = -(dx + dy) / 40;
+      if (Math.abs(shade) < 0.03) continue;
+      ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
+      ctx.globalAlpha = Math.min(0.35, Math.abs(shade) * 0.6);
+      ctx.fillRect(px, py, cell, cell);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 async function renderMapStrip(centre, grid) {
   if (!mapStripCanvas) return;
   mapStripLastCentre = centre;
   mapStripLastGrid = grid;
-  sizeMapStripCanvas();
   const ctx = mapStripCanvas.getContext("2d");
   const view = mapStripView(centre);
   const p = mapStripPalette();
@@ -121,6 +195,14 @@ async function renderMapStrip(centre, grid) {
   ctx.fillStyle = p.sea;
   ctx.fillRect(0, 0, view.w, view.h);
   drawMapStripCoastline(ctx, view, mapStripCoastline, p.land);
+
+  if (mapStripTerrain) {
+    ctx.save();
+    if (clipMapStripToLand(ctx, view, mapStripCoastline)) {
+      drawMapStripTerrain(ctx, view, mapStripTerrain);
+    }
+    ctx.restore();
+  }
 
   if (grid) {
     const cell = 6;
@@ -230,6 +312,7 @@ async function fetchMapStripGrid(centre) {
 
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
+  sizeMapStripCanvas();
   try {
     if (!mapStripCoastline) {
       const res = await fetchWithTimeout("data/coastline-50m.json", {}, 15000);
@@ -239,6 +322,28 @@ async function initMapStrip(centre) {
       const res = await fetchWithTimeout("data/places.json", {}, 15000);
       if (res.ok) mapStripPlaces = await res.json();
     }
+    if (!mapStripTerrain) {
+      // Static file, same one map.js uses — already cached by the
+      // service worker/browser cache after the first full-map visit, so
+      // this is typically a local read rather than a real fetch. Kept
+      // to its own try/catch inside the outer one so a slow or failed
+      // terrain load never holds up coastline/places, which matter more.
+      try {
+        const res = await fetchWithTimeout("data/elevation-uk.json", {}, 15000);
+        if (res.ok) {
+          const data = await res.json();
+          const values = [];
+          for (let r = 0; r < data.rows; r++) {
+            values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
+          }
+          mapStripTerrain = { ...data, values };
+        }
+      } catch {
+        // No terrain texture this time — the strip still renders sea,
+        // coastline, places and rain, which is everything it actually
+        // promises; terrain here is decoration on top of that.
+      }
+    }
   } catch {
     // No coastline/places this time — the strip still renders sea
     // colour plus rain (or just sea colour) and is still tappable
@@ -246,7 +351,7 @@ async function initMapStrip(centre) {
     // showing an error for what is, on the front page, a secondary
     // feature.
   }
-  renderMapStrip(centre, null); // whatever arrived (coastline/places) shown immediately, rain follows once fetched
+  renderMapStrip(centre, null); // whatever arrived (coastline/places/terrain) shown immediately, rain follows once fetched
 
   try {
     const grid = await fetchMapStripGrid(centre);
@@ -261,6 +366,27 @@ document.addEventListener("cloude:location-ready", e => {
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
-window.addEventListener("resize", () => {
-  if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-});
+// Was a window "resize" listener only, which never fires when the
+// PAGE's own layout changes size without the window itself changing —
+// exactly what happens when Tide/Fishing or a headline cell gets
+// switched off in Settings: .map-strip's flex-grow (see style.css)
+// gives the strip more height, but nothing tells this canvas that its
+// own box just changed shape. Confirmed on-device: the card grew, but
+// the drawing inside stayed the old, smaller size, leaving a plain
+// blank gap in the newly-freed space instead of the map filling it.
+// ResizeObserver watches the canvas's own box directly, so it fires for
+// that case too, not just an actual window resize.
+if (mapStripCanvas && "ResizeObserver" in window) {
+  const mapStripResizeObserver = new ResizeObserver(() => {
+    if (sizeMapStripCanvas() && mapStripLastCentre) {
+      renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    }
+  });
+  mapStripResizeObserver.observe(mapStripCanvas);
+} else {
+  // ResizeObserver has been in Safari since 2020 — this is only a
+  // fallback for something unexpectedly old, not an expected path.
+  window.addEventListener("resize", () => {
+    if (sizeMapStripCanvas() && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  });
+}
