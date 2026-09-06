@@ -2237,7 +2237,20 @@ MAP_LAYER_IDS.forEach(id => {
   el.checked = !!toggles[id];
   el.addEventListener("change", () => {
     saveMapLayerToggle(id, el.checked);
-    renderMap();
+    // Skipped while Play is running, rather than rendering immediately
+    // as usual. This used to fire its own renderMap() straight away —
+    // harmless on its own, but it happens completely outside Play's own
+    // self-paced chain (see scheduleMapHourPlayStep above), so it could
+    // still land at the same moment as Play's own scheduled tick and
+    // compete for the same main thread right when timing matters most.
+    // Confirmed on-device: toggling a layer during Play, even switching
+    // straight back off again afterwards, could leave the hour gap
+    // stuck wrong. mapLayerVisible() reads straight from localStorage on
+    // every draw, so there's nothing stale to worry about — Play's own
+    // very next tick (at most a second away) picks up the change with
+    // no extra render needed. Toggling while paused still renders
+    // immediately, exactly as before.
+    if (!mapHourPlayTimer) renderMap();
   });
 });
 

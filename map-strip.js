@@ -38,17 +38,22 @@ function rainBandIndex(value) {
   return idx;
 }
 
-// Only the palette's own colours are duplicated (not the whole
-// MAP_PALETTES structure) — reads the same MAP_PALETTE_KEY map.js
-// saves to, so a palette chosen on the map page is honoured here too
-// without needing map.js loaded to get at it. Land is deliberately
-// BOLDER than the full map page's own land colour — at strip size,
-// map.js's soft #e4efe6 sat too close to the sea colour to read as two
-// different things at a glance, which matters more here than on the
-// full map (where there's more screen and more time to look).
+// Same three palettes as map.js's own MAP_PALETTES, and now genuinely
+// the SAME values, not a bolder stand-in — see the note this replaces
+// below for what changed and why.
+//
+// This used to deliberately diverge from map.js: land was bolder here
+// (#9fcbae vs the real #e4efe6) on the reasoning that the full map's
+// soft green sat too close to the sea colour to read as two different
+// things at this strip's smaller size. That trade favoured legibility
+// over consistency. Explicitly reversed now that the ask is for the
+// strip to look like the same map, not its own variant — if the softer
+// land colour turns out to be a genuine problem at a glance (rather
+// than just a different look), that's the thing to revisit, not a
+// silent partial match.
 const MAP_STRIP_PALETTES = {
-  paper: { land: "#9fcbae", sea: "#EEF5FA", coast: "#5c8a6d", ink: "#2b2a26", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
-  slate: { land: "#2f6b4c", sea: "#33454f", coast: "#7a7a72", ink: "#f2f1ec", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
+  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
+  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
   mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
 };
 function mapStripPalette() {
@@ -103,9 +108,16 @@ function mapStripView(centre) {
   };
 }
 
-function drawMapStripCoastline(ctx, view, geojson, fill) {
+function drawMapStripCoastline(ctx, view, geojson, fill, stroke) {
   if (!geojson) return;
   ctx.fillStyle = fill;
+  // Was fill-only. The full map strokes the coastline outline too (see
+  // map.js's own coastline layer: `stroke: p.coast`), which reads as a
+  // defined edge to the land rather than just a colour boundary — this
+  // was the strip's most visible remaining difference from the full
+  // map once the palette itself matched.
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1;
   geojson.features.forEach(feature => {
     const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
     polygons.forEach(polygon => {
@@ -118,6 +130,7 @@ function drawMapStripCoastline(ctx, view, geojson, fill) {
         ctx.closePath();
       });
       ctx.fill("evenodd");
+      ctx.stroke();
     });
   });
 }
@@ -235,7 +248,7 @@ async function renderMapStrip(centre, grid) {
 
   ctx.fillStyle = p.sea;
   ctx.fillRect(0, 0, view.w, view.h);
-  drawMapStripCoastline(ctx, view, mapStripCoastline, p.land);
+  drawMapStripCoastline(ctx, view, mapStripCoastline, p.land, p.coast);
 
   if (mapStripTerrain) {
     ctx.save();
@@ -275,7 +288,11 @@ async function renderMapStrip(centre, grid) {
       .sort((a, b) => (a.place.rank - b.place.rank) || (a.d - b.d))
       .slice(0, 4);
 
-    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    // Regular weight now, matching the full map's own place labels
+    // exactly (was 600/bold here, a leftover from when the strip's
+    // palette and styling generally diverged from the full map on
+    // purpose — see MAP_STRIP_PALETTES' own note).
+    ctx.font = "11px -apple-system, system-ui, sans-serif";
     withDistance.forEach(({ place }) => {
       const x = view.x(place.lon), y = view.y(place.lat);
       if (x < 0 || x > view.w || y < 0 || y > view.h) return;
