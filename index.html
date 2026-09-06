@@ -78,6 +78,21 @@
       <div class="hour-slider">
         <div class="hour-slider-title">
           <span>Today</span>
+          <!-- Sits between the two existing labels rather than on a row
+               of its own — the ask was Play without spending another
+               row on it, and this row already had room going spare
+               between "Today" and the time readout. Icon rather than
+               the map page's text "Play"/"Pause" button: there's far
+               less width to work with here than a whole control row. -->
+          <button id="hourPlayButton" type="button" class="hour-play-icon" aria-label="Play">
+            <svg class="hour-play-icon-play" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 0 L10 5 L1 10 Z" fill="currentColor"/>
+            </svg>
+            <svg class="hour-play-icon-pause" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="display:none">
+              <rect x="0" y="0" width="3" height="10" fill="currentColor"/>
+              <rect x="6" y="0" width="3" height="10" fill="currentColor"/>
+            </svg>
+          </button>
           <span id="hourLabel">+48h</span>
         </div>
         <input id="hourSlider" type="range" min="0" max="48" step="1" value="0">

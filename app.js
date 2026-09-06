@@ -4824,12 +4824,93 @@ function updateHourLabel() {
 function resetHourly() {
   state.hourlyActive = false;
   state.hourIndex = 0;
+  stopHourPlay();
   if (hourSlider) {
     hourSlider.value = 0;
     updateSliderFill(hourSlider);
   }
   updateHourLabel();
 }
+
+// Every place the hourly view resets (touching the Date slider,
+// backgrounding/closing the page — see resetHourly's own note above)
+// also stops Play. The same "an explicit signal wins over an automatic
+// one" rule map.js's Play already follows, applied here too: leaving
+// this running after the view itself has reset would keep silently
+// advancing a slider that no longer means what it did a moment ago.
+let hourPlayTimer = null;
+const hourPlayButton = document.getElementById("hourPlayButton");
+
+function stopHourPlay() {
+  if (hourPlayTimer) {
+    clearTimeout(hourPlayTimer);
+    hourPlayTimer = null;
+  }
+  if (hourPlayButton) {
+    hourPlayButton.setAttribute("aria-label", "Play");
+    // .hidden rather than a class or plain style.display would be the
+    // obvious choice, but confirmed by direct testing that it silently
+    // does nothing on an <svg> — .hidden is an HTMLElement property,
+    // and inline SVG elements are SVGElement, which doesn't reflect it
+    // the same way. The attribute (and CSS's [hidden] selector) still
+    // exist, but the JS property that's meant to toggle them doesn't
+    // work here — style.display sidesteps that gap entirely rather
+    // than relying on a reflection that doesn't apply to this element.
+    hourPlayButton.querySelector(".hour-play-icon-play").style.display = "";
+    hourPlayButton.querySelector(".hour-play-icon-pause").style.display = "none";
+  }
+}
+
+// Self-scheduling setTimeout, not a fixed-cadence setInterval — the
+// same fix map.js's own Play button needed after being confirmed
+// on-device to silently skip hours under a heavier render (temperature/
+// pressure layers). This headline card has nothing that expensive to
+// draw, so the failure mode this avoids is unlikely to bite here in
+// practice — but the fix costs nothing to apply up front, and it's one
+// less thing to have to debug twice.
+function scheduleHourPlayStep() {
+  hourPlayTimer = setTimeout(() => {
+    const max = Number(hourSlider.max) || 0;
+    const next = Number(hourSlider.value) + 1;
+    if (next > max) {
+      // Stops at the end rather than looping back to "Now" — this is a
+      // look-ahead through the day, not a radar-style loop, so running
+      // out at +48h and quietly restarting would look like a glitch
+      // more than a feature.
+      stopHourPlay();
+      return;
+    }
+    hourSlider.value = next;
+    // Dispatched rather than calling the "input" handler above
+    // directly, so Play stays a second caller of that existing logic
+    // rather than a fork of it — anything that changes there (unit
+    // handling, label formatting) is picked up automatically.
+    hourSlider.dispatchEvent(new Event("input", { bubbles: true }));
+    scheduleHourPlayStep();
+  }, 700);
+}
+
+function startHourPlay() {
+  if (hourPlayTimer || !hourSlider) return;
+  scheduleHourPlayStep();
+  if (hourPlayButton) {
+    hourPlayButton.setAttribute("aria-label", "Pause");
+    hourPlayButton.querySelector(".hour-play-icon-play").style.display = "none";
+    hourPlayButton.querySelector(".hour-play-icon-pause").style.display = "";
+  }
+}
+
+hourPlayButton?.addEventListener("click", () => {
+  if (hourPlayTimer) stopHourPlay(); else startHourPlay();
+});
+
+// Genuine manual dragging always wins over Play, the same rule the map
+// page's own Play already follows. Listened for on "pointerdown"
+// specifically, not "input" — Play's own steps above also fire
+// "input" (that's how they reuse the existing handler), so "input"
+// alone can't tell a real touch apart from Play advancing itself;
+// pointerdown only ever happens from an actual touch.
+hourSlider?.addEventListener("pointerdown", stopHourPlay);
 
 if (hourSlider) {
   hourSlider.max = String(loadHourRange());

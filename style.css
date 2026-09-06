@@ -757,12 +757,58 @@ header p {
 
 .hour-slider-title {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
   color: var(--accent-muted);
   /* Was 4px — trimmed alongside .hour-slider's own padding above. */
   margin-bottom: 2px;
+}
+
+/* Sits in the middle of the existing "Today" / time-readout row rather
+   than on a row of its own — deliberately small to fit that row without
+   growing its height, which is a real trade-off worth stating plainly:
+   at 20px this is below Apple's own recommended 44px tap target. A
+   full-size target would have meant either a taller row (reintroducing
+   height this exact card was trimmed of earlier) or its own dedicated
+   row (the thing this was explicitly asked to avoid) — 20px inside the
+   existing row was the compromise that kept both. */
+.hour-play-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  /* Every <button> on the page gets a global reset (min-height: 44px,
+     padding: 0 16px, background: var(--accent) — see the plain
+     "button {}" rule) sized for real full-width buttons elsewhere in
+     the app. Confirmed on-device via a genuine measurement, not
+     assumed: this button's OWN rule set width/height but never
+     explicitly overrode min-height or padding, so those two kept
+     coming from the global rule regardless — min-height alone was
+     forcing the whole row to 44px tall, silently undoing the entire
+     point of fitting this into the existing row without growing it.
+     Both need overriding here explicitly; redeclaring width/height
+     alone doesn't touch a separate min-height/padding declaration. */
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(76, 106, 88, 0.15);
+  color: var(--accent-muted);
+  touch-action: manipulation;
+}
+
+/* Same fix as the map page's header icons (.map-icon-button svg) —
+   without this, an inline <svg> as a flex item can shrink below its
+   own width/height attributes even with room to spare, since browsers
+   don't reliably treat it as a "replaced element" for flex sizing.
+   Applied here up front rather than waiting to rediscover the same bug
+   a second time. */
+.hour-play-icon svg {
+  flex-shrink: 0;
 }
 
 input[type="range"] {
