@@ -21,10 +21,34 @@
 // the data the person actually came to this page for.
 
 const MAP_STRIP_RADIUS_KM = 25;
-const MAP_STRIP_GRID_SPACING_KM = 10;
+// Was 10km. Halved to roughly quadruple the number of sampled points
+// across the same physical area — confirmed on-device that the coarse
+// original spacing was the actual cause of the strip's blocky look
+// (the same "Tetris" problem terrain had, and for the same underlying
+// reason: a screen area sampled at 6px cells but backed by far fewer
+// real data points than that). This is the "fetch a denser grid"
+// option rather than interpolating the coarser one — genuinely more
+// detail rather than a smoother-looking guess at detail that isn't
+// there, at the cost of a heavier request: roughly 3x the locations,
+// which Open-Meteo's own rate limit weights by. Still a small fraction
+// of what the front page's main weather fetch already costs, but not
+// free, and this runs automatically on every visit.
+const MAP_STRIP_GRID_SPACING_KM = 5;
 const MAP_STRIP_FORECAST_DAYS = 3;
 const KM_PER_DEG_LAT = 111.32;
 function kmPerDegLon(lat) { return 111.32 * Math.cos(lat * Math.PI / 180); }
+
+// Synced to the front page's own hour slider (#hourSlider — see
+// app.js), so the strip shows the same "now" or "+N hours" moment as
+// the headline grid above it, rather than always being fixed to right
+// now. Not synced to the Date slider (±7 days): a day beyond what's
+// already fetched needs a wider forecast window, and a past day needs
+// real historical data from a different API entirely (the archive
+// endpoint, not the forecast one) — a genuinely bigger job than reading
+// a different index out of data already in hand, and one that doesn't
+// obviously earn its cost for an always-on preview strip whose whole
+// point is "right now, nearby".
+let mapStripHourOffset = 0;
 
 // Same thresholds as map.js's RAIN_BAND_THRESHOLDS/rainBandIndex — kept
 // duplicated rather than shared, see the file-level note above.
@@ -259,6 +283,14 @@ async function renderMapStrip(centre, grid) {
   }
 
   if (grid) {
+    // Clamped rather than trusted outright: the front page's hour
+    // slider can go up to +48h, comfortably inside the 72 hours
+    // fetched, but clamping here means a future change to either
+    // range can't quietly read past the end of a real point's array.
+    const hourIndex = Math.min(
+      grid.startIdx + mapStripHourOffset,
+      grid.rainByHour[0][0].length - 1
+    );
     const cell = 6;
     for (let px = 0; px < view.w; px += cell) {
       for (let py = 0; py < view.h; py += cell) {
@@ -266,7 +298,7 @@ async function renderMapStrip(centre, grid) {
         const lat = centre.lat - (py - view.h / 2) / (view.pxPerKm * KM_PER_DEG_LAT);
         const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
         if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-        const value = grid.rain[Math.round(fr)][Math.round(fc)];
+        const value = grid.rainByHour[Math.round(fr)][Math.round(fc)][hourIndex];
         const band = rainBandIndex(value);
         if (band < 0) continue;
         ctx.fillStyle = p.ramp[band];
@@ -353,19 +385,24 @@ async function fetchMapStripGrid(centre) {
   if (points.length !== rows * rows) throw new Error("Map strip fetch returned an unexpected number of points");
 
   const now = new Date();
-  const nowIndex = points[0].hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
-  const startIdx = nowIndex >= 0 ? nowIndex : 0;
+  const startIdx = points[0].hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
 
-  const rain = [];
+  // Keeps each point's FULL hourly series rather than collapsing to a
+  // single "now" value the way this used to — that's what lets the
+  // render step below pick out whichever hour the front page's own
+  // slider is currently on, without a separate fetch per hour moved.
+  // 3 days (72 hours) comfortably covers the front page's slider range
+  // (up to +48h), so nothing here needed to grow to support this.
+  const rainByHour = [];
   for (let r = 0; r < rows; r++) {
     const row = [];
     for (let c = 0; c < rows; c++) {
-      const v = points[r * rows + c].hourly.precipitation[startIdx];
-      row.push(v === null || v === undefined ? 0 : v);
+      const series = points[r * rows + c].hourly.precipitation;
+      row.push(series.map(v => (v === null || v === undefined ? 0 : v)));
     }
-    rain.push(row);
+    rainByHour.push(row);
   }
-  return { lat0, lon0, dLat, dLon, rows, cols: rows, rain };
+  return { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, startIdx: Math.max(0, startIdx) };
 }
 
 async function initMapStrip(centre) {
@@ -423,6 +460,22 @@ async function initMapStrip(centre) {
 document.addEventListener("cloude:location-ready", e => {
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
+
+// Reads the SAME #hourSlider element app.js already owns and drives the
+// headline grid with — a second listener on it, not a shared state
+// object, since that's all this needs and app.js's own "input" handler
+// is left completely untouched. Only re-renders (never re-fetches): the
+// full hourly series for every point is already sitting in
+// mapStripLastGrid from the one fetch on load, so moving the slider is
+// just picking a different index out of data already in hand.
+const mapStripHourSlider = document.getElementById("hourSlider");
+if (mapStripHourSlider) {
+  mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
+  mapStripHourSlider.addEventListener("input", () => {
+    mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
+    if (mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  });
+}
 
 // Was a window "resize" listener only, which never fires when the
 // PAGE's own layout changes size without the window itself changing —
