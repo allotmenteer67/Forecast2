@@ -1865,6 +1865,15 @@ function saveMapZoom(index) {
 // wherever the map happened to be mid-drag, which changes constantly and
 // is useless as a destination; an adopted location is somewhere you
 // deliberately went.
+// NOTE: the Back button was removed from map.html — fast, smooth
+// dragging made "go back to the previous adopted location" redundant
+// enough not to be worth a slot in a four-control row. loadPreviousAdopted()
+// and backButtonEnabled() below are therefore currently unused, and are
+// kept (rather than deleted along with the button) only because
+// savePreviousAdopted IS still called on adopt/Home, so the stored value
+// stays correct and the button could be restored without rebuilding its
+// state handling. If Back is still absent in a few months, delete all
+// three together.
 function loadPreviousAdopted() {
   try {
     const raw = localStorage.getItem(MAP_PREVIOUS_KEY);
@@ -2098,25 +2107,27 @@ function updateMapChrome() {
 
   const adopt = document.getElementById("mapAdopt");
   if (adopt) {
-    const home = homeCoords();
-    const away = home ? haversineKm(home.lat, home.lon, mapCentre.lat, mapCentre.lon) : null;
-    // The button says where "here" actually is, so pressing it is never
-    // a surprise.
-    adopt.textContent = away != null && away < 2
-      ? "Forecast for here"
-      : `Forecast for here${away != null ? ` (${Math.round(away)} km out)` : ""}`;
+    // Plain label, no distance. It used to append "(N km out)" so that
+    // pressing it was never a surprise about WHERE "here" was — but
+    // that made the button's width jump around constantly while
+    // panning, and it was the widest thing in a row that now has to fit
+    // four controls. The crosshair already shows exactly where "here"
+    // is, which was the real reassurance; the number was a second,
+    // costlier way of saying the same thing.
+    adopt.textContent = "Forecast for here";
   }
 
   const home = document.getElementById("mapHome");
   if (home) home.disabled = !homeCoords();
 
-  const back = document.getElementById("mapBack");
-  if (back) {
-    // Absent rather than disabled until there is somewhere to go back
-    // to. On first use Home and Back would point at the same place,
-    // which looks broken.
-    back.hidden = !(backButtonEnabled() && loadPreviousAdopted());
-  }
+  // Index 0 is the CLOSEST zoom (see MAP_ZOOM_RADII_KM), so "in"
+  // decreases it and "out" increases it. Disabled rather than hidden at
+  // the limits: a control that vanishes shifts the whole row sideways
+  // and moves the other buttons out from under your thumb.
+  const zoomIn = document.getElementById("mapZoomIn");
+  if (zoomIn) zoomIn.disabled = mapZoomIndex <= 0;
+  const zoomOut = document.getElementById("mapZoomOut");
+  if (zoomOut) zoomOut.disabled = mapZoomIndex >= MAP_ZOOM_RADII_KM.length - 1;
 }
 
 // ---------------------------------------------------------------------
@@ -2289,10 +2300,32 @@ document.getElementById("mapHome")?.addEventListener("click", () => {
   if (home) goTo(home, { remember: true });
 });
 
-document.getElementById("mapBack")?.addEventListener("click", () => {
-  const previous = loadPreviousAdopted();
-  if (previous) goTo(previous, { remember: true });
-});
+// Explicit zoom buttons. Double-tap-to-zoom still works and is
+// unchanged, but it can no longer be the only way in: iOS's own
+// double-tap gesture kept firing through it during ordinary use, so
+// the app's own version was never reliably reachable. A plain button
+// can't be intercepted by an OS gesture at all, which is the whole
+// point of adding them back after they were removed earlier. They fit
+// now because "Forecast for here" gave up its distance readout and the
+// Back button went entirely.
+//
+// Unlike double-tap, these deliberately do NOT recentre on anything —
+// they zoom around wherever the map is already centred, which is what
+// the crosshair is pointing at. Double-tap recentres because you're
+// pointing at a specific spot; a button press isn't pointing anywhere.
+function stepMapZoom(delta) {
+  const next = mapZoomIndex + delta;
+  if (next < 0 || next > MAP_ZOOM_RADII_KM.length - 1) return;
+  mapZoomIndex = next;
+  saveMapZoom(mapZoomIndex);
+  renderMap();
+  ensureGrid(mapCentre, MAP_ZOOM_RADII_KM[mapZoomIndex]).then(renderMap);
+  loadTerrainData();
+}
+
+// -1 zooms IN because index 0 is the closest tier — see MAP_ZOOM_RADII_KM.
+document.getElementById("mapZoomIn")?.addEventListener("click", () => stepMapZoom(-1));
+document.getElementById("mapZoomOut")?.addEventListener("click", () => stepMapZoom(1));
 
 document.getElementById("mapAdopt")?.addEventListener("click", () => {
   savePreviousAdopted({ lat: mapCentre.lat, lon: mapCentre.lon });

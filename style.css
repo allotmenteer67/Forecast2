@@ -2350,6 +2350,19 @@ footer {
   opacity: 0.4;
 }
 
+/* Square-ish rather than the pill shape the text buttons use — a "+"
+   is one narrow character, so the shared horizontal padding alone
+   would have made these two the smallest tap targets in the row
+   despite being the ones pressed most often. Fixed equal width and a
+   larger glyph keeps them thumb-sized and keeps the pair visually
+   matched to each other. */
+.map-zoom-button {
+  width: 44px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+
 .map-stage {
   position: relative;
   border-radius: 14px;

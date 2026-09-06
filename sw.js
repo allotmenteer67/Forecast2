@@ -27,18 +27,29 @@
 // like an old version" is a live possibility, not just for
 // SHELL_FILES changes.
 //
-// Bumped to v3 for this deploy: the title-bar layout changed (settings
-// icon moved out of .title-bar-right in the HTML, new CSS to match) and
-// the sheet's max-height changed. Both are exactly the kind of change
-// that looks like "nothing happened" if the old shell keeps being
-// served — see the note above.
-const CACHE_NAME = "cloude-shell-v3";
+// Bumped to v4: the map page changed substantially again (zoom
+// buttons added, Back removed, the coastline draw path rewritten, drag
+// diagnostics added) and map.js in particular went through several
+// rounds of changes where an old cached copy being served was itself
+// mistaken for the changes not working — exactly the failure this
+// version string exists to prevent. See the note above.
+const CACHE_NAME = "cloude-shell-v4";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
   "settings.html",
   "help.html",
   "solar.html",
+  // map.html/map.js/map-strip.js added to the precache list. They were
+  // always cached anyway (the fetch handler applies to every
+  // same-origin request, not just this list), but only lazily, on first
+  // visit — so the map page alone didn't work offline until it had been
+  // opened once online. No reason for it to be the one page that
+  // doesn't, especially now it's a main destination rather than an
+  // afterthought.
+  "map.html",
+  "map.js",
+  "map-strip.js",
   "app.js",
   "settings.js",
   "solar.js",

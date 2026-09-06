@@ -52,11 +52,21 @@
          "Forecast for here" is a plain persistent button rather than a
          prompt that appears after you stop dragging. A prompt would fire
          every time you paused to look at something, which is exactly the
-         interrupting behaviour this app deliberately avoids. -->
+         interrupting behaviour this app deliberately avoids.
+
+         Zoom buttons are back after being removed in favour of
+         double-tap alone. Double-tap still works and is unchanged, but
+         iOS's own double-tap zoom kept firing through it, so the app's
+         own gesture was never reliably reachable — a button can't be
+         intercepted by an OS gesture at all. Room was made by dropping
+         the distance readout from "Forecast for here" (the crosshair
+         already shows where "here" is) and removing Back entirely,
+         which fast dragging made redundant. -->
     <div class="map-controls">
       <button id="mapAdopt" type="button" class="map-adopt">Forecast for here</button>
+      <button id="mapZoomIn" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom in">+</button>
+      <button id="mapZoomOut" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom out">&minus;</button>
       <button id="mapHome" type="button" class="map-nav-button">Home</button>
-      <button id="mapBack" type="button" class="map-nav-button" hidden>Back</button>
     </div>
 
     <div class="map-stage">
