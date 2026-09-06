@@ -146,38 +146,79 @@ function clipMapStripToLand(ctx, view, geojson) {
   return true;
 }
 
-// A much coarser version of map.js's terrainShadeBilinear — this strip
-// covers a fixed, small 25km radius at a small on-screen size, so the
-// full elevation grid's ~8.3km spacing plus a plain nearest-neighbour
-// slope (rather than map.js's bilinear interpolation) is already finer
-// than what a strip this size can show. Kept deliberately simple:
-// terrain here is a bit of texture to make the strip feel like the
-// same map, not a serious relief rendering — that job stays on the
-// full map page.
+// Bilinear elevation + shading, ported from map.js's terrainElevationAt/
+// terrainShadeAt/terrainShadeBilinear (see that file for the full
+// reasoning). The strip's first terrain attempt used plain
+// nearest-neighbour differencing instead, on the theory that a strip
+// this small couldn't show more detail than that anyway — backwards, as
+// it turned out: a small view over an 8.3km grid means only a handful
+// of real grid points fall inside it at all, so nearest-neighbour
+// produced a few large flat rectangles rather than a few small ones —
+// confirmed on-device as a blocky, "Tetris" look. Interpolating between
+// the few points there ARE is exactly what turns them into a smooth
+// gradient instead of hard-edged blocks, which matters more on a small
+// view with few points than on the full map with many.
+function mapStripElevationAt(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  if (r0 < 0 || c0 < 0 || r0 > grid.rows - 1 || c0 > grid.cols - 1) return null;
+  const tr = fr - r0, tc = fc - c0;
+  const z00 = grid.values[r0][c0], z01 = grid.values[r0][c1];
+  const z10 = grid.values[r1][c0], z11 = grid.values[r1][c1];
+  if ([z00, z01, z10, z11].some(v => v === null || v === undefined)) return null;
+  const top = z00 + (z01 - z00) * tc;
+  const bottom = z10 + (z11 - z10) * tc;
+  return top + (bottom - top) * tr;
+}
+
+function mapStripShadeAt(grid, fr, fc) {
+  const zC = mapStripElevationAt(grid, fr, fc);
+  if (zC === null) return 0;
+  // Sea substitution, same reasoning as map.js: without this, the real
+  // 0-metre sea value reads as a cliff at every coastline, which on a
+  // 25km view is a big share of what's on screen at all.
+  const landOr = v => (v === null || v <= 0 ? zC : v);
+  const zN = landOr(mapStripElevationAt(grid, fr - 1, fc));
+  const zS = landOr(mapStripElevationAt(grid, fr + 1, fc));
+  const zW = landOr(mapStripElevationAt(grid, fr, fc - 1));
+  const zE = landOr(mapStripElevationAt(grid, fr, fc + 1));
+  const dzdx = (zE - zW) / 2;
+  const dzdy = (zS - zN) / 2;
+  const stepMetres = grid.dLat * KM_PER_DEG_LAT * 1000;
+  const slopeX = dzdx / stepMetres;
+  const slopeY = dzdy / stepMetres;
+  const EXAGGERATION = 8;
+  return Math.max(-1, Math.min(1, (slopeX - slopeY) * EXAGGERATION));
+}
+
+function mapStripShadeBilinear(grid, fr, fc) {
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0;
+  const s00 = mapStripShadeAt(grid, r0, c0), s01 = mapStripShadeAt(grid, r0, c1);
+  const s10 = mapStripShadeAt(grid, r1, c0), s11 = mapStripShadeAt(grid, r1, c1);
+  const top = s00 + (s01 - s00) * tc;
+  const bottom = s10 + (s11 - s10) * tc;
+  return top + (bottom - top) * tr;
+}
+
 function drawMapStripTerrain(ctx, view, grid) {
   if (!grid) return;
-  const cell = 4;
+  const cell = 3;
   for (let px = 0; px < view.w; px += cell) {
     for (let py = 0; py < view.h; py += cell) {
       const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
       const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
-      const r = Math.round(fr), c = Math.round(fc);
-      if (r < 1 || c < 1 || r > grid.rows - 2 || c > grid.cols - 2) continue;
-      const z = grid.values[r][c];
+      if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
+      // Sea check uses the nearest node, not the interpolated value —
+      // same reasoning as map.js: blending across the coast would
+      // produce fractional "heights" just offshore and shade open water.
+      const z = grid.values[Math.round(fr)][Math.round(fc)];
       if (z === null || z === undefined || z <= 0) continue;
-      // Plain east-west/north-south neighbour difference — a rough
-      // stand-in for the real slope, which is all a handful of pixels
-      // of texture needs.
-      const zE = grid.values[r][c + 1], zW = grid.values[r][c - 1];
-      const zN = grid.values[r + 1][c], zS = grid.values[r - 1][c];
-      const dx = (zE ?? z) - (zW ?? z);
-      const dy = (zN ?? z) - (zS ?? z);
-      // NW-lit convention, same as map.js — negative dx/dy (rising
-      // toward the light) reads as brighter.
-      const shade = -(dx + dy) / 40;
-      if (Math.abs(shade) < 0.03) continue;
+      const shade = mapStripShadeBilinear(grid, fr, fc);
+      if (Math.abs(shade) < 0.02) continue;
       ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
-      ctx.globalAlpha = Math.min(0.35, Math.abs(shade) * 0.6);
+      ctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
       ctx.fillRect(px, py, cell, cell);
     }
   }

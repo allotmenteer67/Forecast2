@@ -12,7 +12,23 @@
       } catch {}
     })();
   </script>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+  <!-- maximum-scale=1/user-scalable=no is deliberately only on THIS
+       page, not copied into the other pages' otherwise-identical head.
+       This page has its own deliberate double-tap-to-zoom gesture (see
+       handleDoubleTap in map.js) plus a drag-panning canvas that
+       already blocks the browser's default touch handling
+       (touch-action: none) — iOS's own page-level double-tap/pinch
+       zoom was a real, reported annoyance fighting that custom
+       gesture, landing on the canvas and its surrounding buttons alike
+       during ordinary use ("scrolling around and stabbing at the
+       screen"). Turning off the BROWSER's zoom here doesn't touch
+       iOS's actual accessibility Zoom feature (Settings > Accessibility
+       > Zoom) — that's a separate, OS-level magnifier unaffected by
+       this setting. What it does remove is casual pinch-to-read-small-
+       text as a fallback, which matters on Compare's table or
+       Settings' labels — neither of which lives on this page, so
+       nothing here is scoped more broadly than the actual complaint. -->
   <meta name="theme-color" content="#2f6f4f">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">

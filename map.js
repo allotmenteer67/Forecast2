@@ -316,6 +316,28 @@ function kmPerDegLon(lat) {
   return KM_PER_DEG_LAT * Math.cos(lat * Math.PI / 180);
 }
 
+// The bottom time/conditions pill (.map-scale in style.css: 8px from
+// the bottom, ~25px tall at its usual single line — 14px font at a
+// normal ~1.2 line-height plus 4px padding top and bottom) visually
+// eats into the bottom of the square canvas. MAP_CROSSHAIR_BAR_ADJUST
+// is half that pill's total footprint (8 + 25, halved), which is
+// exactly what shifts a plain 50% centre up to the centre of the
+// space actually above the pill instead. Kept as its own named
+// constant, not a magic number inline, because .map-crosshair's CSS
+// `top: calc(50% - Xpx)` needs this same value — the two are only
+// ever correct together, the same way cx/cy needed to match the
+// crosshair's old top:58% before this change.
+//
+// Supersedes an earlier deliberate choice, worth recording rather than
+// silently overwriting: this used to be `h * 0.58`, biasing the centre
+// down so more of the view showed the direction weather approaches
+// from (the UK's prevailing south-westerlies) than the direction
+// already past. Confirmed on-device that the bottom pill made that
+// bias look more pronounced than intended — genuine visual centring
+// against the space actually usable above the pill won out over
+// keeping the weather-direction bias.
+const MAP_CROSSHAIR_BAR_ADJUST = 17;
+
 function makeView(canvas, centre, radiusKm) {
   // CSS pixels, not the canvas's backing-store pixels. renderMap()
   // scales the context by the device pixel ratio, so everything below —
@@ -336,11 +358,8 @@ function makeView(canvas, centre, radiusKm) {
   const pxPerKm = w / (radiusKm * 2);
   return {
     w, h, pxPerKm, centre, radiusKm,
-    // Home sits below centre: weather arrives from the south-west, so
-    // more of the map should show where it is coming FROM than where it
-    // is going. A centred origin wastes half the view on the past.
     cx: w / 2,
-    cy: h * 0.58,
+    cy: h / 2 - MAP_CROSSHAIR_BAR_ADJUST,
     x(lon) { return this.cx + (lon - centre.lon) * kmPerDegLon(centre.lat) * this.pxPerKm; },
     y(lat) { return this.cy - (lat - centre.lat) * KM_PER_DEG_LAT * this.pxPerKm; },
     lon(px) { return centre.lon + (px - this.cx) / (kmPerDegLon(centre.lat) * this.pxPerKm); },
@@ -2141,19 +2160,49 @@ const mapHourPlayButton = document.getElementById("mapHourPlay");
 
 function stopMapHourPlay() {
   if (mapHourPlayTimer) {
-    clearInterval(mapHourPlayTimer);
+    clearTimeout(mapHourPlayTimer);
     mapHourPlayTimer = null;
   }
   if (mapHourPlayButton) mapHourPlayButton.textContent = "Play";
 }
 
-function startMapHourPlay() {
-  if (mapHourPlayTimer || !mapHourInput) return;
-  mapHourPlayTimer = setInterval(() => {
+// Was setInterval(..., 700) — a fixed clock, regardless of how long
+// each render actually took. Confirmed on-device as the actual cause
+// of Play showing 2-3 hour "jumps" with Pressure and Temperature
+// switched on: those two are genuinely the most expensive layers
+// (isobars are marching-squares contour tracing; temperature is a
+// full-canvas gradient fill), and once a single renderMap() call takes
+// longer than 700ms, the fixed timer is already overdue the instant it
+// finishes — so the next tick fires almost immediately and does its
+// own long render, and so on. Each tick's own code only ever adds
+// exactly 1 hour; nothing here was skipping steps. What was happening
+// is the BROWSER only gets an idle moment to actually paint a frame to
+// the screen occasionally in between, so several genuine +1 increments
+// could happen invisibly while the screen was still showing the last
+// one it managed to paint — reading as a multi-hour jump that wasn't
+// really there in the data, only in what got displayed.
+//
+// Self-scheduling setTimeout instead: the next step is only ever
+// queued once the current render has actually finished, so the update
+// rate can never outrun what the device can actually draw and paint.
+// Rain-only still plays at roughly the original pace, since a render
+// that finishes well under 700ms just waits out the rest of it as
+// before. With Pressure and Temperature on, the honest trade is that
+// each step now genuinely takes as long as it takes — slower in real
+// seconds when the layers are heavy — rather than silently skipping
+// hours to keep pretending it can hit a fixed cadence it can't sustain.
+function scheduleMapHourPlayStep() {
+  mapHourPlayTimer = setTimeout(() => {
     const next = (parseInt(mapHourInput.value, 10) || 0) + 1;
     mapHourInput.value = next > 47 ? 0 : next;
     renderMap();
+    scheduleMapHourPlayStep();
   }, 700);
+}
+
+function startMapHourPlay() {
+  if (mapHourPlayTimer || !mapHourInput) return;
+  scheduleMapHourPlayStep();
   if (mapHourPlayButton) mapHourPlayButton.textContent = "Pause";
 }
 

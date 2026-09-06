@@ -2320,6 +2320,15 @@ footer {
   color: var(--accent-dark);
   font-weight: 600;
   font-size: 14px;
+  /* Belt-and-braces alongside this page's own maximum-scale=1 viewport
+     meta (see map.html) — that's the actual fix for iOS's page zoom
+     fighting the map's own double-tap-to-zoom gesture, but a quick
+     double-tap landing on one of these buttons rather than the canvas
+     itself is exactly the kind of near-miss that was reported. This
+     also removes the ~300ms tap delay browsers otherwise add while
+     they wait to see if a second tap is coming, which is a small,
+     free responsiveness win on top of the actual fix. */
+  touch-action: manipulation;
 }
 
 .map-adopt {
@@ -2372,7 +2381,17 @@ footer {
 .map-crosshair {
   position: absolute;
   left: 50%;
-  top: 58%;
+  /* Was top: 58%, a deliberate bias so more of the view showed the
+     direction weather approaches from than the direction already
+     past — see makeView()'s own note in map.js (MAP_CROSSHAIR_BAR_ADJUST)
+     for why that traded away in favour of this. The 17px here is exactly
+     that constant, and the two MUST stay the same value: this is what
+     the crosshair looks like it's pointing at; that constant is where
+     the map's own content is actually drawn to line up with it. calc()
+     rather than a plain percentage because the offset needed is a fixed
+     pixel amount (half the bottom time/conditions pill's own
+     footprint), not something that scales with the canvas's size. */
+  top: calc(50% - 17px);
   width: 26px;
   height: 26px;
   margin: -13px 0 0 -13px;
@@ -2412,6 +2431,9 @@ footer {
   gap: 4px 14px;
   margin: 10px 0 4px;
   font-size: 13px;
+  /* Same reasoning as .map-adopt/.map-nav-button above — these labels
+     sit close enough to the map to catch a mistimed tap. */
+  touch-action: manipulation;
 }
 
 .map-legend-row {
