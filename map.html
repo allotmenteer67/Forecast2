@@ -42,34 +42,7 @@
   <main class="app">
     <header>
       <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <!-- Home and "Go to" moved here from the control row below, the
-           same way index.html's own header pairs its title with a
-           couple of small icon buttons. Frees up the control row for
-           the two things that need to be reachable while actually
-           looking at the map (zoom, add-to-forecast), and Home/Go-to
-           are both "jump somewhere else" actions that make more sense
-           living with the page's own title than sitting in a row of
-           in-the-moment map controls. -->
-      <div class="map-title-bar">
-        <h1 class="map-page-title">Map</h1>
-        <div class="map-title-bar-right">
-          <button id="mapGoTo" type="button" class="map-icon-button" aria-label="Go to a saved place" aria-haspopup="true" aria-expanded="false">
-            <!-- Same downward-pointing triangle as the saved-place
-                 markers on the map itself (see map.js), so the button
-                 visually reads as "open the list of those triangles"
-                 rather than as an unrelated new symbol. -->
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M2 3 L14 3 L8 13 Z" fill="currentColor"/>
-            </svg>
-          </button>
-          <button id="mapHome" type="button" class="map-icon-button" aria-label="Home">
-            <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
-              <path d="M9 2 L16 8 L14 8 L14 16 L4 16 L4 8 L2 8 Z" fill="currentColor"/>
-            </svg>
-          </button>
-        </div>
-        <div id="mapGoToMenu" class="map-goto-menu" hidden></div>
-      </div>
+      <h1 class="map-page-title">Map</h1>
     </header>
 
     <!-- Controls sit ABOVE the map, not beside or below it: there is more
@@ -87,8 +60,7 @@
          own gesture was never reliably reachable — a button can't be
          intercepted by an OS gesture at all. Room was made by dropping
          the distance readout from "Forecast for here" (the crosshair
-         already shows where "here" is) and by moving Home up to the
-         header above, next to the new Go-to button.
+         already shows where "here" is).
 
          An on-map arrow pointing toward Home when it was off-screen was
          tried and removed again — the arrow point clamps to the canvas
@@ -97,12 +69,33 @@
          town Home has nothing to do with, wherever the angle happened
          to hit the border. Confirmed on a real device as actively
          misleading (it looked like Home sat in the Severn estuary) for
-         a feature that was only ever a nice-to-have. -->
+         a feature that was only ever a nice-to-have.
+
+         Home and Go-to briefly lived in their own row in the header,
+         mirroring the front page's title-bar — moved back down here
+         once "Add to forecast" (see map.js) stopped needing its own
+         button, which freed enough width on this single row for all
+         five controls to fit without the header needing a second row
+         at all. -->
     <div class="map-controls">
       <button id="mapAdopt" type="button" class="map-adopt map-adopt-compact">Forecast for here</button>
       <button id="mapZoomIn" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom in">+</button>
       <button id="mapZoomOut" type="button" class="map-nav-button map-zoom-button" aria-label="Zoom out">&minus;</button>
-      <button id="mapAddForecast" type="button" class="map-nav-button">Add to forecast</button>
+      <button id="mapGoTo" type="button" class="map-icon-button" aria-label="Go to a saved place" aria-haspopup="true" aria-expanded="false">
+        <!-- Same downward-pointing triangle as the saved-place markers
+             on the map itself (see map.js), so the button visually
+             reads as "open the list of those triangles" rather than as
+             an unrelated new symbol. -->
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 3 L14 3 L8 13 Z" fill="currentColor"/>
+        </svg>
+      </button>
+      <button id="mapHome" type="button" class="map-icon-button" aria-label="Home">
+        <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+          <path d="M9 2 L16 8 L14 8 L14 16 L4 16 L4 8 L2 8 Z" fill="currentColor"/>
+        </svg>
+      </button>
+      <div id="mapGoToMenu" class="map-goto-menu" hidden></div>
     </div>
 
     <div class="map-stage">

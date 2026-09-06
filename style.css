@@ -145,36 +145,13 @@ h1 {
   text-align: center;
 }
 
-/* Home and Go-to sit together on the right, mirroring the front page's
-   own title-bar (settings icon + place chip) rather than inventing a
-   second layout pattern for the same basic "title plus a couple of
-   small actions" shape. Kept as its own class rather than reusing
-   .title-bar directly: that one carries index.html-specific responsive
-   rules (the settings icon swapping corners on phones to dodge iPad
-   window chrome on the LEFT) that don't apply here — both new buttons
-   live on the right from the start, so none of that reordering logic
-   is needed. */
-.map-title-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  position: relative;
-}
-
-.map-title-bar .map-page-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-}
-
-.map-title-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
+/* Home and Go-to now live in the control row below (.map-controls),
+   not a separate header row — that briefly existed, mirroring the
+   front page's own title-bar, but only made sense while it was
+   sharing space with "Add to forecast"'s own button. Once that button
+   merged into "Forecast for here" (see map.js), the control row had
+   enough room for these two anyway, and one row of controls beat
+   splitting them across two for no reason. */
 .map-icon-button {
   display: inline-flex;
   align-items: center;
@@ -186,6 +163,13 @@ h1 {
   background: white;
   color: var(--accent-dark);
   touch-action: manipulation;
+  /* Without this, a tight row (now five controls, not four) could
+     shrink these below 36px under flex's default shrink behaviour —
+     the same underlying class of issue the SVG-inside-the-button fix
+     just below this deals with, but for the button's own box rather
+     than its icon. A squashed-oval button would be a smaller, subtler
+     version of that same bug. */
+  flex-shrink: 0;
 }
 
 /* Without this, the icon rendered as a sliver a couple of pixels wide
@@ -211,9 +195,9 @@ h1 {
 
 /* Anchored under the Go-to button, right-aligned the same way the front
    page's own .place-menu hangs under its chip. Absolutely positioned
-   against .map-title-bar (position: relative above), not the button
-   itself, so it lines up with the right edge of the header rather than
-   the button's own narrower width. */
+   against .map-controls (position: relative on that row) rather than
+   the button itself, so it lines up with the right edge of the whole
+   control row. */
 .map-goto-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -2412,6 +2396,11 @@ footer {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+  /* So .map-goto-menu below anchors to this row rather than the next
+     positioned ancestor up (the whole page) — needed since Home/Go-to
+     moved down here from the header, which used to be what carried
+     this. */
+  position: relative;
 }
 
 /* Pill-shaped and sized to match the bottom nav's own buttons, rather
@@ -2452,11 +2441,11 @@ footer {
 
 /* Was the widest thing in the row by a good margin, partly because it
    used to carry a distance readout too ("Forecast for here (378 km
-   out)") — dropped elsewhere now that the crosshair and the on-map
-   Home arrow both cover "how far/where" more directly. Smaller text
-   and tighter padding here reflect that this button no longer needs to
-   read as the row's dominant element, now that the row also has to fit
-   Add to forecast alongside the zoom buttons. */
+   out)") — dropped, the crosshair already shows where "here" is.
+   Smaller text and tighter padding here reflect that this button no
+   longer needs to read as the row's dominant element, now that the row
+   also has to fit two zoom buttons and the Home/Go-to icons alongside
+   it. */
 .map-adopt-compact {
   font-size: 13px;
   padding: 0 12px;
@@ -2471,23 +2460,6 @@ footer {
 
 .map-nav-button:disabled {
   opacity: 0.4;
-}
-
-/* Scoped to the control row specifically (not .map-nav-button in
-   general — Play, in the Hour section further down, uses the same
-   class and doesn't need any of this). "Add to forecast" is real
-   English words, not a single glyph like the zoom buttons, and now has
-   to share the row with three other controls — tightened text and a
-   cap on how wide it's allowed to get, with an ellipsis as the fallback
-   on anything narrower still, rather than letting it wrap and throw the
-   row's height out. */
-.map-controls .map-nav-button {
-  font-size: 13px;
-  padding: 0 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 130px;
 }
 
 /* Square-ish rather than the pill shape the text buttons use — a "+"
@@ -2549,10 +2521,36 @@ footer {
   height: 26px;
   margin: -13px 0 0 -13px;
   pointer-events: none;
+  /* A light halo behind the dark lines, via drop-shadow rather than a
+     background/outline (those don't follow a shape made of two
+     gradients the way a filter does). Confirmed on a real device: over
+     a mid-to-dark rain band the crosshair was nearly invisible — a
+     dark, semi-transparent mark on a dark blue fill has almost no
+     contrast. The halo is deliberately light/neutral rather than
+     theme-coloured, so it works the same way regardless of which
+     colour is underneath (rain, terrain, open sea, any palette). */
+  /* Two identical drop-shadows rather than one: each pass adds another
+     semi-transparent white glow underneath, and stacking them gets
+     closer to a solid, fully opaque halo than either pass alone would —
+     needed against the darkest rain bands specifically, where a single
+     softer glow was still not quite enough contrast in testing. */
+  filter:
+    drop-shadow(0 0 1.5px rgba(255,255,255,.9))
+    drop-shadow(0 0 1.5px rgba(255,255,255,.9));
   background:
     linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat,
     linear-gradient(currentColor, currentColor) center / 1px 100% no-repeat;
-  color: rgba(31, 42, 36, .55);
+  /* Was rgba(31, 42, 36, .55) — semi-transparent. That was the real
+     problem, more than the halo itself: against the darkest rain band
+     specifically, a 55%-opaque dark mark plus a white halo still nets
+     out too close to the background colour to read at all. Confirmed
+     by rendering both side by side — full opacity here, same halo
+     underneath, was the fix; the halo alone wasn't. Checked against a
+     light background too (open sea) so this isn't trading one failure
+     for another: a fully opaque dark cross reads clearly there as
+     well, and the halo is simply invisible-on-white, which is correct
+     — it isn't needed there. */
+  color: rgb(31, 42, 36);
 }
 
 .map-scale {

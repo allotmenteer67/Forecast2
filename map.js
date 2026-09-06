@@ -2524,7 +2524,37 @@ function stepMapZoom(delta) {
 document.getElementById("mapZoomIn")?.addEventListener("click", () => stepMapZoom(-1));
 document.getElementById("mapZoomOut")?.addEventListener("click", () => stepMapZoom(1));
 
-document.getElementById("mapAdopt")?.addEventListener("click", () => {
+// Was two separate buttons — "Forecast for here" (adopt + navigate) and
+// "Add to forecast" (bookmark, stay put) — merged into one now that the
+// second no longer needs its own slot in an already-full control row.
+// The confirm() is native, same pattern Settings already uses for its
+// own "restore this backup?" prompt, rather than building a custom
+// dialog for something this simple and infrequent.
+//
+// The save is AWAITED before navigating away, not fired-and-forgotten:
+// resolveLocation is a network round-trip, and location.href changing
+// while that's still in flight risks the browser cancelling it
+// mid-request — losing the very thing someone just said yes to saving.
+// A brief pause before leaving the page is the honest trade for that
+// actually working reliably.
+document.getElementById("mapAdopt")?.addEventListener("click", async () => {
+  if (confirm("Add this to your saved places too?")) {
+    const postcodeStr = `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`;
+    const places = loadPlaces();
+    if (!places.some(place => place.postcode === postcodeStr)) {
+      try {
+        const resolved = await resolveLocation(postcodeStr);
+        places.push({ postcode: postcodeStr, label: resolved.label || postcodeStr });
+        savePlaces(places);
+      } catch {
+        // Couldn't resolve it well enough to save a bookmark — the
+        // adopt below still goes ahead regardless; failing to save an
+        // optional extra shouldn't block the thing actually being
+        // asked for.
+      }
+    }
+  }
+
   savePreviousAdopted({ lat: mapCentre.lat, lon: mapCentre.lon });
   // Adoption is deliberate and never accidental, because every adopted
   // centre becomes a new coordinate-based areaCode with no FFV, no
@@ -2535,50 +2565,6 @@ document.getElementById("mapAdopt")?.addEventListener("click", () => {
     localStorage.setItem(CURRENT_POSTCODE_KEY, `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`);
   } catch {}
   location.href = "index.html";
-});
-
-// Bookmarks wherever the map is currently centred into the SAME saved-
-// places list Settings already manages (PLACES_KEY) — without adopting
-// it (unlike "Forecast for here", this doesn't change what the front
-// page shows, and doesn't navigate away) and without asking for a name
-// upfront, matching Settings' own "Save" button, which already dropped
-// that prompt in favour of renaming afterwards from the list. The
-// difference here is there's no typed name to fall back on at all, so
-// the initial label comes from reverse-geocoding the spot instead of
-// just echoing back a raw "51.234,-2.567" string.
-document.getElementById("mapAddForecast")?.addEventListener("click", async () => {
-  const button = document.getElementById("mapAddForecast");
-  if (!button) return;
-  const originalText = button.textContent;
-  const postcodeStr = `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`;
-
-  const places = loadPlaces();
-  if (places.some(place => place.postcode === postcodeStr)) {
-    button.textContent = "Already saved";
-    setTimeout(() => { button.textContent = originalText; }, 1500);
-    return;
-  }
-
-  button.disabled = true;
-  button.textContent = "Saving…";
-  try {
-    const resolved = await resolveLocation(postcodeStr);
-    places.push({ postcode: postcodeStr, label: resolved.label || postcodeStr });
-    savePlaces(places);
-    // Forces refreshSavedPlacesForMap to actually re-resolve rather
-    // than seeing an unchanged signature and skipping — it compares
-    // against the list AS SAVED, and this place has just been added to
-    // that exact list, so the signature genuinely did change; this
-    // line only matters if that function has never run at all yet.
-    mapSavedPlacesRawSignature = null;
-    refreshSavedPlacesForMap();
-    button.textContent = "Added";
-  } catch {
-    button.textContent = "Couldn't save";
-  } finally {
-    button.disabled = false;
-    setTimeout(() => { button.textContent = originalText; }, 1500);
-  }
 });
 
 // "Go to" — a plain dropdown, not the sheet overlay used elsewhere in
@@ -2601,7 +2587,7 @@ function renderMapGoToMenu() {
   if (!places.length) {
     const empty = document.createElement("p");
     empty.className = "map-goto-empty";
-    empty.textContent = "No saved places yet — try \u201cAdd to forecast\u201d on the map.";
+    empty.textContent = "No saved places yet — try \u201cForecast for here\u201d and choose to save it.";
     mapGoToMenu.appendChild(empty);
     return;
   }
