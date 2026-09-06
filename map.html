@@ -105,6 +105,22 @@
         </svg>
       </button>
       <div id="mapGoToMenu" class="map-goto-menu" hidden></div>
+
+      <!-- Replaces a native confirm() for the "also save this place?"
+           question — a native dialog's buttons are OS-controlled and
+           can't be relabelled from the page at all, and its default
+           wording ("Cancel") read as "cancel adopting the forecast",
+           when Cancel here was only ever meant to mean "don't ALSO
+           save it" — adopting itself was never in question either way.
+           Plain Yes/No removes that ambiguity outright. -->
+      <div id="mapSaveConfirmBackdrop" class="map-confirm-backdrop" hidden></div>
+      <div id="mapSaveConfirm" class="map-confirm" role="alertdialog" aria-modal="true" aria-labelledby="mapSaveConfirmText" hidden>
+        <p id="mapSaveConfirmText">Also save this as a place?</p>
+        <div class="map-confirm-actions">
+          <button id="mapSaveConfirmNo" type="button" class="map-confirm-no">No</button>
+          <button id="mapSaveConfirmYes" type="button" class="map-confirm-yes">Yes</button>
+        </div>
+      </div>
     </div>
 
     <div class="map-stage">

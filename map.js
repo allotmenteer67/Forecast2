@@ -2526,12 +2526,47 @@ function stepMapZoom(delta) {
 document.getElementById("mapZoomIn")?.addEventListener("click", () => stepMapZoom(-1));
 document.getElementById("mapZoomOut")?.addEventListener("click", () => stepMapZoom(1));
 
+// Promise-based, standing in for confirm() specifically because a
+// native dialog's buttons are OS-controlled and can't be relabelled at
+// all — its default "Cancel" read as "cancel adopting the forecast",
+// when Cancel here only ever meant "don't ALSO save this as a place"
+// (adopting happens either way, see the click handler below). Plain
+// Yes/No removes that ambiguity. Kept as a plain function returning a
+// Promise, not baked into the click handler directly, so the await
+// below reads the same way confirm() itself used to.
+function askMapSaveConfirm() {
+  const backdrop = document.getElementById("mapSaveConfirmBackdrop");
+  const dialog = document.getElementById("mapSaveConfirm");
+  const yesButton = document.getElementById("mapSaveConfirmYes");
+  const noButton = document.getElementById("mapSaveConfirmNo");
+  if (!backdrop || !dialog || !yesButton || !noButton) return Promise.resolve(false);
+
+  return new Promise(resolve => {
+    function cleanup(result) {
+      backdrop.hidden = true;
+      dialog.hidden = true;
+      yesButton.removeEventListener("click", onYes);
+      noButton.removeEventListener("click", onNo);
+      backdrop.removeEventListener("click", onNo);
+      resolve(result);
+    }
+    function onYes() { cleanup(true); }
+    // Tapping the dimmed backdrop counts as "No" — the same "outside a
+    // popover closes it without committing" convention the Go-to menu
+    // already uses, and the safer of the two answers to default a
+    // stray tap toward regardless.
+    function onNo() { cleanup(false); }
+    yesButton.addEventListener("click", onYes);
+    noButton.addEventListener("click", onNo);
+    backdrop.addEventListener("click", onNo);
+    backdrop.hidden = false;
+    dialog.hidden = false;
+  });
+}
+
 // Was two separate buttons — "Forecast for here" (adopt + navigate) and
 // "Add to forecast" (bookmark, stay put) — merged into one now that the
 // second no longer needs its own slot in an already-full control row.
-// The confirm() is native, same pattern Settings already uses for its
-// own "restore this backup?" prompt, rather than building a custom
-// dialog for something this simple and infrequent.
 //
 // The save is AWAITED before navigating away, not fired-and-forgotten:
 // resolveLocation is a network round-trip, and location.href changing
@@ -2540,7 +2575,7 @@ document.getElementById("mapZoomOut")?.addEventListener("click", () => stepMapZo
 // A brief pause before leaving the page is the honest trade for that
 // actually working reliably.
 document.getElementById("mapAdopt")?.addEventListener("click", async () => {
-  if (confirm("Add this to your saved places too?")) {
+  if (await askMapSaveConfirm()) {
     const postcodeStr = `${mapCentre.lat.toFixed(3)},${mapCentre.lon.toFixed(3)}`;
     const places = loadPlaces();
     if (!places.some(place => place.postcode === postcodeStr)) {

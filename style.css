@@ -156,19 +156,22 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  /* Was 36px — the zoom buttons next to these are 44px, and side by
+     side that was a real, visible size mismatch (confirmed on a real
+     device), not just a difference in icon style. Matched exactly now. */
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 1px solid #dfe7e1;
   background: white;
   color: var(--accent-dark);
   touch-action: manipulation;
   /* Without this, a tight row (now five controls, not four) could
-     shrink these below 36px under flex's default shrink behaviour —
-     the same underlying class of issue the SVG-inside-the-button fix
-     just below this deals with, but for the button's own box rather
-     than its icon. A squashed-oval button would be a smaller, subtler
-     version of that same bug. */
+     shrink these below their set size under flex's default shrink
+     behaviour — the same underlying class of issue the SVG-inside-
+     the-button fix just below this deals with, but for the button's
+     own box rather than its icon. A squashed-oval button would be a
+     smaller, subtler version of that same bug. */
   flex-shrink: 0;
 }
 
@@ -185,8 +188,14 @@ h1 {
    removes any ambiguity about what size "not shrunk" actually means. */
 .map-icon-button svg {
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  /* Was 16px, matched to the old 36px button. Bumped alongside that
+     size change so the icon keeps roughly the same proportion of the
+     circle it sits in — the zoom buttons' own +/- glyphs are large
+     relative to their circle, and a small icon left behind in a
+     bigger button would have read as timid by comparison rather than
+     actually matching. */
+  width: 20px;
+  height: 20px;
 }
 
 .map-icon-button:disabled {
@@ -235,6 +244,70 @@ h1 {
   font-size: 13px;
   color: var(--accent-muted);
   max-width: 220px;
+}
+
+/* A small centred prompt, not a full page takeover — this is one
+   short yes/no question, not content worth the weight of the app's
+   .sheet pattern (which map.html doesn't even have the markup for).
+   Fixed positioning rather than anchored to a button, unlike
+   .map-goto-menu above: a confirmation is about the ACTION just taken
+   ("Forecast for here"), not about a specific control on screen, so
+   centring on the viewport reads better than hanging off one button
+   among five. */
+.map-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(31, 42, 36, .35);
+  z-index: 10;
+}
+
+.map-confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 11;
+  background: white;
+  border-radius: 14px;
+  padding: 20px;
+  width: min(300px, calc(100vw - 48px));
+  box-shadow: 0 8px 28px rgba(31, 42, 36, .28);
+  text-align: center;
+}
+
+.map-confirm p {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.map-confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.map-confirm-actions button {
+  flex: 1 1 0;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 0;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* Plain, not accent-coloured — this is the "skip this extra step"
+   option, not a destructive or negative one (adopting the forecast
+   happens regardless of this choice), so it doesn't need warning
+   styling, just less visual weight than Yes. */
+.map-confirm-no {
+  background: #eef2ef;
+  color: var(--accent-dark);
+}
+
+.map-confirm-yes {
+  background: var(--accent-dark);
+  color: white;
 }
 
 header p {
