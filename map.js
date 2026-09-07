@@ -2175,8 +2175,16 @@ registerMapLayer({
       ctx.textAlign = "center";
       ctx.lineWidth = 3;
       ctx.strokeStyle = p.land;
-      ctx.strokeText(loc.label, x, y - 14);
-      ctx.fillText(loc.label, x, y - 14);
+      // resolveLocation (app.js) builds this as "name, county" — just
+      // the name here keeps the map's own labels short and consistent
+      // with the saved-places markers above, which only ever show a
+      // plain place name too. The full "name, county" label is still
+      // what's stored and shown everywhere else (the tide card, its
+      // sheet title, Settings' locations list) — this only trims what's
+      // painted on the map itself.
+      const shortLabel = loc.label.split(",")[0].trim();
+      ctx.strokeText(shortLabel, x, y - 14);
+      ctx.fillText(shortLabel, x, y - 14);
       ctx.textAlign = "left";
 
       mapTideLocationHitboxes.push({ x, y, radius: 20, location: loc });
@@ -2458,15 +2466,21 @@ function updateMapChrome() {
   const radius = MAP_ZOOM_RADII_KM[mapZoomIndex];
   const imperial = usingMiles();
   const across = imperial ? Math.round(radius * 2 * 0.621371) : radius * 2;
-  const zoomLabel = document.getElementById("mapZoomLabel");
-  if (zoomLabel) zoomLabel.textContent = `${across} ${imperial ? "miles" : "km"} across`;
 
   const scale = document.getElementById("mapScale");
   if (scale) {
     const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
     const hour = mapHourValue();
     const readout = buildMapReadout(hour);
-    scale.textContent = mapHourClock(hour) + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
+    // The zoom-distance figure used to live in its own row below the
+    // map, on its own with nothing to visually tie it to anything else
+    // on the page — reported back as "a random distance appearing on
+    // the screen". Folded in here instead, right alongside the clock
+    // it's genuinely related to (both describe the map above them),
+    // rather than removed outright — the whole point of it was telling
+    // you how wide an area you're looking at, and that's still useful,
+    // it just needed a clear home.
+    scale.textContent = mapHourClock(hour) + ` · ${across}${imperial ? "mi" : "km"} across` + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
   }
 
   const hourLabel = document.getElementById("mapHourLabel");

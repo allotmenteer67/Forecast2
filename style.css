@@ -2777,16 +2777,19 @@ footer {
 
 .map-scale {
   position: absolute;
-  /* Was right:8px only, font-size:11px — a small bottom-right pill was
-     fine for a bare clock time, but too cramped once this line also
-     carries the shorthand conditions readout (wind/rain/temp/pressure
-     at the crosshair). Spans the full width now so a longer line wraps
-     within the map instead of running off it, and reads at a size
-     that's actually easy to check at a glance. */
-  left: 8px;
+  /* Was left:8px/right:8px spanning the whole card — reported back as
+     looking like "a whole bar" across the map rather than a small
+     readout. Only right:8px now, same as the front page strip's own
+     small pill (.map-strip-scale) — an absolutely positioned box with
+     just one side set shrink-wraps to its own content and grows
+     leftward as needed, rather than stretching to fill. max-width is
+     only a cap for a genuinely long line (several active layers'
+     readouts at once on a narrow phone), not the pill's normal size. */
   right: 8px;
   bottom: 8px;
-  font-size: 14px;
+  max-width: calc(100% - 16px);
+  white-space: normal;
+  font-size: 13px;
   font-weight: 600;
   text-align: right;
   padding: 4px 9px;
@@ -2891,20 +2894,6 @@ footer {
 .map-legend-label {
   white-space: nowrap;
   font-size: 11px;
-  color: var(--accent-muted);
-}
-
-.map-zoom-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 10px 0 12px;
-}
-
-.map-zoom-label {
-  flex: 1 1 auto;
-  text-align: center;
-  font-size: 13px;
   color: var(--accent-muted);
 }
 
