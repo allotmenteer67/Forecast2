@@ -263,10 +263,15 @@ const REVERSE_GEOCODE_URL = "https://nominatim.openstreetmap.org/reverse";
 const MAX_ROLLBACK = 7; // days into the past the slider (and Actual) can reach
 const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live forecast) can reach
 
-// Real data (Open-Meteo's Previous Runs API) only covers these four
-// conditions for any source — Sunshine and UV aren't in that dataset, so
-// real sources fall back to the demo formula for those two.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure", "soilTemperature", "dewPoint"]);
+// Real data (Open-Meteo's Previous Runs API) covers these directly for
+// every source. Sunshine is ALSO real, but derived rather than read
+// straight off the API: that endpoint has no sunshine_duration field at
+// all, only the raw Direct Normal Irradiance it would be calculated
+// from — see sunshineHoursByDay above, applying the same DNI > 120 W/m²
+// rule Open-Meteo's own archive-side sunshine_duration field itself
+// uses. UV is the one genuine gap left: no real source here provides it
+// at all, in any form, so it still falls back to the demo formula.
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "sunshine"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -386,7 +391,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [], soilTemp: [], dewPoint: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [], soilTemp: [], dewPoint: [], sunshine: [] };
   }
   return byLeadDay;
 }
@@ -1097,6 +1102,35 @@ function averageCloudByDay(hourlyTimes, hourlyCloud, dayCount) {
   return aggregateHourlyByDay(hourlyTimes, hourlyCloud, dayCount, "mean");
 }
 
+// Real WMO definition, the same one Open-Meteo's own daily
+// sunshine_duration field is built from: an hour counts as "sunshine"
+// when Direct Normal Irradiance exceeds 120 W/m². Needed here for the
+// same reason collect-weather.js has its own copy of this exact logic —
+// the previous-runs endpoint (used for both the live per-visit fetch
+// below and the one-off year backfill further down) has no
+// sunshine_duration field of its own, only the raw DNI it would have
+// been calculated from. Not shared as an import: this is a plain
+// multi-page static site with no build step, so small duplicated
+// helpers like this are the established pattern here rather than a
+// shared module.
+const SUNSHINE_DNI_THRESHOLD_WM2 = 120;
+function sunshineHoursByDay(hourlyTimes, hourlyDni, dayCount) {
+  const buckets = Array.from({ length: dayCount }, () => ({ lit: 0, seen: false }));
+  hourlyTimes.forEach((t, i) => {
+    const dayIndex = Math.floor(i / 24);
+    const v = hourlyDni[i];
+    if (dayIndex >= dayCount || v === null || v === undefined) return;
+    buckets[dayIndex].seen = true;
+    if (v > SUNSHINE_DNI_THRESHOLD_WM2) buckets[dayIndex].lit += 1;
+  });
+  // null (not zero) for a day with no DNI reading at all — matches how
+  // every other aggregator here distinguishes "genuinely zero" from
+  // "no data", which matters downstream: threeDayMean and the FFV
+  // sample recorder both skip null rather than treating it as a real
+  // zero-hour day.
+  return buckets.map(b => (b.seen ? b.lit : null));
+}
+
 // Direction can't be averaged (0° and 360° are the same direction but
 // average to a meaningless 180°), so this reports the direction AT the
 // hour the day's peak wind speed occurred, paired with it rather than
@@ -1241,7 +1275,8 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `cloud_cover_previous_day${d}`,
         `pressure_msl_previous_day${d}`,
         `soil_temperature_0cm_previous_day${d}`,
-        `dewpoint_2m_previous_day${d}`
+        `dewpoint_2m_previous_day${d}`,
+        `direct_normal_irradiance_previous_day${d}`
       );
     }
 
@@ -1279,7 +1314,8 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
         pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
         soilTemp: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
-        dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
+        dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+        sunshine: sunshineHoursByDay(hourlyTimes, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
       };
     }
 
@@ -1922,6 +1958,7 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
     case "pressure": return byDay.pressure[idx] ?? null;
     case "soilTemperature": return byDay.soilTemp[idx] ?? null;
     case "dewPoint": return byDay.dewPoint[idx] ?? null;
+    case "sunshine": return byDay.sunshine[idx] ?? null;
     default: return null;
   }
 }
@@ -1980,8 +2017,15 @@ function renderRealSourceStatus() {
     realSourceStatus.textContent = "Loading real forecast data…";
   } else if (ready.length > 0) {
     const names = ready.map(({ id }) => CONFIG.forecasters.find(f => f.id === id)?.name || id);
+    // Built from REAL_DATA_CONDITIONS itself rather than a hand-written
+    // list — the hand-written version had already drifted stale before
+    // Sunshine's own addition (it named only Rain/Cloud/Wind/Temperature,
+    // missing Pressure/Soil Temp/Dew Point despite those already being
+    // real). Reading the actual Set means this can't silently go out of
+    // date again the next time a condition's real/demo status changes.
+    const realConditionNames = [...REAL_DATA_CONDITIONS].map(c => CONFIG.conditions[c].name);
     realSourceStatus.textContent =
-      `Real data for Rain, Cloud, Wind and Temperature from: ${names.join(", ")}. Sunshine and UV remain demo (not available from these sources).`;
+      `Real data for ${realConditionNames.join(", ")} from: ${names.join(", ")}. UV remains demo (not available from these sources).`;
   } else {
     realSourceStatus.textContent = "";
   }
@@ -3195,6 +3239,11 @@ function headlineDisplayValueFor(conditionName) {
   return headlineValueFor(conditionName);
 }
 
+function sunshineHeadlineStillCollecting() {
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  return !selectedSources.some(source => isForecasterEligible(source, "sunshine"));
+}
+
 // forecastValueFor() deliberately falls back to a real source's demo
 // formula while that source's own real data is still loading — a
 // sensible default for the Compare table, which wants something to show
@@ -3346,6 +3395,22 @@ function renderHeadline() {
           const percent = hourlyUVPercent(state.hourIndex);
           valueEl.textContent = percent !== null ? String(percent) : "–";
         }
+      } else if (sunshineHeadlineStillCollecting()) {
+        // Every OTHER real condition here has had actual daily
+        // collection running for a long time (see collect-weather.js),
+        // so a brand-new postcode area's own 14-day window is the only
+        // bootstrap period that ever shows up in practice for them.
+        // Sunshine is different: it started collecting from scratch
+        // today, so EVERY existing area — however long-established —
+        // starts this one condition at zero. An early, not-yet-learned
+        // real number on an otherwise mature app's front page would
+        // have read as wrong more than as "still learning", so this
+        // keeps the headline cell itself quiet until at least one
+        // selected source has real, watched history for it — the same
+        // 14-day bar Compare already shows per forecaster, applied
+        // here to the headline as a whole rather than one row at a time.
+        valueEl.textContent = "Collecting data";
+        valueEl.classList.add("headline-value-collecting");
       } else {
         const value = headlineDisplayValueFor(conditionName);
         valueEl.textContent = formatValue(value, conditionName);
@@ -4562,8 +4627,11 @@ function renderTable() {
 // A year of real (mean, actual) pairs for every real source, so FFV
 // starts from a genuine base instead of building up one day at a time.
 // Manually triggered — this is a large request, not something to re-run
-// on every page load. Sunshine/UV aren't covered (see
-// REAL_DATA_CONDITIONS) so they're skipped entirely here.
+// on every page load. UV isn't covered (see REAL_DATA_CONDITIONS) —
+// no real source here provides it in any form — so it's skipped
+// entirely here; Sunshine IS covered now, derived from DNI the same
+// way the live per-visit fetch and collect-weather.js's daily
+// collection both already do (see sunshineHoursByDay).
 const BACKFILL_DAYS = 365;
 const BACKFILL_FIELD_FOR_CONDITION = {
   rain: "precip",
@@ -4572,7 +4640,8 @@ const BACKFILL_FIELD_FOR_CONDITION = {
   temperature: "tempAvg",
   pressure: "pressure",
   soilTemperature: "soilTemp",
-  dewPoint: "dewPoint"
+  dewPoint: "dewPoint",
+  sunshine: "sunshine"
 };
 
 function renderBackfillStatus() {
@@ -4608,7 +4677,8 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `cloud_cover_previous_day${d}`,
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
-      `dewpoint_2m_previous_day${d}`
+      `dewpoint_2m_previous_day${d}`,
+      `direct_normal_irradiance_previous_day${d}`
     );
   }
   const params = new URLSearchParams({
@@ -4637,7 +4707,8 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
       pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(hourlyTime, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
-      dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
+      dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+      sunshine: sunshineHoursByDay(hourlyTime, data.hourly[`direct_normal_irradiance_previous_day${d}`], dayCount)
     };
   }
   return byLeadDay;
@@ -4663,7 +4734,7 @@ async function backfillRealSourceHistory() {
     const actualParams = new URLSearchParams({
       latitude: state.lat,
       longitude: state.lon,
-      daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
+      daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
       hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
       start_date: isoDate(start),
       end_date: isoDate(end),
@@ -4685,7 +4756,14 @@ async function backfillRealSourceHistory() {
       tempAvg: actualData.daily.temperature_2m_max.map((max, i) => {
         const min = actualData.daily.temperature_2m_min[i];
         return (max !== null && min !== null) ? (max + min) / 2 : null;
-      })
+      }),
+      // Real archive field, in seconds — Open-Meteo has already applied
+      // the DNI > 120 W/m² rule for us here, unlike the per-model side
+      // above where sunshineHoursByDay has to do it. Converted to hours
+      // to match the unit the rest of the app uses for Sunshine.
+      sunshine: actualData.daily.sunshine_duration
+        ? actualData.daily.sunshine_duration.map(s => (s === null || s === undefined ? null : s / 3600))
+        : actualData.daily.temperature_2m_max.map(() => null)
     };
 
     // Real lead-time forecasts for the same year, one fetch per source.

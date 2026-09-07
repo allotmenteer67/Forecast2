@@ -23,6 +23,21 @@ const WINDOW_DAYS = 7;
 const HISTORY_PATH = new URL("../data/history.json", import.meta.url);
 const KEEP_DAYS = 400; // rolling cap so the committed file doesn't grow forever
 
+// Real WMO definition, the same one Open-Meteo's own daily
+// sunshine_duration field is built from: an hour counts as "sunshine"
+// when Direct Normal Irradiance exceeds 120 W/m². Needed here (rather
+// than just reading a ready-made value) because the previous-runs
+// endpoint — the one that gives each MODEL's own historical
+// prediction, which is the entire point of this collection — has no
+// sunshine_duration field of its own, only the raw DNI it would have
+// been calculated from. The archive side below doesn't need this: the
+// real ARCHIVE api does provide sunshine_duration directly.
+const SUNSHINE_DNI_THRESHOLD_WM2 = 120;
+function sunshineHoursFromDni(dniValues) {
+  const litHours = dniValues.filter(v => v !== null && v !== undefined && v > SUNSHINE_DNI_THRESHOLD_WM2).length;
+  return litHours; // one value per hour already, so a count of hours IS the hour total
+}
+
 // Keep this list in sync with REAL_SOURCES in app.js. Adding a new model
 // later is just a new entry here plus a matching forecaster id in app.js —
 // this script doesn't need to know about the demo-only sources at all.
@@ -76,7 +91,7 @@ async function fetchActual(lat, lon, start, end) {
   const params = new URLSearchParams({
     latitude: lat,
     longitude: lon,
-    daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
+    daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
     hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
     start_date: isoDate(start),
     end_date: isoDate(end),
@@ -97,6 +112,11 @@ async function fetchActual(lat, lon, start, end) {
   data.daily.time.forEach((date, i) => {
     const max = data.daily.temperature_2m_max[i];
     const min = data.daily.temperature_2m_min[i];
+    // Real archive field, in seconds — Open-Meteo has already applied
+    // the DNI > 120 W/m² rule for us here, unlike the per-model side
+    // below where we have to apply it ourselves. Converted to hours to
+    // match the unit the rest of the app already uses for Sunshine.
+    const sunshineSeconds = data.daily.sunshine_duration ? data.daily.sunshine_duration[i] : null;
     byDate[date] = {
       rain: data.daily.precipitation_sum[i],
       wind: data.daily.windspeed_10m_max[i],
@@ -104,7 +124,8 @@ async function fetchActual(lat, lon, start, end) {
       pressure: pressure[i],
       soilTemperature: soilTemperature[i],
       dewPoint: dewPoint[i],
-      temperature: (max !== null && min !== null) ? (max + min) / 2 : null
+      temperature: (max !== null && min !== null) ? (max + min) / 2 : null,
+      sunshine: sunshineSeconds !== null && sunshineSeconds !== undefined ? sunshineSeconds / 3600 : null
     };
   });
   return byDate;
@@ -120,7 +141,17 @@ async function fetchModel(lat, lon, model, start, end) {
       `cloud_cover_previous_day${d}`,
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
-      `dewpoint_2m_previous_day${d}`
+      `dewpoint_2m_previous_day${d}`,
+      // No sunshine_duration_previous_dayN exists on this endpoint at
+      // all — checked directly against Open-Meteo's own documentation
+      // rather than assumed, after an earlier, wrong assumption that
+      // NOTHING sunshine-related was available here at all. What IS
+      // available is the raw Direct Normal Irradiance this endpoint's
+      // own solar radiation section lists with full previous-day
+      // history, which sunshineHoursFromDni() above turns into real
+      // sunshine hours using the same threshold rule Open-Meteo's own
+      // archive-side sunshine_duration field is built from.
+      `direct_normal_irradiance_previous_day${d}`
     );
   }
 
@@ -146,6 +177,17 @@ async function fetchModel(lat, lon, model, start, end) {
   for (let d = 1; d <= 7; d++) {
     const tempMax = aggregateHourlyByDay(hourlyTimes, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "max");
     const tempMin = aggregateHourlyByDay(hourlyTimes, data.hourly[`temperature_2m_previous_day${d}`], dayCount, "min");
+    // Not aggregated via aggregateHourlyByDay like the others — that
+    // helper takes a mean/sum/max/min of whatever real values exist in
+    // a day's 24 hours, but "sunshine hours" specifically needs to
+    // COUNT how many of those hours passed the DNI threshold, which is
+    // its own kind of aggregation aggregateHourlyByDay doesn't do.
+    const dniSeries = data.hourly[`direct_normal_irradiance_previous_day${d}`];
+    const sunshine = [];
+    for (let day = 0; day < dayCount; day++) {
+      const dayValues = dniSeries.slice(day * 24, day * 24 + 24);
+      sunshine.push(dayValues.some(v => v !== null && v !== undefined) ? sunshineHoursFromDni(dayValues) : null);
+    }
     byLeadDay[d] = {
       tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
       precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
@@ -153,7 +195,8 @@ async function fetchModel(lat, lon, model, start, end) {
       cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
       pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemperature: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
-      dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean")
+      dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
+      sunshine
     };
   }
 
@@ -170,7 +213,8 @@ async function fetchModel(lat, lon, model, start, end) {
         pressure: byLeadDay[d].pressure[i],
         soilTemperature: byLeadDay[d].soilTemperature[i],
         dewPoint: byLeadDay[d].dewPoint[i],
-        temperature: byLeadDay[d].tempAvg[i]
+        temperature: byLeadDay[d].tempAvg[i],
+        sunshine: byLeadDay[d].sunshine[i]
       };
     }
   });

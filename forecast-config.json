@@ -43,6 +43,7 @@
   "rollback_days": 6,
   "eligibility_min_days": 14,
   "forecaster_data": "demo, except Met Office, ECMWF, GFS, ICON, GEM, M\u00e9t\u00e9o-France, JMA, BOM, and CMA which use real Open-Meteo model data",
+  "sunshine_note": "Sunshine is real for the nine real sources above, not demo — derived from Direct Normal Irradiance (Open-Meteo's previous-runs API has no sunshine_duration field of its own) using the same DNI > 120 W/m2 rule Open-Meteo's own archive-side sunshine_duration is built from. UV remains genuinely demo: no real source here provides it in any form. Because Sunshine's real collection only started recently, its headline cell shows 'Collecting data' until at least one selected source clears the same 14-day eligibility_min_days bar every other real condition already uses per forecaster on Compare — otherwise an early, not-yet-learned real figure would have shown on an app whose other real conditions already have months of history.",
   "actual_data": {
     "source": "Open-Meteo",
     "geocoding": "postcodes.io outcodes (first 3 characters of postcode)",

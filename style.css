@@ -780,6 +780,23 @@ header p {
                            the row above wraps the arrow instead */
 }
 
+/* "Collecting data" while a real-but-brand-new condition (currently
+   just Sunshine — see sunshineHeadlineStillCollecting in app.js)
+   hasn't earned enough real history to show yet. Overrides most of
+   .headline-value above rather than adding a whole separate element:
+   this text is several times longer than any genuine value this cell
+   ever holds ("19/32", "25 / 14"), so the bold 22px/nowrap treatment
+   built for a short number would either overflow the cell or force the
+   grid wider — muted, smaller, and allowed to wrap instead, since this
+   is a status message, not a data point worth the same visual weight. */
+.headline-value-collecting {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  white-space: normal;
+  line-height: 1.3;
+}
+
 .headline-date {
   margin: 0 0 12px;
   color: var(--accent-dark);
