@@ -528,7 +528,8 @@ const state = {
 const postcode = document.getElementById("postcode");
 const condition = document.getElementById("condition");
 const rollback = document.getElementById("rollback");
-const rollbackLabel = document.getElementById("rollbackLabel");
+const rollbackFromDate = document.getElementById("rollbackFromDate");
+const rollbackToDate = document.getElementById("rollbackToDate");
 const table = document.getElementById("forecastTable");
 const conditionTitle = document.getElementById("conditionTitle");
 const locationLabel = document.getElementById("locationLabel");
@@ -4837,10 +4838,16 @@ async function backfillRealSourceHistory() {
   renderTable();
 }
 
-function updateRollbackLabel() {
-  if (!rollbackLabel) return;
-  const targetDate = targetDateForRollback(state.rollback);
-  rollbackLabel.textContent = state.rollback === 0 ? "Today" : formatDateLong(targetDate);
+// Populates the two fixed end-of-range dates ("7 days ago"/"7 days ahead",
+// in real terms) on the single line above the slider — see index.html's
+// own comment on .rollback for why this replaced a dynamic per-drag label.
+// Unlike that old label, these two never change while dragging: -7/+7 are
+// the slider's fixed min/max, so this only needs setting once, not on
+// every "input" event. formatDateShort (no weekday) to keep this line no
+// wider than the old plain "7 days ago"/"7 days ahead" caption was.
+function updateRollbackRangeDates() {
+  if (rollbackFromDate) rollbackFromDate.textContent = formatDateShort(targetDateForRollback(7));
+  if (rollbackToDate) rollbackToDate.textContent = formatDateShort(targetDateForRollback(-7));
 }
 
 if (condition) {
@@ -4866,7 +4873,6 @@ if (rollback) {
     state.rollback = -Number(rollback.value);
     updateSliderFill(rollback);
     resetHourly();
-    updateRollbackLabel();
     renderTable();
   });
 }
@@ -5581,7 +5587,7 @@ if (placesList) renderPlacesList();
 
 if (rollback) {
   updateSliderFill(rollback);
-  updateRollbackLabel();
+  updateRollbackRangeDates();
 }
 updateHourLabel();
 

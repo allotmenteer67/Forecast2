@@ -129,16 +129,24 @@
 
     <section class="controls">
       <div class="rollback">
-        <div class="rollback-title">
-          <strong>Date</strong>
-          <span id="rollbackLabel">Today</span>
+        <!-- Was two separate lines: a title row ("Date" + whichever date
+             is currently selected) above the slider, and a plain
+             "7 days ago / Today / 7 days ahead" caption row below it —
+             "Today" appeared in both, and the wordier caption made the
+             whole control taller than it needed to be. Collapsed into
+             one line of three real anchor dates instead: what "7 days
+             ago"/"7 days ahead" actually resolve to, populated by
+             app.js's updateRollbackRangeDates(). The dynamic "which date
+             is currently selected" text this replaces wasn't unique
+             information to begin with — headlineDate above the headline
+             grid already shows exactly that (same state.rollback,
+             already visible without moving your eyes to the slider). -->
+        <div class="rollback-range-line">
+          <span id="rollbackFromDate"></span>
+          <span>Today</span>
+          <span id="rollbackToDate"></span>
         </div>
         <input id="rollback" type="range" min="-7" max="7" step="1" value="0">
-        <div class="range-labels">
-          <span>7 days ago</span>
-          <span>Today</span>
-          <span>7 days ahead</span>
-        </div>
       </div>
     </section>
   </main>

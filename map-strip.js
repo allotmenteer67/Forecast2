@@ -76,9 +76,13 @@ function rainBandIndex(value) {
 // than just a different look), that's the thing to revisit, not a
 // silent partial match.
 const MAP_STRIP_PALETTES = {
-  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
-  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
-  mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
+  // river added to match map.js's own MAP_PALETTES exactly (same hex
+  // values, same reasoning — a mid-tone pulled from that palette's own
+  // rain ramp, since a river is the same "water" concept as the sea and
+  // rain rather than a new colour of its own).
+  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", river: "#8FB9E2", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
+  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", river: "#85B7EB", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
+  mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", river: "#7C7C7C", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
 };
 function mapStripPalette() {
   let id = "paper";
@@ -90,6 +94,8 @@ const mapStripCanvas = document.getElementById("mapStripCanvas");
 let mapStripCoastline = null;
 let mapStripPlaces = null;
 let mapStripTerrain = null;
+let mapStripLakes = null;
+let mapStripWaterways = null;
 let mapStripLastCentre = null;
 let mapStripLastGrid = null;
 
@@ -181,6 +187,45 @@ function clipMapStripToLand(ctx, view, geojson) {
   });
   ctx.clip("evenodd");
   return true;
+}
+
+// Same ring-walking shape as map.js's own eachRing — rivers/canals are
+// LineString/MultiLineString, but this covers Polygon/MultiPolygon too
+// in case a future data build ever mixes geometry types in.
+function eachMapStripRing(geometry, visit) {
+  if (!geometry) return;
+  const t = geometry.type, c = geometry.coordinates;
+  if (t === "LineString") visit(c);
+  else if (t === "MultiLineString" || t === "Polygon") c.forEach(visit);
+  else if (t === "MultiPolygon") c.forEach(poly => poly.forEach(visit));
+}
+
+// Per-feature styling (canal dashed, river solid — the traditional
+// "this was built, not carved by the land" OS-map convention), same as
+// map.js's own drawMapWaterways, which is why this isn't built on
+// drawMapStripCoastline's shared fill/stroke above. Deliberately WITHOUT
+// that function's bounding-box culling: a 25km strip view only ever has
+// a handful of waterway features in range at all, so the skip-what's-
+// off-screen optimisation that matters on the full map's much larger
+// file (see map.js) isn't earning its cost at this scale.
+function drawMapStripWaterways(ctx, view, geo, colour) {
+  if (!geo) return;
+  const features = geo.type === "FeatureCollection" ? geo.features : [geo];
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = 1;
+  features.forEach(feature => {
+    const geometry = feature.geometry || feature;
+    ctx.setLineDash(feature.properties?.kind === "canal" ? [4, 3] : []);
+    eachMapStripRing(geometry, ring => {
+      ctx.beginPath();
+      ring.forEach(([lon, lat], i) => {
+        const x = view.x(lon), y = view.y(lat);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+  });
+  ctx.setLineDash([]); // reset — later layers (place labels, centre marker) must not inherit this
 }
 
 // Bilinear elevation + shading, ported from map.js's terrainElevationAt/
@@ -283,6 +328,42 @@ function mapStripRainAt(grid, fr, fc, hourIndex) {
   return top + (bottom - top) * tr;
 }
 
+// Direct copy of map.js's own mapHourClock and its full reasoning
+// (kept as its own small copy rather than shared, same reasoning as
+// everything else in this file — see the file-level note at the top).
+// "+Nh" makes you do the arithmetic before you can act on it; the
+// question being asked is "will it be raining when I get there", which
+// is a clock time, and days are named once they stop being today
+// because "09:00" alone is ambiguous over a 48-hour range.
+function mapStripHourClock(grid, hoursAhead) {
+  const idx = grid && grid.times ? Math.min(grid.startIdx + hoursAhead, grid.times.length - 1) : null;
+  const iso = idx !== null ? grid.times[idx] : null;
+  const when = iso ? new Date(iso) : new Date(Date.now() + hoursAhead * 3600000);
+  const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const isToday = when.toDateString() === new Date().toDateString();
+  if (hoursAhead === 0) return `Now, ${time}`;
+  if (isToday) return time;
+  return `${when.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+}
+
+// Reuses the full map's own .map-scale class outright — same pill, same
+// corner, same look, rather than a strip-specific class that could drift
+// out of sync with it over time (style.css only needs .map-strip itself
+// given `position: relative` for this to have something to sit inside).
+// Created lazily and appended once rather than requiring index.html to
+// carry a dedicated element for it — keeps this file self-contained
+// against .map-strip's existing markup, same as everything else here.
+let mapStripScaleEl = null;
+function ensureMapStripScale() {
+  if (mapStripScaleEl || !mapStripCanvas) return mapStripScaleEl;
+  const host = mapStripCanvas.closest(".map-strip");
+  if (!host) return null;
+  mapStripScaleEl = document.createElement("div");
+  mapStripScaleEl.className = "map-scale";
+  host.appendChild(mapStripScaleEl);
+  return mapStripScaleEl;
+}
+
 async function renderMapStrip(centre, grid) {
   if (!mapStripCanvas) return;
   mapStripLastCentre = centre;
@@ -301,6 +382,18 @@ async function renderMapStrip(centre, grid) {
       drawMapStripTerrain(ctx, view, mapStripTerrain);
     }
     ctx.restore();
+  }
+
+  // Lakes then waterways, same order as map.js's own layer registration
+  // (terrain -> lakes -> waterways -> weather). Lakes reuse the generic
+  // coastline-drawing function above — a lake is just another sea-
+  // coloured polygon with a coastline-style outline, nothing waterway-
+  // specific about it.
+  if (mapStripLakes) {
+    drawMapStripCoastline(ctx, view, mapStripLakes, p.sea, p.coast);
+  }
+  if (mapStripWaterways) {
+    drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
   }
 
   if (grid) {
@@ -372,6 +465,14 @@ async function renderMapStrip(centre, grid) {
   ctx.beginPath();
   ctx.arc(view.w / 2, view.h / 2, 4, 0, Math.PI * 2);
   ctx.fill();
+
+  // Bottom-right time pill, matching the full map's own .map-scale
+  // exactly. Text only (no shorthand conditions readout): the full
+  // map's version adds those per-layer (wind/rain/temp/pressure all
+  // independently toggleable), and this strip only ever has rain data
+  // at all, with no toggles of its own to gate a readout by.
+  const scaleEl = ensureMapStripScale();
+  if (scaleEl) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
 }
 
 async function fetchMapStripGrid(centre) {
@@ -427,7 +528,13 @@ async function fetchMapStripGrid(centre) {
     }
     rainByHour.push(row);
   }
-  return { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, startIdx: Math.max(0, startIdx) };
+  // Same series for every point (Open-Meteo's hourly buckets are aligned
+  // across all requested locations), so the first point's own timestamps
+  // stand in for all of them — matches map.js's own mapGrid.times, which
+  // the new clock readout below is a direct copy of the reasoning for.
+  const times = points[0].hourly.time;
+
+  return { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, times, startIdx: Math.max(0, startIdx) };
 }
 
 async function initMapStrip(centre) {
@@ -462,6 +569,25 @@ async function initMapStrip(centre) {
         // No terrain texture this time — the strip still renders sea,
         // coastline, places and rain, which is everything it actually
         // promises; terrain here is decoration on top of that.
+      }
+    }
+    if (!mapStripLakes) {
+      // Own try/catch, same reasoning as terrain above: a missing or
+      // slow lakes file shouldn't hold up coastline/places, and the
+      // strip is still doing everything it promises without it.
+      try {
+        const res = await fetchWithTimeout("data/lakes-50m.json", {}, 15000);
+        if (res.ok) mapStripLakes = await res.json();
+      } catch {
+        // No lakes this time — same degrade-not-break reasoning as terrain.
+      }
+    }
+    if (!mapStripWaterways) {
+      try {
+        const res = await fetchWithTimeout("data/waterways.json", {}, 15000);
+        if (res.ok) mapStripWaterways = await res.json();
+      } catch {
+        // No rivers/canals this time — same degrade-not-break reasoning.
       }
     }
   } catch {

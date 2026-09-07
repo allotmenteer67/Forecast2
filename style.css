@@ -377,6 +377,13 @@ header p {
    floor, not a fixed size, for when the rest of the page already fills
    the screen on its own. */
 .map-strip {
+  /* Needed for the bottom-right time pill (map-strip.js reuses
+     .map-scale wholesale — see that file), which is positioned
+     absolute against this element. Doesn't affect anything else here:
+     this element was already the sole flex container between the
+     canvas and the page, just never previously needed a positioning
+     context of its own. */
+  position: relative;
   /* Was display: block. A percentage height on a normal-flow child
      (the canvas's own height:100% below) needs its parent to have a
      height CSS itself established as definite — a flex-grown height
@@ -1098,6 +1105,21 @@ button {
   color: white;
   font-weight: 600;
   transition: background-color .15s ease, transform .08s ease;
+  /* Applied globally rather than button-by-button, after tracing the
+     map page's and front page's Play buttons both "sticking" solid
+     after a tap until something else was tapped — turned out to be
+     iOS's own default tap-highlight overlay, which paints a solid tint
+     over the whole button and doesn't reliably clear on its own. This
+     is the exact same root cause already found and fixed once for
+     .place-dot-button specifically (see that rule's own comment); it
+     was never generalised to the shared button rule, so every OTHER
+     plain <button> in the app — both Play buttons included — was still
+     exposed to it. On the map page's text button, the overlay sitting
+     on top of "Pause" while highlighted is what made the label
+     disappear. No plain <button> anywhere in this app wants the
+     platform default here, so this is the one shared place to fix it
+     rather than patching each button that happens to get noticed. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:hover {
@@ -1219,6 +1241,24 @@ legend {
      below it, not a heading, so it can afford to sit close. */
   margin-bottom: 2px;
   font-size: 14px;
+}
+
+/* The front page's Date slider only — map.html's own Hour rollback keeps
+   .rollback-title + .range-labels above/below its slider unchanged (see
+   both rules either side of this one). This one replaces BOTH of those
+   for the Date slider specifically: one line, three fixed anchors (real
+   date 7 days back, "Today", real date 7 days ahead) rather than a
+   dynamic title above plus a worded caption below — see index.html's own
+   comment on .rollback for the reasoning. Same visual weight as
+   .range-labels (same colour, same size) since this is replacing that
+   exact role, just consolidated onto one line instead of two. */
+.rollback-range-line {
+  display: flex;
+  justify-content: space-between;
+  color: #6b7d70;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
 }
 
 .range-labels {
