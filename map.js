@@ -2799,7 +2799,16 @@ function stopMapHourPlay() {
     clearTimeout(mapHourPlayTimer);
     mapHourPlayTimer = null;
   }
-  if (mapHourPlayButton) mapHourPlayButton.textContent = "Play";
+  if (mapHourPlayButton) {
+    mapHourPlayButton.setAttribute("aria-label", "Play");
+    // .hidden does nothing on an inline <svg> (it's an SVGElement, not
+    // an HTMLElement, so the .hidden property doesn't reflect the
+    // attribute the way it does elsewhere) — same fix, same reasoning,
+    // as the front page's own stopHourPlay in app.js, which this now
+    // matches exactly rather than the old plain textContent swap.
+    mapHourPlayButton.querySelector(".hour-play-icon-play").style.display = "";
+    mapHourPlayButton.querySelector(".hour-play-icon-pause").style.display = "none";
+  }
 }
 
 // Was setInterval(..., 700) — a fixed clock, regardless of how long
@@ -2839,7 +2848,11 @@ function scheduleMapHourPlayStep() {
 function startMapHourPlay() {
   if (mapHourPlayTimer || !mapHourInput) return;
   scheduleMapHourPlayStep();
-  if (mapHourPlayButton) mapHourPlayButton.textContent = "Pause";
+  if (mapHourPlayButton) {
+    mapHourPlayButton.setAttribute("aria-label", "Pause");
+    mapHourPlayButton.querySelector(".hour-play-icon-play").style.display = "none";
+    mapHourPlayButton.querySelector(".hour-play-icon-pause").style.display = "";
+  }
 }
 
 mapHourPlayButton?.addEventListener("click", () => {

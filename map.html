@@ -182,14 +182,29 @@
 
     <section class="controls">
       <div class="rollback">
+        <!-- Same shape as the front page's own .hour-slider-title now
+             (see index.html) — the icon button sits inline between the
+             two existing labels rather than in its own row below, and
+             is the same shared .hour-play-icon markup/class so the two
+             pages can never visually drift apart again. Was a plain
+             full-size text "Play"/"Pause" button on its own row; moved
+             here specifically because it was asked to match the front
+             page, not because anything about the old placement was
+             broken on its own. -->
         <div class="rollback-title">
           <strong>Hour</strong>
+          <button id="mapHourPlay" type="button" class="hour-play-icon" aria-label="Play">
+            <svg class="hour-play-icon-play" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 0 L10 5 L1 10 Z" fill="currentColor"/>
+            </svg>
+            <svg class="hour-play-icon-pause" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="display:none">
+              <rect x="0" y="0" width="3" height="10" fill="currentColor"/>
+              <rect x="6" y="0" width="3" height="10" fill="currentColor"/>
+            </svg>
+          </button>
           <span id="mapHourLabel">Now</span>
         </div>
-        <div class="map-hour-row">
-          <button id="mapHourPlay" type="button" class="map-nav-button map-hour-play">Play</button>
-          <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
-        </div>
+        <input id="mapHour" type="range" min="0" max="47" step="1" value="0">
         <div class="range-labels">
           <span>Now</span>
           <span>+24h</span>

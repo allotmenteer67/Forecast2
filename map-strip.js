@@ -359,7 +359,7 @@ function ensureMapStripScale() {
   const host = mapStripCanvas.closest(".map-strip");
   if (!host) return null;
   mapStripScaleEl = document.createElement("div");
-  mapStripScaleEl.className = "map-scale";
+  mapStripScaleEl.className = "map-strip-scale";
   host.appendChild(mapStripScaleEl);
   return mapStripScaleEl;
 }
@@ -466,13 +466,18 @@ async function renderMapStrip(centre, grid) {
   ctx.arc(view.w / 2, view.h / 2, 4, 0, Math.PI * 2);
   ctx.fill();
 
-  // Bottom-right time pill, matching the full map's own .map-scale
-  // exactly. Text only (no shorthand conditions readout): the full
-  // map's version adds those per-layer (wind/rain/temp/pressure all
-  // independently toggleable), and this strip only ever has rain data
-  // at all, with no toggles of its own to gate a readout by.
+  // Bottom-right time pill, matching the full map's own version in spirit
+  // but its own small class (see style.css) rather than a full-width bar
+  // across a card this size. Hidden at "Now" — that's the strip's own
+  // default state already, so a clock permanently repeating the current
+  // time added nothing; it only earns a place once the shared Hour
+  // slider (Play button included — this is exactly the state Play
+  // drives) has moved somewhere else worth naming.
   const scaleEl = ensureMapStripScale();
-  if (scaleEl) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
+  if (scaleEl) {
+    scaleEl.classList.toggle("is-visible", mapStripHourOffset !== 0);
+    if (mapStripHourOffset !== 0) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
+  }
 }
 
 async function fetchMapStripGrid(centre) {
@@ -540,6 +545,30 @@ async function fetchMapStripGrid(centre) {
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
   sizeMapStripCanvas();
+
+  // A cold PWA launch on iOS: reported as the map strip staying at a
+  // wrong (too-short) height on first open, pushing everything below it
+  // down far enough to need a scroll — but self-correcting the moment
+  // anything else forces a fresh layout pass (opening the full map and
+  // coming back). .map-strip's height comes from a plain CSS flex-grow
+  // against .app-home's `min-height: 100svh` (see style.css) — no JS
+  // computes it — but `svh` itself is measured against iOS's own
+  // dynamic toolbar, which isn't necessarily settled at the very first
+  // paint right after launch. The existing ResizeObserver below already
+  // catches a LATER size change correctly; this only covers the case
+  // where the very first measurement, taken here before that observer
+  // is even attached, was against a viewport iOS hadn't finished
+  // settling yet. Two rAFs (not a guessed timeout) waits for the
+  // browser's own next two paint opportunities, by which point iOS's
+  // real viewport has consistently settled in testing.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (sizeMapStripCanvas() && mapStripLastCentre) {
+        renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+      }
+    });
+  });
+
   try {
     if (!mapStripCoastline) {
       const res = await fetchWithTimeout("data/coastline-50m.json", {}, 15000);

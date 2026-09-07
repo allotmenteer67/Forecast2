@@ -930,8 +930,15 @@ header p {
   padding: 0;
   border-radius: 50%;
   border: 0;
-  background: rgba(76, 106, 88, 0.15);
-  color: var(--accent-muted);
+  /* Was a pale rgba(76,106,88,0.15) wash with a muted icon colour —
+     easy to miss next to the plain text either side of it, especially
+     at 20px. A solid accent fill (the same colour every other button
+     in the app already uses) with a white icon on top reads as an
+     actual button rather than a faint decoration, at the same size.
+     Now shared by the map page's own Play button too (see map.html),
+     so this one change covers both. */
+  background: var(--accent);
+  color: white;
   touch-action: manipulation;
 }
 
@@ -2788,6 +2795,31 @@ footer {
   color: var(--accent-dark);
 }
 
+/* The strip's own version of the pill above — deliberately NOT
+   .map-scale itself (that one is full-width by design now, carrying a
+   longer per-layer readout the strip never has — see its own comment
+   just above). Sized to its content instead of spanning the card, and
+   hidden by default (see map-strip.js, which only shows it once the
+   shared Hour slider has moved away from "Now" — permanently visible
+   read as a bar sitting across the map rather than useful information,
+   most of the time showing nothing more than the current real time). */
+.map-strip-scale {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--accent-dark);
+  display: none;
+}
+
+.map-strip-scale.is-visible {
+  display: block;
+}
+
 /* Sits directly under the map, between it and the layer toggles — close
    enough to read as "this explains what's above" rather than a
    disconnected key floating elsewhere on the page. */
@@ -2860,21 +2892,6 @@ footer {
   white-space: nowrap;
   font-size: 11px;
   color: var(--accent-muted);
-}
-
-.map-hour-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.map-hour-play {
-  flex: 0 0 auto;
-  min-width: 60px;
-}
-
-.map-hour-row input[type="range"] {
-  flex: 1 1 auto;
 }
 
 .map-zoom-row {
