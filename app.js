@@ -4080,7 +4080,27 @@ function closeHourlySheet() {
   if (!sheet) return;
   sheetBackdrop.classList.remove("is-open");
   sheet.classList.remove("is-open");
-  window.setTimeout(() => { if (!sheet.classList.contains("is-open")) sheet.hidden = true; }, 280);
+  window.setTimeout(() => {
+    if (!sheet.classList.contains("is-open")) sheet.hidden = true;
+    // Best-effort attempt at the reported grey strip that appears over
+    // the status-bar area once any sheet has been opened, and stays
+    // until a real page navigation happens — never reproducible here
+    // (no physical device to test against), so this is a reasoned guess
+    // rather than a confirmed fix. .sheet is `position: fixed` with a
+    // `100dvh`-based max-height (see style.css); the working theory is
+    // that iOS commits to a particular dynamic-toolbar state while that
+    // fixed element is on screen and doesn't always cleanly release it
+    // on close, leaving the safe-area/status-bar region rendering stale
+    // — the same general class of bug already found and fixed once for
+    // the front page's own cold-launch sizing (see the matching
+    // requestAnimationFrame note in map-strip.js's initMapStrip). A
+    // no-op scroll is a standard, harmless nudge for convincing WebKit
+    // to fully recompute the viewport rather than trusting a stale one;
+    // only worth keeping if it's actually confirmed to help.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
+    });
+  }, 280);
 }
 
 function openHourlySheet(conditionName) {
@@ -4111,9 +4131,16 @@ function openHourlySheet(conditionName) {
     empty.textContent = state.hourly.status === "error"
       ? "Hourly forecast isn't available right now."
       : "Loading hourly forecast…";
+    // Same fix as tide/fishing's own sheets (see openTideSheet in
+    // tide-ui.js for the full reasoning) — this is a brief single line
+    // while state.hourly loads, far shorter than the chart about to
+    // replace it, and left alone would leave a bigger-than-usual gap
+    // above the sheet for however long that takes.
+    sheetBody.style.minHeight = "260px";
     sheetBody.appendChild(empty);
     sheetFootnote.textContent = "";
   } else {
+    sheetBody.style.minHeight = ""; // real chart content is about to exceed it anyway
     try {
       const count = Math.min(hourRange, state.hourly.times.length);
       const hourTimes = state.hourly.times.slice(0, count);

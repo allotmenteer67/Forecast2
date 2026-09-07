@@ -170,6 +170,13 @@ async function openFishingSheet() {
   const loading = document.createElement("p");
   loading.className = "sheet-empty";
   loading.textContent = "Loading fishing conditions…";
+  // Same reasoning as tide's own openTideSheet — a min-height on this
+  // brief loading state keeps the sheet's peek gap roughly consistent
+  // whether it's mid-fetch or finished, rather than the single-line
+  // loading text leaving a much bigger gap than the real content will.
+  // Fishing has two sequential fetches (tide fit, then the forecast),
+  // so this state genuinely runs longer than tide's own on average.
+  sheetBody.style.minHeight = "260px";
   sheetBody.appendChild(loading);
 
   let built, forecast;
@@ -188,8 +195,9 @@ async function openFishingSheet() {
     empty.className = "sheet-empty";
     empty.textContent = "Fishing conditions aren't available right now.";
     sheetBody.appendChild(empty);
-    return;
+    return; // min-height stays — this is just as short as the loading state was
   }
+  sheetBody.style.minHeight = ""; // real chart content is about to exceed it anyway
 
   const markType = fishingMarkType(location);
   const weatherTimesEpoch = forecast.weather.hourly.time.map(t => Date.parse(t));

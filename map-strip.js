@@ -460,6 +460,26 @@ async function renderMapStrip(centre, grid) {
     });
   }
 
+  // Small icon only, no label — see map.js's own tide-locations layer
+  // for the full version (name, tap-to-recentre). Deliberately just a
+  // dot here: several saved tide spots near each other would clutter a
+  // strip this size fast if each one also carried its own name, the
+  // way the full map can afford to.
+  if (typeof loadTideLocations === "function") {
+    const tideLocations = loadTideLocations();
+    ctx.fillStyle = p.river;
+    tideLocations.forEach(loc => {
+      const x = view.x(loc.lon), y = view.y(loc.lat);
+      if (x < 0 || x > view.w || y < 0 || y > view.h) return;
+      ctx.beginPath();
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+    });
+  }
+
   // Centre marker, same small dot map.html itself uses for Home.
   ctx.fillStyle = p.ink;
   ctx.beginPath();

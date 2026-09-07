@@ -2121,6 +2121,69 @@ registerMapLayer({
   }
 });
 
+// Screen-space hit areas for tide markers, same pattern as
+// mapSavedPlaceHitboxes just above.
+let mapTideLocationHitboxes = [];
+
+// Plots every saved tide location (see tide.js's own TIDE_LOCATIONS_KEY
+// store, loaded before map.js on this page) as its own marker — reads
+// straight from localStorage on every draw rather than caching a
+// resolved copy like refreshSavedPlacesForMap does for weather places:
+// a tide location already carries its own lat/lon directly (no
+// geocoding lookup needed to plot it), so there's no async work here
+// worth caching against.
+//
+// A tap only recentres the crosshair here, exactly like a saved weather
+// place's own marker does (see goTo() below) — it does NOT touch
+// "Forecast for here" or start collecting weather at that spot. Turning
+// a tide location into a weather one too stays a separate, explicit
+// step through the ordinary crosshair+"Forecast for here" flow, same as
+// it would starting from anywhere else on the map — nothing here
+// defaults to it.
+registerMapLayer({
+  id: "tide-locations",
+  draw(ctx, view) {
+    mapTideLocationHitboxes = [];
+    if (typeof loadTideLocations !== "function") return; // tide.js not on this page
+    const locations = loadTideLocations();
+    if (!locations.length) return;
+    const p = mapPalette();
+    ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+    locations.forEach(loc => {
+      const x = view.x(loc.lon), y = view.y(loc.lat);
+      if (x < -20 || x > view.w + 20 || y < -20 || y > view.h + 20) return;
+
+      // A small circle with a wave inside, in the same "water" colour
+      // the map already uses for rivers/coastline — reads as "tide" at
+      // a glance rather than competing with the downward-triangle
+      // weather-place markers above, since a tide spot and a weather
+      // place are different things that can legitimately sit at the
+      // same coordinates without looking like the same marker twice.
+      ctx.fillStyle = p.river;
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x - 4.5, y + 0.5);
+      ctx.bezierCurveTo(x - 2.5, y - 2.5, x - 1.5, y + 2.5, x + 0.5, y - 0.5);
+      ctx.bezierCurveTo(x + 2.5, y - 3, x + 3.5, y + 1, x + 4.5, y - 0.5);
+      ctx.stroke();
+
+      ctx.fillStyle = p.ink;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = p.land;
+      ctx.strokeText(loc.label, x, y - 14);
+      ctx.fillText(loc.label, x, y - 14);
+      ctx.textAlign = "left";
+
+      mapTideLocationHitboxes.push({ x, y, radius: 20, location: loc });
+    });
+  }
+});
+
 // ---------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------
@@ -2567,6 +2630,14 @@ if (mapCanvas) {
       const hitMarker = mapSavedPlaceHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
       if (hitMarker) {
         goTo(hitMarker.place, { remember: true });
+        return;
+      }
+      // Same recentre-only behaviour as a weather-place marker above —
+      // see the tide-locations layer's own comment for why this
+      // deliberately doesn't also adopt the location as a weather spot.
+      const hitTide = mapTideLocationHitboxes.find(m => Math.hypot(m.x - tapX, m.y - tapY) <= m.radius);
+      if (hitTide) {
+        goTo({ lat: hitTide.location.lat, lon: hitTide.location.lon }, { remember: true });
         return;
       }
     }

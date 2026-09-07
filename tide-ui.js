@@ -336,6 +336,19 @@ async function openTideSheet() {
   const loading = document.createElement("p");
   loading.className = "sheet-empty";
   loading.textContent = "Loading tide data…";
+  // The sheet's own height is content-driven (see .sheet's max-height
+  // note in style.css — short content leaves a bigger gap above it, on
+  // purpose, so a genuinely short sheet doesn't always eat a fixed
+  // chunk of screen). That's the right call for real content, but this
+  // loading state is a single line — for however long the fetch below
+  // takes, the sheet is far shorter than it's about to become, leaving
+  // a much bigger gap than usual and, behind the backdrop's own partial
+  // opacity, enough of the page dimly visible through it to look like
+  // it's still reachable (reported as the Date slider "showing through
+  // underneath"). A min-height roughly matching the real chart's usual
+  // size keeps the gap consistent whether this is mid-load or finished,
+  // rather than ballooning for however long the fetch happens to take.
+  sheetBody.style.minHeight = "260px";
   sheetBody.appendChild(loading);
 
   let built;
@@ -351,8 +364,9 @@ async function openTideSheet() {
     empty.className = "sheet-empty";
     empty.textContent = "Tide data isn't available right now.";
     sheetBody.appendChild(empty);
-    return;
+    return; // min-height stays — this is just as short as the loading state was
   }
+  sheetBody.style.minHeight = ""; // real chart content is about to exceed it anyway
 
   const fudge = loadTideFudge(location.station.id);
   const nowHours = (tideReferenceNow() - Date.parse(built.epochIso)) / 3600000;
