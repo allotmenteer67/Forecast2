@@ -830,6 +830,18 @@ header p {
   height: 28px;
 }
 
+/* Same fixed sizing as .headline-moon above, same reasoning — the sky
+   icon (see sheetCloudIcon in app.js, appended here via the headline
+   cell's own "cloud" branch) is a real SVG with its own internal
+   viewBox, not text, so this is what actually keeps the cell's height
+   stable as it swaps against a plain number or the moon on other
+   cells/hours. */
+.headline-cloud-icon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
 .wind-arrow {
   display: inline-flex;
   align-items: center;

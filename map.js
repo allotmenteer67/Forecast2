@@ -223,6 +223,23 @@ function tempColor(value) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+// A single translucent grey wash rather than three competing colour
+// fields — this app already tried and rejected stacking more than one
+// colour wash at once (see the isobars comment further down: a second
+// colour field on top of Rain/Temperature read as "muddy", which is
+// exactly why Pressure moved to contour lines instead of its own wash).
+// Three cloud-band washes layered on each other would hit the same
+// problem worse. The three bands still feed this — see
+// effectiveCloudCover in app.js, shared with the frost-risk check and
+// the headline sky icon — just combined into one shade before it's
+// painted, rather than painted three times.
+const MAP_CLOUD_RGB = [90, 96, 104];
+function cloudColor(effectivePct) {
+  const v = Math.max(0, Math.min(100, effectivePct));
+  const alpha = (v / 100) * 0.55; // capped below full opacity so whatever's underneath (rain, land, sea) stays legible even at 100% cover
+  return `rgba(${MAP_CLOUD_RGB[0]}, ${MAP_CLOUD_RGB[1]}, ${MAP_CLOUD_RGB[2]}, ${alpha.toFixed(2)})`;
+}
+
 
 // Highest index whose threshold the value clears — used by temperature
 // and pressure, which (unlike rain) always have a value worth showing;
@@ -246,8 +263,8 @@ function bandIndexFor(value, thresholds) {
 // what this is for.
 // ---------------------------------------------------------------------
 const MAP_LAYER_TOGGLES_KEY = "forecast-compare:map:layers";
-const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature"];
-const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false };
+const MAP_LAYER_IDS = ["rain", "wind", "pressure", "temperature", "cloud"];
+const MAP_LAYER_DEFAULTS = { rain: true, wind: false, pressure: false, temperature: false, cloud: false };
 
 function loadMapLayerToggles() {
   try {
@@ -572,6 +589,20 @@ function stubWindAt(lat, lon, t) {
   return { speed, dir };
 }
 
+// Rides the same synthetic "front" as stubWindAt/stubPressureAt above —
+// heavier low cloud right where that front sits, thinning out with
+// distance from it; mid follows loosely; high stays a fairly flat haze
+// regardless of the front, same as real high cirrus tends to drift
+// fairly independently of a single surface system.
+function stubCloudAt(lat, lon, t) {
+  const u = (lon + 4.0) * 1.4;
+  const front = -1.2 + t * 0.085;
+  const low = Math.min(100, Math.max(0, 20 + Math.exp(-((u - front) ** 2) / 0.4) * 70));
+  const mid = Math.min(100, Math.max(0, 15 + Math.exp(-((u - front) ** 2) / 0.6) * 50));
+  const high = Math.min(100, Math.max(0, 30 + Math.sin(u * 0.7 + t * 0.05) * 20));
+  return { low, mid, high };
+}
+
 // Shared by the stub and the live fetch below, so the two can never
 // silently drift into different grid shapes — sampleGrid() has to agree
 // with whichever one actually filled `values`.
@@ -597,12 +628,12 @@ function buildStubGrid(centre, radiusKm) {
   const startOfHour = new Date();
   startOfHour.setMinutes(0, 0, 0);
   const times = [];
-  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [];
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [], cloudLow = [], cloudMid = [], cloudHigh = [];
   for (let t = 0; t < hours; t++) {
     times.push(new Date(startOfHour.getTime() + t * 3600000).toISOString());
-    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [];
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [], cloudLowFrame = [], cloudMidFrame = [], cloudHighFrame = [];
     for (let r = 0; r < rows; r++) {
-      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [];
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [], cloudLowRow = [], cloudMidRow = [], cloudHighRow = [];
       for (let c = 0; c < cols; c++) {
         const lat = lat0 + r * dLat, lon = lon0 + c * dLon;
         rainRow.push(stubValueAt(lat, lon, t));
@@ -611,14 +642,20 @@ function buildStubGrid(centre, radiusKm) {
         const wind = stubWindAt(lat, lon, t);
         speedRow.push(wind.speed);
         dirRow.push(wind.dir);
+        const cloud = stubCloudAt(lat, lon, t);
+        cloudLowRow.push(cloud.low);
+        cloudMidRow.push(cloud.mid);
+        cloudHighRow.push(cloud.high);
       }
       rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
       speedFrame.push(speedRow); dirFrame.push(dirRow);
+      cloudLowFrame.push(cloudLowRow); cloudMidFrame.push(cloudMidRow); cloudHighFrame.push(cloudHighRow);
     }
     rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
     windSpeed.push(speedFrame); windDir.push(dirFrame);
+    cloudLow.push(cloudLowFrame); cloudMid.push(cloudMidFrame); cloudHigh.push(cloudHighFrame);
   }
-  return { lat0, lon0, dLat, dLon, rows, cols, hours, times, rain, temp, pressure, windSpeed, windDir, stub: true };
+  return { lat0, lon0, dLat, dLon, rows, cols, hours, times, rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh, stub: true };
 }
 
 const MAP_FORECAST_HOURS = 48;
@@ -665,7 +702,10 @@ async function fetchWeatherGrid(centre, radiusKm) {
   const params = new URLSearchParams({
     latitude: lats.join(","),
     longitude: lons.join(","),
-    hourly: "precipitation,temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m",
+    // cloud_cover_low/mid/high ride along here too now — one more
+    // request field, same one-request-per-point shape as before (see
+    // this function's own cost note above the definition).
+    hourly: "precipitation,temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m,cloud_cover_low,cloud_cover_mid,cloud_cover_high",
     wind_speed_unit: "mph",
     forecast_days: String(MAP_FORECAST_DAYS),
     timezone: "auto"
@@ -695,11 +735,11 @@ async function fetchWeatherGrid(centre, radiusKm) {
   );
   const startIdx = nowIndex >= 0 ? nowIndex : 0;
 
-  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [];
+  const rain = [], temp = [], pressure = [], windSpeed = [], windDir = [], cloudLow = [], cloudMid = [], cloudHigh = [];
   for (let h = 0; h < MAP_FORECAST_HOURS; h++) {
-    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [];
+    const rainFrame = [], tempFrame = [], pressureFrame = [], speedFrame = [], dirFrame = [], cloudLowFrame = [], cloudMidFrame = [], cloudHighFrame = [];
     for (let r = 0; r < rows; r++) {
-      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [];
+      const rainRow = [], tempRow = [], pressureRow = [], speedRow = [], dirRow = [], cloudLowRow = [], cloudMidRow = [], cloudHighRow = [];
       for (let c = 0; c < cols; c++) {
         const point = points[r * cols + c];
         const i = startIdx + h;
@@ -709,18 +749,23 @@ async function fetchWeatherGrid(centre, radiusKm) {
         pressureRow.push(point.hourly.pressure_msl[i] ?? null);
         speedRow.push(point.hourly.wind_speed_10m[i] ?? null);
         dirRow.push(point.hourly.wind_direction_10m[i] ?? null);
+        cloudLowRow.push(point.hourly.cloud_cover_low[i] ?? null);
+        cloudMidRow.push(point.hourly.cloud_cover_mid[i] ?? null);
+        cloudHighRow.push(point.hourly.cloud_cover_high[i] ?? null);
       }
       rainFrame.push(rainRow); tempFrame.push(tempRow); pressureFrame.push(pressureRow);
       speedFrame.push(speedRow); dirFrame.push(dirRow);
+      cloudLowFrame.push(cloudLowRow); cloudMidFrame.push(cloudMidRow); cloudHighFrame.push(cloudHighRow);
     }
     rain.push(rainFrame); temp.push(tempFrame); pressure.push(pressureFrame);
     windSpeed.push(speedFrame); windDir.push(dirFrame);
+    cloudLow.push(cloudLowFrame); cloudMid.push(cloudMidFrame); cloudHigh.push(cloudHighFrame);
   }
 
   return {
     lat0, lon0, dLat, dLon, rows, cols, hours: MAP_FORECAST_HOURS,
     times: points[0].hourly.time.slice(startIdx, startIdx + MAP_FORECAST_HOURS),
-    rain, temp, pressure, windSpeed, windDir, stub: false
+    rain, temp, pressure, windSpeed, windDir, cloudLow, cloudMid, cloudHigh, stub: false
   };
 }
 
@@ -1282,6 +1327,32 @@ registerMapLayer({
   }
 });
 
+registerMapLayer({
+  id: "cloud",
+  draw(ctx, view) {
+    if (!mapGrid || !mapLayerVisible("cloud")) return;
+    // Same drag exemption as Temperature above, same reasoning — this
+    // samples three grid fields per cell instead of one, so it's if
+    // anything more worth skipping mid-drag, not less.
+    if (mapIsPanning) return;
+    const hour = mapHourValue();
+    const cell = 6;
+    for (let px = 0; px < view.w; px += cell) {
+      for (let py = 0; py < view.h; py += cell) {
+        const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
+        const low = sampleGrid(mapGrid, "cloudLow", hour, lat, lon);
+        const mid = sampleGrid(mapGrid, "cloudMid", hour, lat, lon);
+        const high = sampleGrid(mapGrid, "cloudHigh", hour, lat, lon);
+        if (low === null || low === undefined) continue;
+        const value = effectiveCloudCover(low, mid, high);
+        if (value < 8) continue; // near-clear cells stay uncoloured, same "no colour means nothing to show" rule Rain follows
+        ctx.fillStyle = cloudColor(value);
+        ctx.fillRect(px, py, cell, cell);
+      }
+    }
+  }
+});
+
 // ---------------------------------------------------------------------
 // Isobars — marching squares over the pressure grid, at the standard
 // synoptic-chart spacing of 4 hPa. Chosen over a colour wash (the
@@ -1659,6 +1730,35 @@ function renderMapLegends() {
     [MAP_TEMP_MIN_C, 0, 10, 20, 30, MAP_TEMP_MAX_C].forEach(t => {
       const tick = document.createElement("span");
       tick.textContent = `${t}°`;
+      ticks.appendChild(tick);
+    });
+    row.appendChild(ticks);
+    container.appendChild(row);
+  }
+
+  // Same gradient-bar shape as Temperature above, built from cloudColor
+  // itself so this can't drift from what the layer actually paints. The
+  // caption spells out the weighting rather than leaving it implicit —
+  // this bar necessarily shows one blended shade, not three, so it's
+  // worth being upfront that low cloud counts for more than high.
+  if (mapLayerVisible("cloud")) {
+    const row = document.createElement("div");
+    row.className = "map-legend-row";
+    const caption = document.createElement("span");
+    caption.className = "map-legend-caption";
+    caption.textContent = "Cloud, % (low cloud weighted heaviest, high lightest)";
+    row.appendChild(caption);
+
+    const bar = document.createElement("div");
+    bar.className = "map-legend-gradient";
+    bar.style.background = `linear-gradient(to right, ${cloudColor(0)}, ${cloudColor(100)})`;
+    row.appendChild(bar);
+
+    const ticks = document.createElement("div");
+    ticks.className = "map-legend-ticks";
+    [0, 25, 50, 75, 100].forEach(t => {
+      const tick = document.createElement("span");
+      tick.textContent = `${t}%`;
       ticks.appendChild(tick);
     });
     row.appendChild(ticks);
@@ -2239,6 +2339,14 @@ function buildMapReadout(hour) {
   if (mapLayerVisible("pressure")) {
     const pressure = sampleGrid(mapGrid, "pressure", hour, mapCentre.lat, mapCentre.lon);
     if (pressure !== null && pressure !== undefined) parts.push(`${Math.round(pressure)}hPa`);
+  }
+  if (mapLayerVisible("cloud")) {
+    const low = sampleGrid(mapGrid, "cloudLow", hour, mapCentre.lat, mapCentre.lon);
+    const mid = sampleGrid(mapGrid, "cloudMid", hour, mapCentre.lat, mapCentre.lon);
+    const high = sampleGrid(mapGrid, "cloudHigh", hour, mapCentre.lat, mapCentre.lon);
+    if (low !== null && low !== undefined) {
+      parts.push(`${Math.round(effectiveCloudCover(low, mid, high))}% cloud`);
+    }
   }
 
   return parts.join(" · ");

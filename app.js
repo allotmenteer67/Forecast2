@@ -23,7 +23,17 @@ const CONFIG = {
   ],
   conditions: {
     rain: { name: "Rain", unit: "mm" },
-    cloud: { name: "Cloud", unit: "%" },
+    // Split into three real, independently-tracked conditions rather
+    // than one blended "Cloud" — see REAL_DATA_CONDITIONS below for the
+    // full reasoning. "cloud" itself is deliberately NOT an entry here
+    // any more: it lives on as a headline-only virtual condition (same
+    // pattern as tide/fishing below), combining these three at render
+    // time rather than being tracked as a fourth real condition in its
+    // own right — see cloudHeadlineStillCollecting and the headline
+    // cell's own "cloud" branch in renderHeadline.
+    cloudLow: { name: "Cloud (low)", unit: "%" },
+    cloudMid: { name: "Cloud (mid)", unit: "%" },
+    cloudHigh: { name: "Cloud (high)", unit: "%" },
     wind: { name: "Wind", unit: "mph" },
     temperature: { name: "Temperature", unit: "°C" },
     pressure: { name: "Pressure", unit: "hPa" },
@@ -159,8 +169,8 @@ function importAppData(jsonText) {
 // toggle — someone can genuinely want mm for Rain, °C for Temperature, and
 // mph for Wind all at once, which a single switch could never express.
 // CONDITION_UNIT_TOGGLES lists which conditions actually have a choice
-// (Cloud/Sunshine/UV are unitless/universal either way, so they're left
-// out rather than offering a toggle that does nothing).
+// (Cloud's three bands/Sunshine/UV are unitless/universal either way, so
+// they're left out rather than offering a toggle that does nothing).
 const CONDITION_UNITS_KEY = "forecast-compare:conditionUnits";
 const CONDITION_UNIT_TOGGLES = ["rain", "temperature", "wind", "pressure"];
 const DEFAULT_CONDITION_UNITS = {
@@ -173,7 +183,9 @@ const DEFAULT_CONDITION_UNITS = {
 };
 const CONDITION_UNIT_LABELS = {
   rain: { metric: "mm", imperial: "in" },
-  cloud: { metric: "%", imperial: "%" },
+  cloudLow: { metric: "%", imperial: "%" },
+  cloudMid: { metric: "%", imperial: "%" },
+  cloudHigh: { metric: "%", imperial: "%" },
   wind: { metric: "km/h", imperial: "mph" },
   temperature: { metric: "°C", imperial: "°F" },
   pressure: { metric: "hPa", imperial: "inHg" },
@@ -206,8 +218,8 @@ function saveConditionUnit(conditionName, system) {
 }
 
 // The unit system ("metric" | "imperial") in effect for one condition —
-// conditions without a toggle (Cloud, Sunshine, UV) always read as metric,
-// which is harmless since their labels are identical either way.
+// conditions without a toggle (Cloud's bands, Sunshine, UV) always read
+// as metric, which is harmless since their labels are identical either way.
 function conditionUnit(conditionName) {
   // Soil Temp and Dew Point are both °C-scale like Temperature and don't
   // get their own choice in Settings — asking twice for the same
@@ -271,7 +283,16 @@ const MAX_FUTURE = 7; // days into the future the slider (and Met Office's live 
 // rule Open-Meteo's own archive-side sunshine_duration field itself
 // uses. UV is the one genuine gap left: no real source here provides it
 // at all, in any form, so it still falls back to the demo formula.
-const REAL_DATA_CONDITIONS = new Set(["rain", "cloud", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "sunshine"]);
+//
+// Cloud is three separate real conditions (cloudLow/cloudMid/cloudHigh)
+// rather than one blended "cloud" — each gets its own FFV correction,
+// eligibility window, and Compare row, same as every other real
+// condition here. The single "cloud" name lives on ONLY as a
+// headline-only virtual condition that combines these three at render
+// time (see the headline cell's own "cloud" branch and
+// cloudHeadlineStillCollecting) — it deliberately has no entry in this
+// Set, since it has no real data of its own to be eligible for.
+const REAL_DATA_CONDITIONS = new Set(["rain", "cloudLow", "cloudMid", "cloudHigh", "wind", "temperature", "pressure", "soilTemperature", "dewPoint", "sunshine"]);
 
 // Every source with genuine data behind it. Adding another real source
 // later is just another entry here — everything downstream (fetching,
@@ -391,7 +412,7 @@ function loadSelectedForecasters() {
 function emptyLeadDayData() {
   const byLeadDay = {};
   for (let d = 1; d <= 7; d++) {
-    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloud: [], pressure: [], soilTemp: [], dewPoint: [], sunshine: [] };
+    byLeadDay[d] = { tempMax: [], tempMin: [], tempAvg: [], precip: [], wind: [], windGust: [], windDirection: [], cloudLow: [], cloudMid: [], cloudHigh: [], pressure: [], soilTemp: [], dewPoint: [], sunshine: [] };
   }
   return byLeadDay;
 }
@@ -479,7 +500,9 @@ const state = {
     windgusts_10m_max: [],
     sunshine_duration: [],
     uv_index_max: [],
-    cloud_mean: [],
+    cloudLow_mean: [],
+    cloudMid_mean: [],
+    cloudHigh_mean: [],
     pressure_mean: [],
     soilTemp_mean: [],
     dewPoint_mean: [],
@@ -515,7 +538,9 @@ const state = {
     soilTemperature: [],
     dewPoint: [],
     uvIndex: [],
-    cloudCover: [],
+    cloudCoverLow: [],
+    cloudCoverMid: [],
+    cloudCoverHigh: [],
     sunriseByDate: {}, // "YYYY-MM-DD" -> ISO datetime
     sunsetByDate: {},
     uvMaxByDate: {} // "YYYY-MM-DD" -> that day's peak UV index
@@ -595,8 +620,18 @@ function demoValue(day, source, conditionName) {
     case "rain":
       value = Math.max(0, 1.5 + day * 0.55 + sourceOffset + leadTrend);
       break;
-    case "cloud":
-      value = Math.min(100, Math.max(0, 48 + day * 3.2 + sourceOffset * 5));
+    case "cloudLow":
+      value = Math.min(100, Math.max(0, 38 + day * 3.0 + sourceOffset * 5));
+      break;
+    case "cloudMid":
+      value = Math.min(100, Math.max(0, 42 + day * 3.0 + sourceOffset * 5));
+      break;
+    case "cloudHigh":
+      // Slightly higher baseline and steeper lead-time trend than
+      // low/mid — arbitrary, same as the rest of this demo formula
+      // (real sources don't use this at all), just distinct enough
+      // that a demo forecaster's three bands don't render identically.
+      value = Math.min(100, Math.max(0, 55 + day * 3.5 + sourceOffset * 5));
       break;
     case "wind":
       value = Math.max(0, 7 + day * 0.75 + sourceOffset);
@@ -1197,7 +1232,7 @@ async function fetchActualWeather(lat, lon) {
         "sunshine_duration",
         "uv_index_max"
       ].join(","),
-      hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
       past_days: MAX_ROLLBACK,
       forecast_days: 1,
       wind_speed_unit: "mph",
@@ -1220,9 +1255,19 @@ async function fetchActualWeather(lat, lon) {
     state.actual.uv_index_max = data.daily.uv_index_max;
     state.actual.pressure_hourly_times = data.hourly.time;
     state.actual.pressure_hourly_values = data.hourly.pressure_msl;
-    state.actual.cloud_mean = averageCloudByDay(
+    state.actual.cloudLow_mean = averageCloudByDay(
       data.hourly.time,
-      data.hourly.cloudcover,
+      data.hourly.cloudcover_low,
+      dayCount
+    );
+    state.actual.cloudMid_mean = averageCloudByDay(
+      data.hourly.time,
+      data.hourly.cloudcover_mid,
+      dayCount
+    );
+    state.actual.cloudHigh_mean = averageCloudByDay(
+      data.hourly.time,
+      data.hourly.cloudcover_high,
       dayCount
     );
     state.actual.pressure_mean = aggregateHourlyByDay(
@@ -1273,7 +1318,9 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         `wind_speed_10m_previous_day${d}`,
         `wind_direction_10m_previous_day${d}`,
         `wind_gusts_10m_previous_day${d}`,
-        `cloud_cover_previous_day${d}`,
+        `cloud_cover_low_previous_day${d}`,
+        `cloud_cover_mid_previous_day${d}`,
+        `cloud_cover_high_previous_day${d}`,
         `pressure_msl_previous_day${d}`,
         `soil_temperature_0cm_previous_day${d}`,
         `dewpoint_2m_previous_day${d}`,
@@ -1312,7 +1359,9 @@ async function fetchRealSourceLive(sourceId, model, lat, lon) {
         wind: aggregateHourlyByDay(hourlyTimes, windSpeedHourly, dayCount, "max"),
         windGust: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_gusts_10m_previous_day${d}`], dayCount, "max"),
         windDirection: directionAtPeakHour(hourlyTimes, windSpeedHourly, data.hourly[`wind_direction_10m_previous_day${d}`], dayCount),
-        cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
+        cloudLow: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_low_previous_day${d}`], dayCount, "mean"),
+        cloudMid: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_mid_previous_day${d}`], dayCount, "mean"),
+        cloudHigh: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_high_previous_day${d}`], dayCount, "mean"),
         pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
         soilTemp: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
         dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
@@ -1443,7 +1492,7 @@ async function fetchHourlyForecast(lat, lon) {
       const params = new URLSearchParams({
         latitude: lat,
         longitude: lon,
-        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (id === "metoffice" ? ",uv_index,cloud_cover" : ""),
+        hourly: "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,soil_temperature_0cm,dewpoint_2m" + (id === "metoffice" ? ",uv_index,cloud_cover_low,cloud_cover_mid,cloud_cover_high" : ""),
         models: model,
         wind_speed_unit: "mph",
         forecast_days: 3,
@@ -1471,7 +1520,9 @@ async function fetchHourlyForecast(lat, lon) {
     const sharedTimes = metofficeData.hourly.time.slice(from);
 
     state.hourly.uvIndex = metofficeData.hourly.uv_index.slice(from);
-    state.hourly.cloudCover = metofficeData.hourly.cloud_cover.slice(from);
+    state.hourly.cloudCoverLow = metofficeData.hourly.cloud_cover_low.slice(from);
+    state.hourly.cloudCoverMid = metofficeData.hourly.cloud_cover_mid.slice(from);
+    state.hourly.cloudCoverHigh = metofficeData.hourly.cloud_cover_high.slice(from);
     state.hourly.sunriseByDate = {};
     state.hourly.sunsetByDate = {};
     state.hourly.uvMaxByDate = {};
@@ -1904,8 +1955,12 @@ function actualValueFor(conditionName, rollbackDays) {
   switch (conditionName) {
     case "rain":
       return state.actual.precipitation_sum[idx];
-    case "cloud":
-      return state.actual.cloud_mean[idx];
+    case "cloudLow":
+      return state.actual.cloudLow_mean[idx];
+    case "cloudMid":
+      return state.actual.cloudMid_mean[idx];
+    case "cloudHigh":
+      return state.actual.cloudHigh_mean[idx];
     case "wind":
       return state.actual.windspeed_10m_max[idx];
     case "temperature": {
@@ -1954,7 +2009,9 @@ function realSourceValueFor(sourceId, conditionName, day, rollbackDays) {
   switch (conditionName) {
     case "rain": return byDay.precip[idx] ?? null;
     case "wind": return byDay.wind[idx] ?? null;
-    case "cloud": return byDay.cloud[idx] ?? null;
+    case "cloudLow": return byDay.cloudLow[idx] ?? null;
+    case "cloudMid": return byDay.cloudMid[idx] ?? null;
+    case "cloudHigh": return byDay.cloudHigh[idx] ?? null;
     case "temperature": return byDay.tempAvg[idx] ?? null;
     case "pressure": return byDay.pressure[idx] ?? null;
     case "soilTemperature": return byDay.soilTemp[idx] ?? null;
@@ -1984,12 +2041,13 @@ function isRealSource(source, conditionName) {
 }
 
 // The single point where a cell's forecast value is decided: real data
-// for Rain/Cloud/Wind/Temperature when it's loaded for this source, the
-// demo formula for everything else (including a real source's own
-// Sunshine/UV, and as a fallback while real data is loading or if it
-// errors). Day > 7 always returns null for a real source rather than
-// falling back to demo, so threeDayMean's day-7 edge case never mixes
-// real and demo values in the same average — see threeDayMean below.
+// for Rain/Cloud (each band)/Wind/Temperature when it's loaded for this
+// source, the demo formula for everything else (including a real
+// source's own Sunshine/UV, and as a fallback while real data is
+// loading or if it errors). Day > 7 always returns null for a real
+// source rather than falling back to demo, so threeDayMean's day-7 edge
+// case never mixes real and demo values in the same average — see
+// threeDayMean below.
 function forecastValueFor(day, source, conditionName, rollbackDays) {
   if (isRealSource(source, conditionName)) {
     if (day > 7) return null;
@@ -2023,7 +2081,8 @@ function renderRealSourceStatus() {
     // Sunshine's own addition (it named only Rain/Cloud/Wind/Temperature,
     // missing Pressure/Soil Temp/Dew Point despite those already being
     // real). Reading the actual Set means this can't silently go out of
-    // date again the next time a condition's real/demo status changes.
+    // date again the next time a condition's real/demo status changes —
+    // including Cloud's own later split into three separate bands.
     const realConditionNames = [...REAL_DATA_CONDITIONS].map(c => CONFIG.conditions[c].name);
     realSourceStatus.textContent =
       `Real data for ${realConditionNames.join(", ")} from: ${names.join(", ")}. UV remains demo (not available from these sources).`;
@@ -2116,12 +2175,13 @@ function ensureAccuracyEmaSeeded(entry) {
   }
 }
 
-// Rain/Cloud/Wind are ratio quantities ("20% too high" is meaningful) so
-// a multiplicative correction (mean × FFV) is right for them. Temperature
-// in °C has no true zero — 20°C isn't "twice as hot" as 10°C — so a
-// ratio correction can behave oddly near/below freezing. It gets an
-// additive correction instead (mean + FFV), tracked as a separate running
-// average alongside the ratio one, rather than reinterpreting.
+// Rain/Cloud (each band)/Wind are ratio quantities ("20% too high" is
+// meaningful) so a multiplicative correction (mean × FFV) is right for
+// them. Temperature in °C has no true zero — 20°C isn't "twice as hot"
+// as 10°C — so a ratio correction can behave oddly near/below freezing.
+// It gets an additive correction instead (mean + FFV), tracked as a
+// separate running average alongside the ratio one, rather than
+// reinterpreting.
 function isRatioCondition(conditionName) {
   // Temperature, Pressure, Soil Temp, and Dew Point all sit on scales
   // without a practically-meaningful zero for this purpose — same
@@ -2546,7 +2606,7 @@ function ffvSampleTotal(conditionName) {
 // Approximate 0-100 closeness scale per condition — the error (in real
 // units) at which the score bottoms out at 0. Deliberately simple, not a
 // formal statistic; the average-error-in-units figure is the primary one.
-const ACCURACY_SCALE = { rain: 5, cloud: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6 };
+const ACCURACY_SCALE = { rain: 5, cloudLow: 60, cloudMid: 60, cloudHigh: 60, wind: 15, temperature: 8, pressure: 8, sunshine: 4, uv: 3, soilTemperature: 4, dewPoint: 6 };
 
 function accuracyPercent(avgError, conditionName) {
   if (avgError === null) return null;
@@ -2621,7 +2681,7 @@ function median(values) {
 // lot to a gardener, barely at all to someone else, and there's no
 // reason to force either way.
 const HEADLINE_CORE_CONDITIONS = ["rain", "temperature", "wind"];
-const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "soilTemperature", "dewPoint", "tide", "fishing"];
+const HEADLINE_OPTIONAL_CONDITIONS = ["pressure", "sunshine", "cloud", "soilTemperature", "dewPoint", "tide", "fishing"];
 const HEADLINE_TOGGLES_KEY = "forecast-compare:headlineToggles";
 const DEFAULT_HEADLINE_TOGGLES = {
   pressure: true,
@@ -3077,6 +3137,18 @@ const FROST_TEMP_THRESHOLD = 2; // °C — ground frost can form even when air t
 const FROST_CLOUD_THRESHOLD = 40; // % — below this counts as "clear enough"
 const FROST_WIND_THRESHOLD = 8; // mph — below this counts as "light enough"
 
+// A single "how overcast does this actually look/feel" figure from the
+// three real cloud bands — used here, by the headline sky icon's day
+// icon, and by the map's Cloud layer, so the weighting only lives in one
+// place. Low cloud is what actually blocks outgoing radiation and greys
+// out the sky; high cirrus is thin enough that even a high percentage of
+// it barely registers — max() rather than a plain average, so a thick
+// low layer alone still reads as "properly overcast" even if mid/high
+// both happen to be clear.
+function effectiveCloudCover(low, mid, high) {
+  return Math.max(low ?? 0, (mid ?? 0) * 0.7, (high ?? 0) * 0.4);
+}
+
 function frostRiskTonight() {
   if (state.hourly.status !== "ready") return false;
   const count = displayWindowHourCount();
@@ -3093,10 +3165,13 @@ function frostRiskTonight() {
   });
   if (minIdx === -1 || minTemp > FROST_TEMP_THRESHOLD) return false;
 
-  const cloud = state.hourly.cloudCover?.[minIdx];
+  const low = state.hourly.cloudCoverLow?.[minIdx];
+  const mid = state.hourly.cloudCoverMid?.[minIdx];
+  const high = state.hourly.cloudCoverHigh?.[minIdx];
   const wind = state.hourly.windSpeed?.[minIdx];
-  if (cloud === null || cloud === undefined || wind === null || wind === undefined) return false;
+  if (low === null || low === undefined || wind === null || wind === undefined) return false;
 
+  const cloud = effectiveCloudCover(low, mid, high);
   return cloud < FROST_CLOUD_THRESHOLD && wind < FROST_WIND_THRESHOLD;
 }
 
@@ -3245,6 +3320,15 @@ function sunshineHeadlineStillCollecting() {
   return !selectedSources.some(source => isForecasterEligible(source, "sunshine"));
 }
 
+// Same reasoning as sunshineHeadlineStillCollecting, checked against the
+// low band specifically — all three bands started collecting together
+// (see collect-weather.js), so they clear their 14-day bar at the same
+// time regardless of which one is checked here.
+function cloudHeadlineStillCollecting() {
+  const selectedSources = CONFIG.forecasters.filter(source => state.selected.has(source.id));
+  return !selectedSources.some(source => isForecasterEligible(source, "cloudLow"));
+}
+
 // forecastValueFor() deliberately falls back to a real source's demo
 // formula while that source's own real data is still loading — a
 // sensible default for the Compare table, which wants something to show
@@ -3374,8 +3458,13 @@ function renderHeadline() {
 
     // Sunshine shows UV as a % while hourly is active during the day —
     // the label needs to reflect that, not Sunshine's usual "hrs" unit.
+    // Cloud is a plain "Cloud" label with no unit suffix — it's an icon,
+    // not a number, and has no CONFIG.conditions entry of its own to
+    // read a unit from (see the branch below).
     const showingUVPercent = conditionName === "sunshine" && showHourly && !night;
-    label.textContent = showingUVPercent
+    label.textContent = conditionName === "cloud"
+      ? "Cloud"
+      : showingUVPercent
       ? `${CONFIG.conditions[conditionName].name} %`
       : `${CONFIG.conditions[conditionName].name} ${unitLabel(conditionName)}`;
 
@@ -3415,6 +3504,49 @@ function renderHeadline() {
       } else {
         const value = headlineDisplayValueFor(conditionName);
         valueEl.textContent = formatValue(value, conditionName);
+      }
+    } else if (conditionName === "cloud") {
+      // A sky icon rather than a number — three bands don't reduce to
+      // one meaningful percentage the way every other headline figure
+      // does, and an icon is what was actually asked for. Night reuses
+      // the exact same real moon-phase SVG Sunshine's own hourly state
+      // already shows (moonPhaseSvg), rather than the sheet strip's
+      // simpler crescent (sheetCloudIcon's own night shape) — so the
+      // two icon-bearing headline cells match each other, even though
+      // the detail sheet underneath still uses the simpler crescent.
+      if (showHourly) {
+        if (night) {
+          valueEl.innerHTML = moonPhaseSvg(hourDate);
+          valueEl.classList.add("headline-moon");
+        } else {
+          const low = state.hourly.cloudCoverLow?.[state.hourIndex];
+          const mid = state.hourly.cloudCoverMid?.[state.hourIndex];
+          const high = state.hourly.cloudCoverHigh?.[state.hourIndex];
+          if (low === null || low === undefined) {
+            valueEl.textContent = "–";
+          } else {
+            valueEl.appendChild(sheetCloudIcon(low, mid ?? 0, high ?? 0, false));
+            valueEl.classList.add("headline-cloud-icon");
+          }
+        }
+      } else if (cloudHeadlineStillCollecting()) {
+        // Same reasoning as Sunshine's own "Collecting data" state
+        // above — all three bands started collecting from scratch
+        // together (see collect-weather.js), so they clear the 14-day
+        // eligibility bar at the same time regardless of which one is
+        // checked.
+        valueEl.textContent = "Collecting data";
+        valueEl.classList.add("headline-value-collecting");
+      } else {
+        const low = headlineDisplayValueFor("cloudLow");
+        const mid = headlineDisplayValueFor("cloudMid");
+        const high = headlineDisplayValueFor("cloudHigh");
+        if (low === null || low === undefined) {
+          valueEl.textContent = "–";
+        } else {
+          valueEl.appendChild(sheetCloudIcon(low, mid ?? 0, high ?? 0, false));
+          valueEl.classList.add("headline-cloud-icon");
+        }
       }
     } else if (showHourly) {
       const value = hourlyValueFor(conditionName);
@@ -3796,7 +3928,17 @@ function sheetRenderWind(hourTimes, speedsDisplay, gustsDisplay, dirs) {
   return { wrap, svg, pts, extraHeight: 16 };
 }
 
-function sheetCloudIcon(cloudPct, isNight) {
+// Takes the three real bands rather than one blended percentage — low
+// and mid are close enough in visual effect at this size to read as
+// "the same grey blob" (mid weighted down slightly, since it's higher
+// and thinner in practice), drawn exactly as the old single-value icon
+// was. High cloud (cirrus) is drawn separately: real high cloud doesn't
+// thicken or darken the sky the way low cloud does, it just hazes it —
+// folding it into the same blended number would lose exactly the
+// distinction splitting cloud cover into bands was for, so it gets its
+// own thin streaks layered on top, with opacity (not size or shape)
+// scaling with its own percentage.
+function sheetCloudIcon(low, mid, high, isNight) {
   const c = document.createElementNS(SHEET_SVG_NS, "svg");
   c.setAttribute("viewBox", "0 0 32 32");
   c.classList.add("sun-icon");
@@ -3806,7 +3948,9 @@ function sheetCloudIcon(cloudPct, isNight) {
     return c;
   }
 
-  if (cloudPct < 15) {
+  const blobPct = Math.max(low, mid * 0.8);
+
+  if (blobPct < 15) {
     c.appendChild(sheetSvgEl("circle", { cx: 16, cy: 16, r: 8, fill: "#e8a83c" }));
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -3814,25 +3958,36 @@ function sheetCloudIcon(cloudPct, isNight) {
       const x2 = 16 + Math.cos(a) * 14, y2 = 16 + Math.sin(a) * 14;
       c.appendChild(sheetSvgEl("line", { x1, y1, x2, y2, stroke: "#e8a83c", "stroke-width": 2, "stroke-linecap": "round" }));
     }
-    return c;
+  } else {
+    // Cloud shading darkens with cover; a peek of sun behind it if partial.
+    // Built from overlapping ellipses rather than a single fiddly path.
+    const shade = 0.35 + (blobPct / 100) * 0.55;
+    const grey = Math.round(230 - shade * 130);
+    if (blobPct < 60) {
+      c.appendChild(sheetSvgEl("circle", { cx: 12, cy: 13, r: 6, fill: "#e8a83c", opacity: 0.85 }));
+    }
+    const g = sheetSvgEl("g", {});
+    g.appendChild(sheetSvgEl("ellipse", { cx: 13, cy: 19, rx: 7, ry: 5.5, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+    g.appendChild(sheetSvgEl("ellipse", { cx: 19, cy: 17, rx: 6, ry: 5.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+    g.appendChild(sheetSvgEl("ellipse", { cx: 16, cy: 21.5, rx: 9, ry: 4.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
+    c.appendChild(g);
   }
 
-  // Cloud shading darkens with cover; a peek of sun behind it if partial.
-  // Built from overlapping ellipses rather than a single fiddly path.
-  const shade = 0.35 + (cloudPct / 100) * 0.55;
-  const grey = Math.round(230 - shade * 130);
-  if (cloudPct < 60) {
-    c.appendChild(sheetSvgEl("circle", { cx: 12, cy: 13, r: 6, fill: "#e8a83c", opacity: 0.85 }));
+  // High/cirrus streaks, independent of the low/mid blob above — only
+  // drawn once genuinely present, since a faint haze under 20% wouldn't
+  // read as anything other than visual noise at this size.
+  if (high >= 20) {
+    const streaks = sheetSvgEl("g", { opacity: Math.min(0.6, 0.15 + (high / 100) * 0.45) });
+    [[4, 6, 13, 5], [8, 9, 15, 4], [17, 5, 12, 3.5]].forEach(([x, y, w, h]) => {
+      streaks.appendChild(sheetSvgEl("ellipse", { cx: x + w / 2, cy: y, rx: w / 2, ry: h / 2, fill: "#e9edf2" }));
+    });
+    c.appendChild(streaks);
   }
-  const g = sheetSvgEl("g", {});
-  g.appendChild(sheetSvgEl("ellipse", { cx: 13, cy: 19, rx: 7, ry: 5.5, fill: `rgb(${grey},${grey+6},${grey+8})` }));
-  g.appendChild(sheetSvgEl("ellipse", { cx: 19, cy: 17, rx: 6, ry: 5.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
-  g.appendChild(sheetSvgEl("ellipse", { cx: 16, cy: 21.5, rx: 9, ry: 4.2, fill: `rgb(${grey},${grey+6},${grey+8})` }));
-  c.appendChild(g);
+
   return c;
 }
 
-function sheetRenderSunStrip(hourTimes, cloudCover) {
+function sheetRenderSunStrip(hourTimes, lowSeries, midSeries, highSeries) {
   const wrap = document.createElement("div");
   wrap.className = "graph-wrap";
   const strip = document.createElement("div");
@@ -3845,7 +4000,7 @@ function sheetRenderSunStrip(hourTimes, cloudCover) {
     const isNight = !isDaytime(date);
     const cell = document.createElement("div");
     cell.className = "sun-cell";
-    cell.appendChild(sheetCloudIcon(cloudCover[i] ?? 0, isNight));
+    cell.appendChild(sheetCloudIcon(lowSeries[i] ?? 0, midSeries[i] ?? 0, highSeries[i] ?? 0, isNight));
     const label = document.createElement("span");
     label.className = "sun-hour-label";
     label.textContent = sheetAxisTickLabel(iso);
@@ -3932,10 +4087,13 @@ function openHourlySheet(conditionName) {
   if (!sheet) return;
 
   const hourRange = Number(loadHourRange());
-  sheetTitle.textContent = CONFIG.conditions[conditionName].name;
+  // "cloud" is a headline-only virtual condition (see the headline
+  // cell's own "cloud" branch) with no CONFIG.conditions entry of its
+  // own — same reasoning as tide/fishing not having one.
+  sheetTitle.textContent = conditionName === "cloud" ? "Cloud" : CONFIG.conditions[conditionName].name;
   sheetRange.textContent = `Next ${hourRange}h`;
   sheetBody.innerHTML = "";
-  sheetReadout.hidden = conditionName === "sunshine";
+  sheetReadout.hidden = conditionName === "sunshine" || conditionName === "cloud";
   // readoutCycle is tide-specific (spring/neap phase) — every other
   // condition shares this same readout row, so it needs hiding here
   // defensively; tide-ui.js is the only place that ever un-hides it.
@@ -4015,7 +4173,23 @@ function openHourlySheet(conditionName) {
           }
         });
       } else if (conditionName === "sunshine") {
-        sheetBody.appendChild(sheetRenderSunStrip(hourTimes, state.hourly.cloudCover.slice(0, count)));
+        sheetBody.appendChild(sheetRenderSunStrip(
+          hourTimes,
+          state.hourly.cloudCoverLow.slice(0, count),
+          state.hourly.cloudCoverMid.slice(0, count),
+          state.hourly.cloudCoverHigh.slice(0, count)
+        ));
+      } else if (conditionName === "cloud") {
+        // Same strip Sunshine's own sheet already shows (it's the
+        // natural place for an hour-by-hour sky picture either way) —
+        // shown here too since this is now the condition it's actually
+        // about, reached by tapping the headline's own Cloud cell.
+        sheetBody.appendChild(sheetRenderSunStrip(
+          hourTimes,
+          state.hourly.cloudCoverLow.slice(0, count),
+          state.hourly.cloudCoverMid.slice(0, count),
+          state.hourly.cloudCoverHigh.slice(0, count)
+        ));
       } else if (conditionName === "pressure") {
         const raw = state.hourly.pressure.slice(0, count);
         const display = raw.map(v => convertForDisplay(v, "pressure"));
@@ -4056,8 +4230,8 @@ function openHourlySheet(conditionName) {
         });
       }
 
-      sheetFootnote.textContent = conditionName === "sunshine"
-        ? "Cloud cover shown hour by hour — a full sun means clear skies, darker cloud means heavier cover. Night hours show a moon instead."
+      sheetFootnote.textContent = (conditionName === "sunshine" || conditionName === "cloud")
+        ? "Low and mid cloud shown as shading, high cloud as faint streaks — a full sun means clear skies. Night hours show a moon instead."
         : conditionName === "rain"
         ? sheetFootnote.textContent // already set above with the running total
         : "";
@@ -4637,7 +4811,9 @@ const BACKFILL_DAYS = 365;
 const BACKFILL_FIELD_FOR_CONDITION = {
   rain: "precip",
   wind: "wind",
-  cloud: "cloud",
+  cloudLow: "cloudLow",
+  cloudMid: "cloudMid",
+  cloudHigh: "cloudHigh",
   temperature: "tempAvg",
   pressure: "pressure",
   soilTemperature: "soilTemp",
@@ -4675,7 +4851,9 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       `temperature_2m_previous_day${d}`,
       `precipitation_previous_day${d}`,
       `wind_speed_10m_previous_day${d}`,
-      `cloud_cover_previous_day${d}`,
+      `cloud_cover_low_previous_day${d}`,
+      `cloud_cover_mid_previous_day${d}`,
+      `cloud_cover_high_previous_day${d}`,
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
       `dewpoint_2m_previous_day${d}`,
@@ -4705,7 +4883,9 @@ async function fetchYearOfModelData(sourceId, model, start, end, dayCount) {
       tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
       precip: aggregateHourlyByDay(hourlyTime, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
       wind: aggregateHourlyByDay(hourlyTime, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
-      cloud: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
+      cloudLow: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_low_previous_day${d}`], dayCount, "mean"),
+      cloudMid: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_mid_previous_day${d}`], dayCount, "mean"),
+      cloudHigh: aggregateHourlyByDay(hourlyTime, data.hourly[`cloud_cover_high_previous_day${d}`], dayCount, "mean"),
       pressure: aggregateHourlyByDay(hourlyTime, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(hourlyTime, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(hourlyTime, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
@@ -4736,7 +4916,7 @@ async function backfillRealSourceHistory() {
       latitude: state.lat,
       longitude: state.lon,
       daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
-      hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+      hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
       start_date: isoDate(start),
       end_date: isoDate(end),
       wind_speed_unit: "mph",
@@ -4750,7 +4930,9 @@ async function backfillRealSourceHistory() {
     const yearActual = {
       precip: actualData.daily.precipitation_sum,
       wind: actualData.daily.windspeed_10m_max,
-      cloud: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover, dayCount, "mean"),
+      cloudLow: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover_low, dayCount, "mean"),
+      cloudMid: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover_mid, dayCount, "mean"),
+      cloudHigh: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.cloudcover_high, dayCount, "mean"),
       pressure: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.pressure_msl, dayCount, "mean"),
       soilTemp: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.soil_temperature_0cm, dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(actualData.hourly.time, actualData.hourly.dewpoint_2m, dayCount, "mean"),

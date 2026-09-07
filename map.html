@@ -134,12 +134,22 @@
 
     <!-- Independent toggles, not a single-layer picker — see the note by
          MAP_LAYER_DEFAULTS in map.js for why they can all be on together
-         (and what that costs visually when they are). -->
+         (and what that costs visually when they are). Cloud added
+         alongside the original four — a single translucent grey wash
+         (see map.js's own Cloud layer note on why it's one wash, not
+         three) combining the three real bands rather than a wash per
+         band. -->
+    <!-- Independent toggles, not a single-layer picker — see the note by
+         MAP_LAYER_DEFAULTS in map.js for why they can all be on together
+         (and what that costs visually when they are). Cloud added
+         alongside the original four — see map.js's own Cloud layer note
+         for why it's one translucent wash rather than a wash per band. -->
     <div class="map-layer-toggles">
       <label class="check"><input type="checkbox" id="mapLayer_rain"><span>Rain</span></label>
       <label class="check"><input type="checkbox" id="mapLayer_wind"><span>Wind</span></label>
       <label class="check"><input type="checkbox" id="mapLayer_temperature"><span>Temperature</span></label>
       <label class="check"><input type="checkbox" id="mapLayer_pressure"><span>Pressure</span></label>
+      <label class="check"><input type="checkbox" id="mapLayer_cloud"><span>Cloud</span></label>
     </div>
 
     <!-- One row per active colour-wash layer, built by renderMapLegends()

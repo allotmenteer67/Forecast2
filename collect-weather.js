@@ -92,7 +92,14 @@ async function fetchActual(lat, lon, start, end) {
     latitude: lat,
     longitude: lon,
     daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,sunshine_duration",
-    hourly: "cloudcover,pressure_msl,soil_temperature_0cm,dewpoint_2m",
+    // cloudcover_low/mid/high rather than the single blended cloudcover
+    // this used to request — see the matching split in fetchModel below
+    // for the full reasoning. Same "cloudcover" naming (no underscore
+    // before "cover") as the plain blended field this replaces — the
+    // ARCHIVE api's own hourly variable names are spelled differently
+    // from the forecast/previous-runs endpoints used elsewhere in this
+    // file, which use "cloud_cover" with an underscore.
+    hourly: "cloudcover_low,cloudcover_mid,cloudcover_high,pressure_msl,soil_temperature_0cm,dewpoint_2m",
     start_date: isoDate(start),
     end_date: isoDate(end),
     wind_speed_unit: "mph",
@@ -103,7 +110,9 @@ async function fetchActual(lat, lon, start, end) {
   const data = await res.json();
   const dayCount = data.daily.time.length;
 
-  const cloud = aggregateHourlyByDay(data.hourly.time, data.hourly.cloudcover, dayCount, "mean");
+  const cloudLow = aggregateHourlyByDay(data.hourly.time, data.hourly.cloudcover_low, dayCount, "mean");
+  const cloudMid = aggregateHourlyByDay(data.hourly.time, data.hourly.cloudcover_mid, dayCount, "mean");
+  const cloudHigh = aggregateHourlyByDay(data.hourly.time, data.hourly.cloudcover_high, dayCount, "mean");
   const pressure = aggregateHourlyByDay(data.hourly.time, data.hourly.pressure_msl, dayCount, "mean");
   const soilTemperature = aggregateHourlyByDay(data.hourly.time, data.hourly.soil_temperature_0cm, dayCount, "mean");
   const dewPoint = aggregateHourlyByDay(data.hourly.time, data.hourly.dewpoint_2m, dayCount, "mean");
@@ -120,7 +129,9 @@ async function fetchActual(lat, lon, start, end) {
     byDate[date] = {
       rain: data.daily.precipitation_sum[i],
       wind: data.daily.windspeed_10m_max[i],
-      cloud: cloud[i],
+      cloudLow: cloudLow[i],
+      cloudMid: cloudMid[i],
+      cloudHigh: cloudHigh[i],
       pressure: pressure[i],
       soilTemperature: soilTemperature[i],
       dewPoint: dewPoint[i],
@@ -138,7 +149,15 @@ async function fetchModel(lat, lon, model, start, end) {
       `temperature_2m_previous_day${d}`,
       `precipitation_previous_day${d}`,
       `wind_speed_10m_previous_day${d}`,
-      `cloud_cover_previous_day${d}`,
+      // Split into three bands rather than one blended cloud_cover — see
+      // fetchActual's own note on this. "cloud_cover" WITH the
+      // underscore here, unlike the archive api's "cloudcover" above:
+      // the previous-runs/forecast endpoints spell this field
+      // differently from the archive endpoint, confirmed against
+      // Open-Meteo's own docs rather than assumed.
+      `cloud_cover_low_previous_day${d}`,
+      `cloud_cover_mid_previous_day${d}`,
+      `cloud_cover_high_previous_day${d}`,
       `pressure_msl_previous_day${d}`,
       `soil_temperature_0cm_previous_day${d}`,
       `dewpoint_2m_previous_day${d}`,
@@ -192,7 +211,9 @@ async function fetchModel(lat, lon, model, start, end) {
       tempAvg: tempMax.map((max, i) => (max !== null && tempMin[i] !== null) ? (max + tempMin[i]) / 2 : null),
       precip: aggregateHourlyByDay(hourlyTimes, data.hourly[`precipitation_previous_day${d}`], dayCount, "sum"),
       wind: aggregateHourlyByDay(hourlyTimes, data.hourly[`wind_speed_10m_previous_day${d}`], dayCount, "max"),
-      cloud: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_previous_day${d}`], dayCount, "mean"),
+      cloudLow: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_low_previous_day${d}`], dayCount, "mean"),
+      cloudMid: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_mid_previous_day${d}`], dayCount, "mean"),
+      cloudHigh: aggregateHourlyByDay(hourlyTimes, data.hourly[`cloud_cover_high_previous_day${d}`], dayCount, "mean"),
       pressure: aggregateHourlyByDay(hourlyTimes, data.hourly[`pressure_msl_previous_day${d}`], dayCount, "mean"),
       soilTemperature: aggregateHourlyByDay(hourlyTimes, data.hourly[`soil_temperature_0cm_previous_day${d}`], dayCount, "mean"),
       dewPoint: aggregateHourlyByDay(hourlyTimes, data.hourly[`dewpoint_2m_previous_day${d}`], dayCount, "mean"),
@@ -209,7 +230,9 @@ async function fetchModel(lat, lon, model, start, end) {
       byDate[date][d] = {
         rain: byLeadDay[d].precip[i],
         wind: byLeadDay[d].wind[i],
-        cloud: byLeadDay[d].cloud[i],
+        cloudLow: byLeadDay[d].cloudLow[i],
+        cloudMid: byLeadDay[d].cloudMid[i],
+        cloudHigh: byLeadDay[d].cloudHigh[i],
         pressure: byLeadDay[d].pressure[i],
         soilTemperature: byLeadDay[d].soilTemperature[i],
         dewPoint: byLeadDay[d].dewPoint[i],

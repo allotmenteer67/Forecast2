@@ -218,7 +218,8 @@ if (unitFieldsets) {
 // sync with every future non-weather toggle.
 const HEADLINE_TOGGLE_LABELS = {
   tide: "Tide",
-  fishing: "Fishing"
+  fishing: "Fishing",
+  cloud: "Cloud"
 };
 
 const headlineToggleList = document.getElementById("headlineToggles");
