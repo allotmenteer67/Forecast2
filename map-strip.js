@@ -80,9 +80,20 @@ const MAP_STRIP_PALETTES = {
   // values, same reasoning — a mid-tone pulled from that palette's own
   // rain ramp, since a river is the same "water" concept as the sea and
   // rain rather than a new colour of its own).
-  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", river: "#8FB9E2", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
-  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", river: "#85B7EB", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
-  mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", river: "#7C7C7C", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
+  //
+  // tideMarker is deliberately NOT that same water tone — a tide
+  // location marker drawn in "water blue" blended straight into the
+  // coastline/sea it was sitting next to, which was the actual
+  // complaint. A warm red reads as a marker (a deliberately placed
+  // pin) rather than more of the map's own geography, the same way the
+  // full map's own weather-place markers use a colour nothing else on
+  // the map is painted in. Mono keeps its monochrome premise instead of
+  // introducing red — solid near-black against that theme's pale
+  // land/sea is already a bigger jump in contrast than river's mid-grey
+  // was.
+  paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", river: "#8FB9E2", tideMarker: "#CC3B2E", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
+  slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", river: "#85B7EB", tideMarker: "#FF6B52", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
+  mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", river: "#7C7C7C", tideMarker: "#141414", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
 };
 function mapStripPalette() {
   let id = "paper";
@@ -467,7 +478,7 @@ async function renderMapStrip(centre, grid) {
   // way the full map can afford to.
   if (typeof loadTideLocations === "function") {
     const tideLocations = loadTideLocations();
-    ctx.fillStyle = p.river;
+    ctx.fillStyle = p.tideMarker;
     tideLocations.forEach(loc => {
       const x = view.x(loc.lon), y = view.y(loc.lat);
       if (x < 0 || x > view.w || y < 0 || y > view.h) return;
