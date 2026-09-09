@@ -270,6 +270,87 @@ const EA_READINGS_MAX_LIMIT = 10000; // EA's own hard cap per request — at
                                       // 15-min readings that's just over
                                       // 104 days, plenty for a first fit
 
+// ---- Elevation sanity check for tide locations ----
+//
+// nearestTideStation (below) always returns SOMETHING — it's pure
+// distance, with no idea whether the target point could plausibly HAVE
+// a tide at all. Reported: Ben Nevis and Snowdon both got full tide and
+// fishing forecasts, because their nearest gauge is still just some
+// number of km away like anywhere else. Distance alone can't fix this
+// without breaking genuinely tidal places: rivers run tidal miles
+// inland (the Trent at Gainsborough, ~50 miles from the open sea), so
+// any distance cutoff tight enough to exclude a mountain would also
+// exclude real tidal reaches, and any cutoff loose enough to keep those
+// wouldn't touch a mountain a mere few km from a fjord-like sea loch.
+//
+// Elevation sidesteps that entirely: the UK's largest tidal range (the
+// Bristol Channel/Severn) is only around 15m even at extreme springs,
+// so anywhere meaningfully above that literally cannot be reached by
+// any UK tide, regardless of how close it sits to the coast in plan
+// view — this is what actually separates a fjord-side village from a
+// mountain overlooking the same fjord. TIDE_MAX_PLAUSIBLE_ELEVATION_M
+// is set well above that real physical ceiling specifically so it never
+// second-guesses a genuine low-lying tidal river reach — it only ever
+// catches the unambiguous cases (a summit is wrong by a factor of 50+,
+// not a borderline judgement call).
+//
+// Reuses the exact same static file map.js already loads for terrain
+// hillshading (data/elevation-uk.json) — cached by the service worker
+// after either page's first visit, so this costs nothing on repeat use
+// regardless of which page loads it first.
+const TIDE_ELEVATION_DATA_URL = "data/elevation-uk.json";
+const TIDE_MAX_PLAUSIBLE_ELEVATION_M = 20;
+let tideElevationGrid = null;
+let tideElevationLoadPromise = null;
+
+async function loadTideElevationGrid() {
+  if (tideElevationGrid) return tideElevationGrid;
+  if (tideElevationLoadPromise) return tideElevationLoadPromise;
+  tideElevationLoadPromise = (async () => {
+    try {
+      const res = await fetchWithTimeout(TIDE_ELEVATION_DATA_URL, {}, 15000);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const values = [];
+      for (let r = 0; r < data.rows; r++) {
+        values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
+      }
+      tideElevationGrid = { ...data, values };
+      return tideElevationGrid;
+    } catch {
+      // No elevation data this time — elevationAt below treats that as
+      // "unknown", which lets the add go through unchecked rather than
+      // blocking someone over a network hiccup that has nothing to do
+      // with whether their location is actually tidal.
+      return null;
+    }
+  })();
+  return tideElevationLoadPromise;
+}
+
+// Nearest-cell lookup (not interpolated, unlike map.js's own smoothed
+// terrainElevationAt) — this only ever needs a rough plausibility
+// figure, not a precise one, so the simpler lookup is enough.
+function elevationAt(grid, lat, lon) {
+  if (!grid) return null;
+  const r = Math.round((lat - grid.lat0) / grid.dLat);
+  const c = Math.round((lon - grid.lon0) / grid.dLon);
+  if (r < 0 || c < 0 || r > grid.rows - 1 || c > grid.cols - 1) return null;
+  const v = grid.values[r][c];
+  return (v === null || v === undefined) ? null : v;
+}
+
+// Returns a plain string reason if the location is too high above sea
+// level to plausibly have a tide, or null if it passes (including when
+// elevation data couldn't be loaded — see loadTideElevationGrid above).
+async function checkTideElevationPlausibility(lat, lon) {
+  const grid = await loadTideElevationGrid();
+  const elevation = elevationAt(grid, lat, lon);
+  if (elevation === null) return null; // unknown — don't block on it
+  if (elevation <= TIDE_MAX_PLAUSIBLE_ELEVATION_M) return null;
+  return `That's about ${Math.round(elevation)}m above sea level — too high for a real tide (the UK's biggest tidal range is only around 15m). If this is meant to be a tidal river reach, try a spot right on the water rather than the village/area centre.`;
+}
+
 // Haversine distance in km — plenty precise for "which of 44 UK coastal
 // stations is nearest", no need for anything more exact than that.
 function haversineKm(lat1, lon1, lat2, lon2) {

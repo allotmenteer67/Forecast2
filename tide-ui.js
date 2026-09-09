@@ -345,7 +345,16 @@ if (tideRow) {
 // state.hourly, which tide doesn't use at all), so this doesn't touch
 // that function.
 const TIDE_SHEET_WINDOW_PAST_HOURS = 24;
-const TIDE_SHEET_WINDOW_FUTURE_HOURS = 72;
+// Was 72 (3 days) — extended to a full week on request. There's no
+// real technical or licensing ceiling being pushed against here: unlike
+// weather, which is genuinely limited by how far a forecast model's
+// own run extends, this chart is drawn from the harmonic fit itself —
+// a continuous function of time, astronomically stable over far longer
+// than a week (see fitTideHarmonics' own note on this), so it can
+// project arbitrarily far forward for free. The old 72h was just an
+// earlier, smaller starting width, not a constraint that had to be
+// worked around.
+const TIDE_SHEET_WINDOW_FUTURE_HOURS = 168;
 
 let openTideSheetToken = 0;
 
@@ -1166,6 +1175,19 @@ async function performAddTideLocation() {
     const resolved = knownStation
       ? { lat: knownStation.lat, lon: knownStation.lon, label: knownStation.label }
       : await resolveLocation(input);
+
+    // Elevation sanity check — see checkTideElevationPlausibility in
+    // tide.js for the full reasoning. Skipped for a direct known-gauge
+    // match above: those 44 coordinates are real, published tide
+    // stations by definition, so there's nothing to sanity-check there.
+    if (!knownStation) {
+      const implausible = await checkTideElevationPlausibility(resolved.lat, resolved.lon);
+      if (implausible) {
+        setTideLocationStatus(implausible, true);
+        return;
+      }
+    }
+
     const station = nearestTideStation(resolved.lat, resolved.lon);
     const locations = loadTideLocations();
     const newLocation = {
