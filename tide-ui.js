@@ -208,6 +208,27 @@ async function renderTideRow() {
     .filter(e => e.hours >= nowHours)
     .slice(0, 2);
 
+  // TEMPORARY diagnostic — remove once the row-vs-sheet time mismatch
+  // (reported: front-page row consistently ~40min off from both the
+  // sheet and UKHO, reproduced on two different stations including one
+  // with zero location correction) is tracked down. Both raw (pre-
+  // correction) and corrected hours for the first upcoming event, plus
+  // the epoch and now-reference this row actually used, printed
+  // straight into the row itself so it's readable on-device without
+  // needing Safari's remote inspector. Compare this epochIso against
+  // the matching line added to the sheet's footnote (openTideSheet) —
+  // if they differ, the two are working from different cached fits;
+  // if they match but the raw hours already differ from what the sheet
+  // computes for the same fit, the bug is in this window/event-
+  // selection step rather than the fit itself.
+  console.log("[tide-debug row]", {
+    epochIso: built.epochIso,
+    nowHours,
+    rawFirstTwo: rawEvents.filter(e => e.hours >= nowHours).slice(0, 2).map(e => e.hours),
+    correctedFirstTwo: corrected.map(e => e.hours)
+  });
+  const debugHtml = `<div style="font-size:10px;opacity:.6;">dbg epoch ${built.epochIso} now ${nowHours.toFixed(3)} raw ${rawEvents.filter(e => e.hours >= nowHours).slice(0, 2).map(e => e.hours.toFixed(3)).join(",")} corr ${corrected.map(e => e.hours.toFixed(3)).join(",")}</div>`;
+
 
   const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
@@ -219,7 +240,7 @@ async function renderTideRow() {
     return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr}</span>`;
   }).join("");
 
-  tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>`;
+  tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>${debugHtml}`;
   renderTideDots();
 }
 
@@ -395,13 +416,20 @@ async function openTideSheet() {
 
   sheetBody.appendChild(renderTideCurve(built.fit, fudge, built.epochIso, startHours, endHours, nowHours, location));
 
+  // TEMPORARY diagnostic, matching the one in renderTideRow — see that
+  // one's comment for the full reasoning. Same epochIso/nowHours
+  // formula as the row; printed here too so the two can be compared
+  // directly rather than trusting they must be equal.
+  console.log("[tide-debug sheet]", { epochIso: built.epochIso, nowHours });
+  const debugLine = `dbg epoch ${built.epochIso} now ${nowHours.toFixed(3)}`;
+
   const secondary = location.discoveryStation && loadSecondaryOffset(location.discoveryStation.id);
   if (secondary) {
-    sheetFootnote.textContent = `Corrected for ${location.label} specifically, using its own learned Admiralty offset — this is no longer just ${location.station.label}'s own curve.`;
+    sheetFootnote.textContent = `Corrected for ${location.label} specifically, using its own learned Admiralty offset — this is no longer just ${location.station.label}'s own curve. — ${debugLine}`;
   } else if (typeof location.station.cdOffsetOD !== "number") {
-    sheetFootnote.textContent = `${location.station.label} doesn't have a confirmed Chart Datum reference yet, so heights above are shown as measured by the gauge (Ordnance Datum) rather than Chart Datum.`;
+    sheetFootnote.textContent = `${location.station.label} doesn't have a confirmed Chart Datum reference yet, so heights above are shown as measured by the gauge (Ordnance Datum) rather than Chart Datum. — ${debugLine}`;
   } else {
-    sheetFootnote.textContent = "";
+    sheetFootnote.textContent = debugLine;
   }
 }
 
