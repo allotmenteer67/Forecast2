@@ -1110,6 +1110,25 @@ function renderAddToWeatherPrompt(resolved, rawInput) {
   tideAddToWeatherPrompt.hidden = false;
 }
 
+// Matches typed input directly against the app's own 44 EA tide gauges
+// before ever reaching the general place geocoder — added after
+// "Hinkley Point" (the power station itself, not a town) failed to
+// resolve through Open-Meteo's geocoder, which only knows populated
+// places. Every EA_TIDE_STATIONS label is a real, exact station name
+// already used throughout this app (the "nearest gauge is X" text,
+// Admiralty name-matching in nearestDiscoveryStation) — if someone
+// types one of those names verbatim, resolving straight to that
+// station's own published coordinates is both more likely to succeed
+// and more accurate than sending the name through a general geocoder
+// and hoping it lands on the same place. normalizePlaceName is the
+// same case/punctuation-insensitive comparison already used for
+// Admiralty station name-matching (see nearestDiscoveryStation).
+function matchKnownStationName(input) {
+  const target = normalizePlaceName(input);
+  if (!target) return null;
+  return EA_TIDE_STATIONS.find(station => normalizePlaceName(station.label) === target) || null;
+}
+
 async function performAddTideLocation() {
   const input = (tideLocationInput?.value || "").trim();
   if (!input) {
@@ -1123,7 +1142,10 @@ async function performAddTideLocation() {
   setTideLocationStatus("Looking up location…", false);
   if (tideAddToWeatherPrompt) tideAddToWeatherPrompt.hidden = true;
   try {
-    const resolved = await resolveLocation(input);
+    const knownStation = matchKnownStationName(input);
+    const resolved = knownStation
+      ? { lat: knownStation.lat, lon: knownStation.lon, label: knownStation.label }
+      : await resolveLocation(input);
     const station = nearestTideStation(resolved.lat, resolved.lon);
     const locations = loadTideLocations();
     const newLocation = {
