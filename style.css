@@ -886,7 +886,12 @@ header p {
      above the border and the track itself. */
   margin-top: 4px;
   padding-top: 7px;
-  border-top: 1px solid rgba(76, 106, 88, 0.25);
+  /* Was 1px — asked for a pixel or two thicker specifically on the
+     divider between the weather grid (Dew Point being whichever
+     condition lands last) and this "Today / +48h" playback row below
+     it, which was hard to notice at 1px against the pale card
+     background. Colour left alone, only the weight increased. */
+  border-top: 2px solid rgba(76, 106, 88, 0.25);
 }
 
 .hour-slider-title {
@@ -1141,8 +1146,23 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-button:hover {
-  background: var(--accent-dark);
+/* @media (hover: hover) scopes this to devices that have a real hover
+   state (mouse/trackpad) — without it, this was the actual cause of
+   "the zoom button stays filled in until something else is tapped"
+   (and every other plain <button> in the app, just less noticeable on
+   less colourful ones): iOS doesn't have hover at all, but taps still
+   trigger :hover as a synthetic, sticky state that only clears on the
+   NEXT tap elsewhere, which is exactly the behaviour reported. This is
+   a different bug from the tap-highlight-colour one already fixed
+   below (that one was an overlay iOS itself paints; this is a real CSS
+   rule firing and staying applied) — the zoom buttons' own `background:
+   white` has lower specificity than this element+pseudo-class rule, so
+   the accent-dark fill below was winning and sticking for as long as
+   the phantom :hover state lasted. */
+@media (hover: hover) {
+  button:hover {
+    background: var(--accent-dark);
+  }
 }
 
 button:active {
@@ -1543,6 +1563,15 @@ footer a:hover,
   margin: 0 0 10px;
   font-size: 13px;
   text-align: right;
+}
+
+/* Map page's own back-link now lives inside .title-bar-right, sharing
+   the header row with the Settings icon and "Map" title (see map.html)
+   instead of its old separate row above the title. The 10px bottom
+   margin above was sized for that separate row and just adds a lopsided
+   gap once it's a flex child sitting inline with everything else. */
+.title-bar .back-link {
+  margin: 0;
 }
 
 .help-section h2 {
@@ -2786,7 +2815,14 @@ footer {
      only a cap for a genuinely long line (several active layers'
      readouts at once on a narrow phone), not the pill's normal size. */
   right: 8px;
-  bottom: 8px;
+  /* Was bottom:8px — moved to the top corner on request, now that the
+     line has shrunk down to just the time (+ readout): nothing left on
+     the map itself for it to sit close to at the bottom, and the top
+     corner is clear of both the crosshair and the layer toggles below
+     the map. The front page strip's own pill (.map-strip-scale) stays
+     bottom-right, unchanged — this was only ever about the expanded
+     map's version. */
+  top: 8px;
   max-width: calc(100% - 16px);
   white-space: normal;
   font-size: 13px;

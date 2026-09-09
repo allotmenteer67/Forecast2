@@ -50,7 +50,14 @@ let fishingRenderToken = 0;
 
 function setFishingCardVisible(visible) {
   const card = document.querySelector(".fishing-card");
-  if (card) card.hidden = !visible;
+  if (!card) return;
+  const changed = card.hidden !== !visible;
+  card.hidden = !visible;
+  // Same fix, same reasoning as tide-ui.js's setTideCardVisible — see
+  // that one for the full explanation. Fired from here too since
+  // Fishing can appear/disappear independently of Tide (different
+  // toggle, same shared location).
+  if (changed) document.dispatchEvent(new CustomEvent("cloude:layout-changed"));
 }
 
 async function renderFishingRow() {

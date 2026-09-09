@@ -5243,10 +5243,29 @@ document.addEventListener("visibilitychange", () => {
 // standalone-app resume), so it catches what visibilitychange misses.
 // Harmless to call unconditionally — resetHourly() is a no-op if hourly
 // mode wasn't active.
-window.addEventListener("pageshow", () => {
+window.addEventListener("pageshow", event => {
   if (state.hourlyActive) {
     resetHourly();
     renderHeadline();
+  }
+  // event.persisted means this page was restored from the back-forward
+  // cache rather than freshly loaded — exactly what happens navigating
+  // "← Back to Cloude" from map.html back to here. Reported: a grey
+  // strip left over the status-bar/notch area after that trip,
+  // persisting until a real navigation. A no-op scroll nudge was
+  // already tried for the sheet-open/close version of this same class
+  // of bug (see closeHourlySheet) but that only covers the sheet, not
+  // this page-to-page path, which never ran any nudge at all — a
+  // bfcache restore paints the page from a cached snapshot without
+  // necessarily re-settling iOS's own dynamic-toolbar/safe-area state,
+  // the same underlying issue as the sheet case and the cold-launch map
+  // strip sizing (map-strip.js's initMapStrip), just triggered here by
+  // navigation instead. Two rAFs, matching that cold-launch fix's own
+  // reasoning for why one alone isn't reliably enough.
+  if (event.persisted) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
+    });
   }
 });
 

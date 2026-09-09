@@ -1319,7 +1319,18 @@ registerMapLayer({
         const value = sampleGrid(mapGrid, "temp", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
         if (value === null || value === undefined) continue;
         ctx.fillStyle = tempColor(value);
-        ctx.globalAlpha = 0.55;
+        // Was 0.55. The legend gradient (renderMapLegends) draws
+        // tempColor() at full, unblended opacity — but at 0.55 here,
+        // 45% of every cell was still the terrain shading underneath
+        // showing through, and that terrain tint (browns/tans on hills)
+        // skews the blended result warmer than the pure ramp colour,
+        // enough to read a full colour-band or more off (reported: 17°C
+        // showing in a patch that reads as ~21-22°C on the key). Raised
+        // so what's on the map stays close enough to what the legend
+        // promises to be trustworthy at a glance; terrain still shows
+        // faintly through, just no longer enough to shift the apparent
+        // band.
+        ctx.globalAlpha = 0.82;
         ctx.fillRect(px, py, cell, cell);
         ctx.globalAlpha = 1;
       }
@@ -2463,24 +2474,21 @@ function renderMap() {
 }
 
 function updateMapChrome() {
-  const radius = MAP_ZOOM_RADII_KM[mapZoomIndex];
-  const imperial = usingMiles();
-  const across = imperial ? Math.round(radius * 2 * 0.621371) : radius * 2;
-
   const scale = document.getElementById("mapScale");
   if (scale) {
     const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
     const hour = mapHourValue();
     const readout = buildMapReadout(hour);
-    // The zoom-distance figure used to live in its own row below the
-    // map, on its own with nothing to visually tie it to anything else
-    // on the page — reported back as "a random distance appearing on
-    // the screen". Folded in here instead, right alongside the clock
-    // it's genuinely related to (both describe the map above them),
-    // rather than removed outright — the whole point of it was telling
-    // you how wide an area you're looking at, and that's still useful,
-    // it just needed a clear home.
-    scale.textContent = mapHourClock(hour) + ` · ${across}${imperial ? "mi" : "km"} across` + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
+    // Distance ("NNmi across") dropped again — asked for a second time,
+    // this time outright rather than folded in. mapHourClock's own
+    // "Now, " prefix stripped too: useful next to the Hour slider's own
+    // label (#mapHourLabel, still uses mapHourClock unmodified), but
+    // redundant here once the pill sits at the top of the map next to
+    // nothing else it needs disambiguating from — the time alone is
+    // enough. See .map-scale in style.css for the matching move to the
+    // top-right corner.
+    const clock = mapHourClock(hour).replace(/^Now, /, "");
+    scale.textContent = clock + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
   }
 
   const hourLabel = document.getElementById("mapHourLabel");

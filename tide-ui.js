@@ -125,7 +125,27 @@ function applyLocationCorrection(location, fit, hours, odLevel) {
 
 function setTideCardVisible(visible) {
   const card = document.querySelector(".tide-card");
-  if (card) card.hidden = !visible;
+  if (!card) return;
+  const changed = card.hidden !== !visible;
+  card.hidden = !visible;
+  // The map strip's own height (map-strip.js, front page only) is CSS
+  // flex-grow against everything else on the page's total height —
+  // this card appearing/disappearing is exactly the kind of sibling
+  // content change that should shrink or grow the strip to match, but
+  // reported back as NOT reliably doing so (the strip left oversized,
+  // sized for a page without Tide/Fishing, even after they load in).
+  // map-strip.js already has a ResizeObserver watching its own canvas
+  // box, which in theory should catch this regardless of cause — but
+  // evidently isn't reliable enough for a change caused purely by a
+  // sibling's `hidden` flipping rather than an actual viewport resize.
+  // Firing an explicit event at the exact moment this card's visibility
+  // changes, rather than trusting a fixed delay after the location
+  // fetch kicks off (renderTideRow runs from renderTable/renderHeadline,
+  // which can land well after cloude:location-ready — a backfill alone
+  // can run for seconds in between), gives map-strip.js a precise,
+  // no-guesswork moment to re-measure against. A no-op on pages that
+  // don't have map-strip.js listening (Settings, Map itself).
+  if (changed) document.dispatchEvent(new CustomEvent("cloude:layout-changed"));
 }
 
 async function renderTideRow() {
