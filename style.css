@@ -716,6 +716,24 @@ header p {
   font-weight: 800;
 }
 
+/* Marks a tide-row event that's actually tomorrow (or later, with the
+   Date slider rolled back/forward) rather than today — added after a
+   time compared cleanly against another source's own "today" table
+   turned out not to be wrong at all, just unlabelled: late in the day,
+   the row's next-two-upcoming-events logic naturally rolls into
+   tomorrow's cycle once today's own events have passed, and tomorrow's
+   analogous tide genuinely runs ~40-50 minutes later than today's (a
+   lunar day is ~24h50m) — which reads as a big, alarming error against
+   an unrelated day's table if nothing on the row says which day it's
+   for. Small and muted deliberately: this is a clarifying label, not a
+   warning — the time itself was never wrong. */
+.tide-event-day {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-muted);
+  text-transform: uppercase;
+}
+
 .headline-cell:hover,
 .headline-cell:active {
   background: rgba(255, 255, 255, .5);

@@ -95,14 +95,25 @@ function solveLinearSystem(A, b) {
 // than scanning history separately. Deliberately in one place and
 // easy to swap: change the wording here only, nothing else needs to
 // know about it.
+//
+// "Making" was the original wording for the two building-toward-springs
+// bins, dropped in favour of "Building": "making tide" is standard
+// British nautical/fishing usage for the water FLOODING (rising) over
+// the separate ~6-hour tide, not this ~14.77-day amplitude cycle —
+// reused here for something else entirely, it read as flatly wrong
+// whenever it happened to land during an ebbing tide (which is half the
+// time, by definition, regardless of where the spring/neap cycle
+// actually is). "Building" keeps the same "heading toward springs"
+// meaning without colliding with an already-established term for a
+// different thing.
 const TIDE_CYCLE_LABELS = [
   "Springs",       // peak
   "Taking off",    // easing from springs, early
   "Taking off",    // easing from springs, mid
   "Near neaps",
   "Neaps",         // trough
-  "Making",        // building toward springs, early
-  "Making",        // building toward springs, mid
+  "Building",      // building toward springs, early
+  "Building",      // building toward springs, mid
   "Near springs"
 ];
 
@@ -134,7 +145,7 @@ function tideCyclePhase(fit, hours) {
 
   const bin = Math.round(psi / 45) % 8;
   // Rotates the label list so index 0 (Springs) lines up with psi≈0,
-  // and walks forward through Taking off → Neaps → Making → Near
+  // and walks forward through Taking off → Neaps → Building → Near
   // springs as psi increases toward 360/0 — matching how psi actually
   // decreases over real time (see comment above), so what a person
   // sees scrubbing forward through the week moves through the labels
