@@ -176,11 +176,18 @@ function decodeMetarClouds(rawOb) {
   const result = { cloudLow: null, cloudMid: null, cloudHigh: null, ceilingFt: null };
   if (!rawOb) return result;
 
-  if (/\b(SKC|CLR|NSC|CAVOK)\b/.test(rawOb)) {
-    // Explicitly clear/no significant cloud below 5000ft (NSC) —
-    // safe to report all three bands as 0 rather than leaving them
-    // null, since the observation is genuinely saying "no cloud",
-    // not "no data".
+  if (/\b(SKC|CLR|NSC|CAVOK|NCD)\b/.test(rawOb)) {
+    // Explicitly clear/no significant cloud below 5000ft (NSC), or NCD
+    // ("No Cloud Detected") — the automated-station equivalent of
+    // SKC/CLR, used whenever the report is AUTO rather than
+    // human-observed. Confirmed against a real EGLL response
+    // ("...AUTO VRB01KT 9999 NCD 15/10...") that this codepath is
+    // common, not rare — a lot of the UK network reports AUTO, and
+    // without NCD here every one of them would have decoded as "no
+    // data" instead of "clear", silently wrong on a very ordinary
+    // case rather than an edge case. Safe to report all three bands
+    // as 0 rather than leaving them null, since the observation is
+    // genuinely saying "no cloud", not "no data".
     return { cloudLow: 0, cloudMid: 0, cloudHigh: 0, ceilingFt: null };
   }
 
