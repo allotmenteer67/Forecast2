@@ -125,27 +125,7 @@ function applyLocationCorrection(location, fit, hours, odLevel) {
 
 function setTideCardVisible(visible) {
   const card = document.querySelector(".tide-card");
-  if (!card) return;
-  const changed = card.hidden !== !visible;
-  card.hidden = !visible;
-  // The map strip's own height (map-strip.js, front page only) is CSS
-  // flex-grow against everything else on the page's total height —
-  // this card appearing/disappearing is exactly the kind of sibling
-  // content change that should shrink or grow the strip to match, but
-  // reported back as NOT reliably doing so (the strip left oversized,
-  // sized for a page without Tide/Fishing, even after they load in).
-  // map-strip.js already has a ResizeObserver watching its own canvas
-  // box, which in theory should catch this regardless of cause — but
-  // evidently isn't reliable enough for a change caused purely by a
-  // sibling's `hidden` flipping rather than an actual viewport resize.
-  // Firing an explicit event at the exact moment this card's visibility
-  // changes, rather than trusting a fixed delay after the location
-  // fetch kicks off (renderTideRow runs from renderTable/renderHeadline,
-  // which can land well after cloude:location-ready — a backfill alone
-  // can run for seconds in between), gives map-strip.js a precise,
-  // no-guesswork moment to re-measure against. A no-op on pages that
-  // don't have map-strip.js listening (Settings, Map itself).
-  if (changed) document.dispatchEvent(new CustomEvent("cloude:layout-changed"));
+  if (card) card.hidden = !visible;
 }
 
 async function renderTideRow() {
@@ -209,34 +189,14 @@ async function renderTideRow() {
     .slice(0, 2);
 
 
-  // Reference calendar day for "is this event actually today" — tied to
-  // tideReferenceNow() (respects the Date rollback slider) rather than
-  // a bare `new Date()`, so this stays correct when rolled back/forward
-  // too, not just for the ordinary "right now" case.
-  const referenceDay = new Date(tideReferenceNow()).toDateString();
   const partsHtml = corrected.map(e => {
     const when = new Date(Date.parse(built.epochIso) + e.hours * 3600000);
     const timeStr = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    // Reported as a ~40-77 minute "wrong" time compared against a
-    // same-day tide table from another source (UKHO EasyTide) — turned
-    // out not to be wrong at all: this row shows the next TWO upcoming
-    // events from right now, which late in the day is naturally into
-    // tomorrow's cycle once today's own events have passed, and
-    // consecutive tides genuinely run ~40-50 minutes later each day (a
-    // lunar day is ~24h50m, not 24h00m) — so "tomorrow's early low" is
-    // correctly ~40min later than "today's early low" was, not a bug.
-    // The actual problem was just that nothing on the row said so — a
-    // person reasonably reads an unlabelled "L 00:41" as still being
-    // about today. This adds a short weekday label whenever an event's
-    // real calendar day differs from the reference day being shown.
-    const dayNote = when.toDateString() !== referenceDay
-      ? `<span class="tide-event-day">${when.toLocaleDateString(undefined, { weekday: "short" })}</span>`
-      : "";
     // Time only. The height used to sit alongside as a <small>, but at
     // half width beside fishing it pushed the row past the card and the
     // second event visibly clipped. Heights are one tap away in the
     // sheet, so the row keeps what you actually scan for — when.
-    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr}${dayNote}</span>`;
+    return `<span class="tide-event"><span class="tide-event-type">${e.type === "high" ? "H" : "L"}</span>${timeStr}</span>`;
   }).join("");
 
   tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>`;
@@ -345,16 +305,7 @@ if (tideRow) {
 // state.hourly, which tide doesn't use at all), so this doesn't touch
 // that function.
 const TIDE_SHEET_WINDOW_PAST_HOURS = 24;
-// Was 72 (3 days) — extended to a full week on request. There's no
-// real technical or licensing ceiling being pushed against here: unlike
-// weather, which is genuinely limited by how far a forecast model's
-// own run extends, this chart is drawn from the harmonic fit itself —
-// a continuous function of time, astronomically stable over far longer
-// than a week (see fitTideHarmonics' own note on this), so it can
-// project arbitrarily far forward for free. The old 72h was just an
-// earlier, smaller starting width, not a constraint that had to be
-// worked around.
-const TIDE_SHEET_WINDOW_FUTURE_HOURS = 168;
+const TIDE_SHEET_WINDOW_FUTURE_HOURS = 72;
 
 let openTideSheetToken = 0;
 
@@ -606,6 +557,22 @@ function renderTideCurve(fit, fudge, epochIso, startHours, endHours, nowHours, l
   const wrap = document.createElement("div");
   wrap.className = "graph-wrap tide-graph-wrap";
   wrap.appendChild(svg);
+
+  // Opens scrolled to the most recent tide rather than the left edge of
+  // the whole 24h-past/72h-future window — otherwise every open starts
+  // by showing a day of tides that have already happened, and reaching
+  // "what's coming up" needs a scroll every single time. Anchoring on
+  // the last past event (not "now" itself) means that one still-relevant
+  // reference point stays visible at the left edge instead of being
+  // scrolled just out of view. requestAnimationFrame because scrollLeft
+  // needs the wrap laid out in the document first — this runs right
+  // after the caller's own appendChild, on the next frame.
+  requestAnimationFrame(() => {
+    const pastEvents = events.filter(e => e.hours <= nowHours);
+    const anchorHours = pastEvents.length ? pastEvents[pastEvents.length - 1].hours : nowHours;
+    wrap.scrollLeft = Math.max(0, xFor(anchorHours) - 24);
+  });
+
   return wrap;
 }
 
@@ -1139,48 +1106,6 @@ function renderAddToWeatherPrompt(resolved, rawInput) {
   tideAddToWeatherPrompt.hidden = false;
 }
 
-// The elevation-warning counterpart to the prompt just above — same
-// shape (a status line plus one button), different job: this one
-// resumes the SAME add that was paused, rather than starting a
-// different one. See checkTideElevationPlausibility (tide.js) and the
-// comment above its call in performAddTideLocation for why this is a
-// confirmable warning rather than a hard block.
-const tideElevationWarningPrompt = document.getElementById("tideElevationWarningPrompt");
-
-function renderTideElevationWarningPrompt(onConfirm) {
-  if (!tideElevationWarningPrompt) return;
-  tideElevationWarningPrompt.innerHTML = "";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "add-to-other-button";
-  button.textContent = "Add anyway";
-  button.addEventListener("click", () => {
-    tideElevationWarningPrompt.hidden = true;
-    onConfirm();
-  });
-  tideElevationWarningPrompt.appendChild(button);
-  tideElevationWarningPrompt.hidden = false;
-}
-
-// Matches typed input directly against the app's own 44 EA tide gauges
-// before ever reaching the general place geocoder — added after
-// "Hinkley Point" (the power station itself, not a town) failed to
-// resolve through Open-Meteo's geocoder, which only knows populated
-// places. Every EA_TIDE_STATIONS label is a real, exact station name
-// already used throughout this app (the "nearest gauge is X" text,
-// Admiralty name-matching in nearestDiscoveryStation) — if someone
-// types one of those names verbatim, resolving straight to that
-// station's own published coordinates is both more likely to succeed
-// and more accurate than sending the name through a general geocoder
-// and hoping it lands on the same place. normalizePlaceName is the
-// same case/punctuation-insensitive comparison already used for
-// Admiralty station name-matching (see nearestDiscoveryStation).
-function matchKnownStationName(input) {
-  const target = normalizePlaceName(input);
-  if (!target) return null;
-  return EA_TIDE_STATIONS.find(station => normalizePlaceName(station.label) === target) || null;
-}
-
 async function performAddTideLocation() {
   const input = (tideLocationInput?.value || "").trim();
   if (!input) {
@@ -1193,45 +1118,31 @@ async function performAddTideLocation() {
 
   setTideLocationStatus("Looking up location…", false);
   if (tideAddToWeatherPrompt) tideAddToWeatherPrompt.hidden = true;
-  if (tideElevationWarningPrompt) tideElevationWarningPrompt.hidden = true;
   try {
-    const knownStation = matchKnownStationName(input);
-    const resolved = knownStation
-      ? { lat: knownStation.lat, lon: knownStation.lon, label: knownStation.label }
-      : await resolveLocation(input);
-
-    // Elevation sanity check — see checkTideElevationPlausibility in
-    // tide.js for the full reasoning. Skipped for a direct known-gauge
-    // match above: those 44 coordinates are real, published tide
-    // stations by definition, so there's nothing to sanity-check there.
-    //
-    // A WARNING with an override, not a hard block — elevation alone
-    // can't safely be a hard yes/no gate. Two separate problems showed
-    // that up: (1) the underlying terrain grid is coarse (~8km between
-    // sample points, built for map hillshading, not precision lookups),
-    // so a coastal village right next to steep terrain — Kilve, at the
-    // foot of the Quantocks — can land its nearest sample partway up
-    // the hillside and read as ~289m when the real spot is closer to
-    // sea level; (2) even a perfectly accurate reading doesn't settle
-    // it either way — a genuine clifftop address (a lighthouse, a
-    // coastguard lookout) can correctly sit 60-100m+ directly above
-    // real tidal water, so "high" can't safely mean "reject" on its
-    // own. A confirmable warning covers both: Kilve's obviously-wrong
-    // number is a single glance and one tap through, a genuine
-    // clifftop spot is the same one tap and gets added correctly, and
-    // nobody sane taps through 1345m for Ben Nevis — the original
-    // case this was built to catch still gets caught in practice
-    // without the hard block's false positives.
-    if (!knownStation) {
-      const warning = await checkTideElevationPlausibility(resolved.lat, resolved.lon);
-      if (warning) {
-        setTideLocationStatus(warning, true);
-        renderTideElevationWarningPrompt(() => finishAddTideLocation(resolved, input));
-        return;
-      }
-    }
-
-    await finishAddTideLocation(resolved, input);
+    const resolved = await resolveLocation(input);
+    const station = nearestTideStation(resolved.lat, resolved.lon);
+    const locations = loadTideLocations();
+    const newLocation = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: resolved.label || input,
+      // This location's OWN coordinates, distinct from the nearest EA
+      // gauge's (station.lat/lon) — needed so an Admiralty check
+      // searches near the actual saved place (e.g. Lyme Regis) rather
+      // than near its nearest gauge (Weymouth), which are often not
+      // the same station and can be tens of km apart. Without this,
+      // "nearest Admiralty station" was silently resolving to the
+      // gauge's own station instead of the real target location.
+      lat: resolved.lat,
+      lon: resolved.lon,
+      station
+    };
+    locations.push(newLocation);
+    saveTideLocations(locations);
+    if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
+    if (tideLocationInput) tideLocationInput.value = "";
+    setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
+    renderTideLocationsList();
+    renderAddToWeatherPrompt(resolved, input);
   } catch (err) {
     if (err && err.name === "AmbiguousLocationError") {
       setTideLocationStatus(`That place name matches more than one UK location — try adding a county.`, true);
@@ -1239,37 +1150,6 @@ async function performAddTideLocation() {
       setTideLocationStatus(err.message || "Couldn't look up that location.", true);
     }
   }
-}
-
-// Split out of performAddTideLocation so the elevation-warning "Add
-// anyway" button (renderTideElevationWarningPrompt) can resume from
-// here directly, reusing the SAME resolved location rather than
-// re-running the geocoder/ambiguity check a second time.
-async function finishAddTideLocation(resolved, input) {
-  const station = nearestTideStation(resolved.lat, resolved.lon);
-  const locations = loadTideLocations();
-  const newLocation = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    label: resolved.label || input,
-    // This location's OWN coordinates, distinct from the nearest EA
-    // gauge's (station.lat/lon) — needed so an Admiralty check
-    // searches near the actual saved place (e.g. Lyme Regis) rather
-    // than near its nearest gauge (Weymouth), which are often not
-    // the same station and can be tens of km apart. Without this,
-    // "nearest Admiralty station" was silently resolving to the
-    // gauge's own station instead of the real target location.
-    lat: resolved.lat,
-    lon: resolved.lon,
-    station
-  };
-  locations.push(newLocation);
-  saveTideLocations(locations);
-  if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
-  if (tideLocationInput) tideLocationInput.value = "";
-  if (tideElevationWarningPrompt) tideElevationWarningPrompt.hidden = true;
-  setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
-  renderTideLocationsList();
-  renderAddToWeatherPrompt(resolved, input);
 }
 
 if (addTideLocationButton) {
