@@ -137,17 +137,7 @@ function sizeMapStripCanvas() {
 function mapStripView(centre) {
   const rect = mapStripCanvas.getBoundingClientRect();
   const w = rect.width, h = rect.height;
-  // Was MAP_STRIP_RADIUS_KM * 2 (50km wide), but fetchMapStripGrid below
-  // only ever fetched MAP_STRIP_RADIUS_KM * 1.5 (37.5km) of actual rain
-  // data — the outer ~6km on each side of the canvas had nothing to
-  // sample, leaving a plain rectangle of bare sea/land colour either
-  // side of the rain wash (reported back as exactly that). Matching
-  // this to the fetch's own span, rather than widening the fetch to
-  // match this, keeps the strip's already-heavy API usage unchanged —
-  // see collect-weather's rate-limit notes — while fully eliminating
-  // the dead zone; the strip just shows a very slightly tighter area
-  // than before, not a two-tier one.
-  const spanKm = MAP_STRIP_RADIUS_KM * 1.5;
+  const spanKm = MAP_STRIP_RADIUS_KM * 2;
   const pxPerKm = Math.min(w, h) / spanKm;
   const dLon = kmPerDegLon(centre.lat);
   return {
@@ -181,31 +171,6 @@ function drawMapStripCoastline(ctx, view, geojson, fill, stroke) {
         ctx.closePath();
       });
       ctx.fill("evenodd");
-      ctx.stroke();
-    });
-  });
-}
-
-// Stroke-only pass, no fill — used to re-draw the coastline edge on top
-// of the rain wash (see the call in renderMapStrip) so a heavy rain
-// patch over the coast can't bury it the way it used to. A fill here
-// would just paint the land colour straight back over that same rain,
-// undoing the wash this runs on top of — this only ever needs the line.
-function drawMapStripCoastlineOutline(ctx, view, geojson, stroke) {
-  if (!geojson) return;
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = 1;
-  geojson.features.forEach(feature => {
-    const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
-    polygons.forEach(polygon => {
-      ctx.beginPath();
-      polygon.forEach(ring => {
-        ring.forEach(([lon, lat], i) => {
-          const x = view.x(lon), y = view.y(lat);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.closePath();
-      });
       ctx.stroke();
     });
   });
@@ -439,7 +404,19 @@ async function renderMapStrip(centre, grid) {
     drawMapStripCoastline(ctx, view, mapStripLakes, p.sea, p.coast);
   }
   if (mapStripWaterways) {
+    // Clipped to land for the same reason map.js's waterways layer is
+    // (see its own note): rivers and the coastline come from two
+    // different datasets that disagree slightly at estuary mouths, so
+    // a river's line can run past where the coastline says land ends
+    // and read as carrying on out to sea. The strip was missed when
+    // that fix went into map.js — same visible bug, same data, just a
+    // second place that draws it. clipMapStripToLand already exists in
+    // this file (used by terrain above), so this is the same one-line
+    // shape of fix rather than anything new.
+    ctx.save();
+    clipMapStripToLand(ctx, view, mapStripCoastline);
     drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
+    ctx.restore();
   }
 
   if (grid) {
@@ -472,16 +449,6 @@ async function renderMapStrip(centre, grid) {
       }
     }
   }
-
-  // Re-stroke the coastline OUTLINE (no fill — it was already filled
-  // above) on top of the rain wash just drawn — direct copy of map.js's
-  // own "coastline-outline" layer and its exact same reasoning: a heavy
-  // rain patch sitting over the coast buries the thin coastline stroke
-  // drawn earlier underneath it, leaving no way to tell where the
-  // shoreline actually is. That re-stroke-on-top pass only ever existed
-  // on the full map; the strip drew coastline once, before rain, with
-  // nothing giving it a second pass — this ports the same fix over.
-  if (mapStripCoastline) drawMapStripCoastlineOutline(ctx, view, mapStripCoastline, p.coast);
 
   // A few names for scale — "is this 5 miles across or 50" is hard to
   // judge from an unlabelled outline. Nearest-and-biggest few only:
@@ -711,56 +678,10 @@ async function initMapStrip(centre) {
     console.error("Map strip weather fetch failed:", err);
     // Silent on screen, same reasoning as the coastline catch above.
   }
-
-  // Same two-rAF re-measure as the cold-launch guard at the top of this
-  // function, but run every time this function completes, not just on
-  // first load — reported: switching location via "Forecast for here"
-  // or the place chip can also leave the strip at the wrong size,
-  // exactly like cold launch did. Both "Forecast for here" and the chip
-  // end up calling this same function again (see the location-ready
-  // listener below), and both fire off a burst of DOM changes elsewhere
-  // on the page while it runs (headline grid repopulating, Tide/Fishing
-  // panels appearing) that can settle .app-home's real height slightly
-  // after this function's own synchronous work is done. The existing
-  // ResizeObserver below should catch a genuine size change on its own,
-  // but this — like the cold-launch case — is a belt-and-braces measure
-  // for the specific case where the very first post-switch measurement
-  // was taken before iOS finished settling the surrounding layout,
-  // rather than a replacement for that observer.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (sizeMapStripCanvas() && mapStripLastCentre) {
-        renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-      }
-    });
-  });
 }
 
 document.addEventListener("cloude:location-ready", e => {
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
-});
-
-// Tide/Fishing cards (tide-ui.js/fishing-ui.js) appearing or
-// disappearing changes the total height of everything below the strip,
-// which changes how much room .map-strip's own flex-grow gets (see
-// style.css) — but that change lands well after cloude:location-ready
-// above (renderTideRow/renderFishingRow run from renderHeadline, which
-// itself can be delayed behind a real-source history backfill), so a
-// fixed-delay re-measure tied to location-ready alone was too early.
-// This fires at the exact moment either card's visibility actually
-// changes instead of guessing at a delay, and the existing
-// ResizeObserver further down — which should catch this on its own in
-// theory, but wasn't reliably doing so in practice for a pure
-// sibling-content resize on iOS — stays in place as a second layer
-// rather than being replaced by this.
-document.addEventListener("cloude:layout-changed", () => {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (sizeMapStripCanvas() && mapStripLastCentre) {
-        renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-      }
-    });
-  });
 });
 
 // Reads the SAME #hourSlider element app.js already owns and drives the
