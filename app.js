@@ -4076,26 +4076,35 @@ function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultRead
   reset();
 }
 
-// Forces WebKit to fully recompute layout — including the status-bar/
-// safe-area rendering — rather than trusting whatever it cached while a
-// fixed-position sheet was on screen. Confirmed on a real device that
-// the previous fix here (a no-op window.scrollTo nudge) did NOT clear
-// the grey status-bar strip that reappears after closing a sheet, even
-// though a real page navigation (leaving for map.html and back) always
-// does. Toggling the viewport meta's content is a stronger, standard
-// trick for the same class of iOS bug: appending then removing a
-// harmless trailing character changes nothing about the effective
-// viewport settings, but the act of re-parsing it is enough to make
-// WebKit re-derive env(safe-area-inset-*) and the status-bar rendering
-// from the CURRENT state rather than a stale one.
+// Clears the grey strip that iOS leaves over the status-bar area after
+// a sheet closes. Mechanism, now confirmed rather than guessed: iOS
+// tints the standalone-PWA status bar by sampling the page colour
+// beneath it, and it takes that sample WHILE .sheet-backdrop is open —
+// the backdrop being rgba(20,30,24,.35) over the page background. On
+// the Gold theme that blend computes to #aaaa9e, which is exactly the
+// grey-green reported on-device. iOS then never re-samples on close, so
+// the stale tint sits there until a real page navigation forces one.
+//
+// That also explains why the previous attempt here (toggling the
+// viewport meta) did nothing: it forced a layout recompute, but the
+// status-bar tint isn't a layout property — nothing about it asked iOS
+// to re-read the colour it had already latched onto. theme-color is the
+// lever that does, because iOS re-evaluates the bar whenever that meta
+// changes. Setting it to a deliberately different value and then back
+// on the next frame is a no-op as far as the final state goes, but the
+// change event itself is what triggers the re-read.
 function forceIOSStatusBarRelayout() {
-  const viewportMeta = document.querySelector('meta[name="viewport"]');
-  if (!viewportMeta) return;
-  const original = viewportMeta.getAttribute("content");
+  const themeColorEl = document.querySelector('meta[name="theme-color"]');
+  if (!themeColorEl) return;
+  const original = themeColorEl.getAttribute("content");
   if (!original) return;
-  viewportMeta.setAttribute("content", original + ",");
+  // Any value distinct from the current one will do — the page
+  // background is the natural choice, since it's what the bar should be
+  // sampling against anyway once the backdrop is gone.
+  const pageBg = getComputedStyle(document.documentElement).backgroundColor;
+  themeColorEl.setAttribute("content", pageBg && pageBg !== original ? pageBg : "#ffffff");
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => viewportMeta.setAttribute("content", original));
+    requestAnimationFrame(() => themeColorEl.setAttribute("content", original));
   });
 }
 

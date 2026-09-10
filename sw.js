@@ -71,13 +71,29 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
+// Bumped to v13: the grey status-bar strip, now diagnosed properly —
+// iOS samples the page colour under the status bar WHILE the sheet
+// backdrop is open (the blend computes to exactly the reported grey)
+// and never re-samples on close. forceIOSStatusBarRelayout in app.js
+// now toggles theme-color, which is the meta iOS actually re-reads,
+// instead of the viewport meta the v11 attempt toggled; .sheet-backdrop
+// in style.css also now goes visibility:hidden when closed.
+//
+// Bumped to v12: the black-translucent status-bar experiment from v10
+// reverted on all five .html files (it fixed the grey strip but pushed
+// the title under the notch — the spacing under "default" was already
+// right), plus the real map-strip fix in style.css: .app-home had
+// min-height: 100svh with no matching max-height, so flex-shrink never
+// engaged and the strip could grow into spare space but never give it
+// back. style.css and all five .html files are in SHELL_FILES.
+//
 // Bumped to v11: closeHourlySheet's grey-status-bar-strip workaround
 // replaced — a no-op scroll (v6-era) was confirmed on a real device to
 // NOT clear it; forceIOSStatusBarRelayout() (a viewport-meta toggle)
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v11";
+const CACHE_NAME = "cloude-shell-v13";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

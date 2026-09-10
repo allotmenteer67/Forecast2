@@ -353,6 +353,27 @@ header p {
   display: flex;
   flex-direction: column;
   min-height: 100svh;
+  /* min-height alone is a FLOOR, never a ceiling — so when the page's
+     natural content (header + headline card with every cell switched on
+     + tide/fishing + the date bar) added up to more than one screen,
+     this container simply grew past 100svh and the page scrolled. Flex
+     shrinking never engaged at all: flex-shrink only redistributes
+     space when children are being squeezed INTO a constrained
+     container, and there was no constraint to squeeze against. That is
+     why .map-strip's `flex: 1 1 auto` looked like it worked in one
+     direction only — it grew into spare space correctly (few cells
+     enabled), but refused to give space back (many cells enabled),
+     which reads on-device as "the strip won't shrink to fit everything
+     on screen".
+     max-height supplies the missing ceiling. Now the two together pin
+     this to exactly one screen, children other than the strip hold
+     their natural size (see the flex: 0 0 auto rule below), and the
+     strip absorbs the difference in BOTH directions, down to its own
+     min-height floor. If the rest of the page genuinely can't fit even
+     with the strip at its floor, the page scrolls as before — this
+     only removes the case where it scrolled while the strip sat there
+     keeping space it was supposed to be able to give up. */
+  max-height: 100svh;
 }
 
 /* Flex items default to flex-shrink:1 — without this, EVERY direct
@@ -402,7 +423,14 @@ header p {
      instead, which doesn't have this limitation. */
   display: flex;
   flex: 1 1 auto;
-  min-height: 130px;
+  /* Was 130px. With .app-home now supplying a real ceiling (see its
+     max-height note above) this floor is reachable for the first time,
+     and on a smaller phone with every headline cell plus tide, fishing
+     and the date bar enabled, 130px was still too tall a floor to let
+     all of it fit. 96px is about the least that keeps the strip
+     recognisable as a map (coastline plus a place label or two) rather
+     than a decorative sliver — below that it stops earning its space. */
+  min-height: 96px;
   border-radius: 14px;
   overflow: hidden;
   margin-bottom: 12px;
@@ -716,24 +744,6 @@ header p {
   font-weight: 800;
 }
 
-/* Marks a tide-row event that's actually tomorrow (or later, with the
-   Date slider rolled back/forward) rather than today — added after a
-   time compared cleanly against another source's own "today" table
-   turned out not to be wrong at all, just unlabelled: late in the day,
-   the row's next-two-upcoming-events logic naturally rolls into
-   tomorrow's cycle once today's own events have passed, and tomorrow's
-   analogous tide genuinely runs ~40-50 minutes later than today's (a
-   lunar day is ~24h50m) — which reads as a big, alarming error against
-   an unrelated day's table if nothing on the row says which day it's
-   for. Small and muted deliberately: this is a clarifying label, not a
-   warning — the time itself was never wrong. */
-.tide-event-day {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent-muted);
-  text-transform: uppercase;
-}
-
 .headline-cell:hover,
 .headline-cell:active {
   background: rgba(255, 255, 255, .5);
@@ -904,12 +914,7 @@ header p {
      above the border and the track itself. */
   margin-top: 4px;
   padding-top: 7px;
-  /* Was 1px — asked for a pixel or two thicker specifically on the
-     divider between the weather grid (Dew Point being whichever
-     condition lands last) and this "Today / +48h" playback row below
-     it, which was hard to notice at 1px against the pale card
-     background. Colour left alone, only the weight increased. */
-  border-top: 2px solid rgba(76, 106, 88, 0.25);
+  border-top: 1px solid rgba(76, 106, 88, 0.25);
 }
 
 .hour-slider-title {
@@ -1164,23 +1169,8 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* @media (hover: hover) scopes this to devices that have a real hover
-   state (mouse/trackpad) — without it, this was the actual cause of
-   "the zoom button stays filled in until something else is tapped"
-   (and every other plain <button> in the app, just less noticeable on
-   less colourful ones): iOS doesn't have hover at all, but taps still
-   trigger :hover as a synthetic, sticky state that only clears on the
-   NEXT tap elsewhere, which is exactly the behaviour reported. This is
-   a different bug from the tap-highlight-colour one already fixed
-   below (that one was an overlay iOS itself paints; this is a real CSS
-   rule firing and staying applied) — the zoom buttons' own `background:
-   white` has lower specificity than this element+pseudo-class rule, so
-   the accent-dark fill below was winning and sticking for as long as
-   the phantom :hover state lasted. */
-@media (hover: hover) {
-  button:hover {
-    background: var(--accent-dark);
-  }
+button:hover {
+  background: var(--accent-dark);
 }
 
 button:active {
@@ -1581,15 +1571,6 @@ footer a:hover,
   margin: 0 0 10px;
   font-size: 13px;
   text-align: right;
-}
-
-/* Map page's own back-link now lives inside .title-bar-right, sharing
-   the header row with the Settings icon and "Map" title (see map.html)
-   instead of its old separate row above the title. The 10px bottom
-   margin above was sized for that separate row and just adds a lopsided
-   gap once it's a flex child sitting inline with everything else. */
-.title-bar .back-link {
-  margin: 0;
 }
 
 .help-section h2 {
@@ -2325,10 +2306,25 @@ footer {
   position: fixed; inset: 0;
   background: rgba(20, 30, 24, 0.35);
   opacity: 0; pointer-events: none;
-  transition: opacity .22s ease;
+  /* visibility alongside opacity so a closed backdrop is genuinely out
+     of the compositing tree rather than merely transparent. An
+     opacity:0 fixed overlay still covering the whole viewport is
+     exactly the kind of thing iOS can keep counting when it decides
+     what colour sits under the status bar (see
+     forceIOSStatusBarRelayout in app.js for the confirmed sampling
+     behaviour) — this removes any question of it lingering. Delayed by
+     the transition duration so the fade-out is still visible; on open
+     it applies immediately. */
+  visibility: hidden;
+  transition: opacity .22s ease, visibility 0s linear .22s;
   z-index: 10;
 }
-.sheet-backdrop.is-open { opacity: 1; pointer-events: auto; }
+.sheet-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transition: opacity .22s ease;
+}
 
 .sheet {
   position: fixed;
@@ -2833,14 +2829,7 @@ footer {
      only a cap for a genuinely long line (several active layers'
      readouts at once on a narrow phone), not the pill's normal size. */
   right: 8px;
-  /* Was bottom:8px — moved to the top corner on request, now that the
-     line has shrunk down to just the time (+ readout): nothing left on
-     the map itself for it to sit close to at the bottom, and the top
-     corner is clear of both the crosshair and the layer toggles below
-     the map. The front page strip's own pill (.map-strip-scale) stays
-     bottom-right, unchanged — this was only ever about the expanded
-     map's version. */
-  top: 8px;
+  bottom: 8px;
   max-width: calc(100% - 16px);
   white-space: normal;
   font-size: 13px;
