@@ -24,7 +24,8 @@ jobs:
         env:
           FORECAST_LAT: ${{ secrets.FORECAST_LAT }}
           FORECAST_LON: ${{ secrets.FORECAST_LON }}
-        run: node scripts/collect-weather.js
+          FORECAST_AREA_CODE: ${{ secrets.FORECAST_AREA_CODE }}
+        run: node scripts/collect-weather.mjs
 
       - name: Commit updated history
         run: |
