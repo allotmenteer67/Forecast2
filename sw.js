@@ -71,6 +71,14 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
+// Bumped to v16: map.js now persists its weather grid to localStorage
+// (same MAP_STALE_MS window its in-memory checks already use, keyed on
+// rounded centre + radius, values rounded to 1dp to keep the worst-case
+// 150km grid under ~0.9MB). map.html is its own document, so every
+// arrival previously started with an empty grid and refetched 81-361
+// locations — the same per-location billing that caused the daily-limit
+// error, now closed on the map page as well as the strip.
+//
 // Bumped to v15: the title strip overlapping the status bar, now with
 // a cause. viewport-fit=cover lets the page draw under the status bar,
 // and .app relied on env(safe-area-inset-top) to clear it — but in
@@ -109,7 +117,7 @@
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v15";
+const CACHE_NAME = "cloude-shell-v16";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

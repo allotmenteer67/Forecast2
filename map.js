@@ -539,6 +539,87 @@ let mapGrid = null;
 let mapGridFetchedAt = 0;
 let mapGridCentre = null;
 
+// ---- Persistent grid cache ----
+// ensureGrid's in-memory checks below (MAP_STALE_MS + the movement test)
+// already stop a pan or a zoom from refetching unnecessarily WITHIN one
+// visit to this page. What they can't help with is that map.html is its
+// own document: every navigation here starts with mapGrid === null, so
+// front page -> map -> back -> map paid for a whole grid each time. At
+// 81-361 locations per fetch, and Open-Meteo billing multi-location
+// requests per location, a few trips to the map is a meaningful slice of
+// a 10,000/day free-tier allowance — the same arithmetic that produced
+// the daily-limit error the map strip's own cache now avoids.
+//
+// TTL is MAP_STALE_MS deliberately, not a new number: a restored entry
+// is then indistinguishable from an in-memory grid of the same age, and
+// ensureGrid's existing staleness and movement logic governs it without
+// needing to know the cache exists at all. Nothing gets shown that
+// wouldn't already have been shown by staying on the page.
+const MAP_GRID_CACHE_KEY = "forecast-compare:mapGrid";
+
+// Values are rounded on the way in. A full 150km grid is ~208,000
+// numbers, and stored at full float precision that runs to well over a
+// megabyte of a ~5MB localStorage budget this app shares with FFV
+// history, eligibility and everything else. One decimal place is finer
+// than any of these layers actually render (rain bands, a temperature
+// gradient, isobars, wind arrows) and roughly halves the payload.
+function roundGridFrames(frames) {
+  // null is preserved rather than coerced to 0. fetchWeatherGrid stores
+  // a genuine null wherever Open-Meteo had no value, and the render
+  // layers treat that as "nothing to draw" — flattening it to 0 would
+  // invent a real 0mm/0°C/0hPa reading instead, which for temperature
+  // and pressure especially would draw plainly wrong data rather than a
+  // gap.
+  return frames.map(frame => frame.map(row => row.map(v =>
+    (v === null || v === undefined) ? null : Math.round(v * 10) / 10
+  )));
+}
+
+function mapGridCacheKey(centre, radiusKm) {
+  return `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)}@${radiusKm}`;
+}
+
+function saveMapGridCache(centre, radiusKm, grid) {
+  try {
+    const slim = { ...grid };
+    for (const field of ["rain", "temp", "pressure", "windSpeed", "windDir", "cloudLow", "cloudMid", "cloudHigh"]) {
+      if (Array.isArray(slim[field])) slim[field] = roundGridFrames(slim[field]);
+    }
+    localStorage.setItem(MAP_GRID_CACHE_KEY, JSON.stringify({
+      key: mapGridCacheKey(centre, radiusKm),
+      cachedAt: Date.now(),
+      grid: slim
+    }));
+  } catch {
+    // Almost always a quota rejection on the largest zoom. Drop the
+    // entry entirely rather than leaving a half-written or stale one
+    // behind — the map then behaves exactly as it did before this cache
+    // existed, which is a perfectly good outcome.
+    try { localStorage.removeItem(MAP_GRID_CACHE_KEY); } catch {}
+  }
+}
+
+// Only ever consulted when there's nothing in memory (see ensureGrid),
+// so this can't override a fresher grid the current session already has.
+// Restores mapGridFetchedAt to the ORIGINAL fetch time, not now —
+// pretending a restored grid is brand new would let it sit unrefreshed
+// for another full MAP_STALE_MS on top of however long it was cached.
+function hydrateMapGridFromCache(centre, radiusKm) {
+  try {
+    const raw = localStorage.getItem(MAP_GRID_CACHE_KEY);
+    if (!raw) return false;
+    const entry = JSON.parse(raw);
+    if (entry.key !== mapGridCacheKey(centre, radiusKm)) return false;
+    if (Date.now() - entry.cachedAt > MAP_STALE_MS) return false;
+    mapGrid = entry.grid;
+    mapGridCentre = { ...centre };
+    mapGridFetchedAt = entry.cachedAt;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Anchored to real latitude and longitude, NOT to the grid's own row and
 // column indices.
 //
@@ -789,6 +870,14 @@ let mapGridInFlight = null;
 let mapGridQueuedArgs = null;
 
 async function ensureGrid(centre, radiusKm, force) {
+  // Nothing in memory yet — this is a fresh arrival on the page, which
+  // is precisely the case the persistent cache exists for. Done before
+  // the staleness/movement tests below so a restored grid is then judged
+  // by exactly the same rules as one fetched in this session; a hit that
+  // turns out to be stale or too far from the current centre still falls
+  // through to a fetch, same as always.
+  if (!mapGrid && !force) hydrateMapGridFromCache(centre, radiusKm);
+
   const stale = Date.now() - mapGridFetchedAt > MAP_STALE_MS;
   const moved = !mapGridCentre || haversineKm(
     mapGridCentre.lat, mapGridCentre.lon, centre.lat, centre.lon
@@ -816,6 +905,7 @@ async function runGridFetch(centre, radiusKm) {
     mapGrid = await fetchWeatherGrid(centre, radiusKm);
     mapGridCentre = { ...centre };
     mapGridFetchedAt = Date.now();
+    saveMapGridCache(centre, radiusKm, mapGrid);
     setMapStatus("");
   } catch (err) {
     // One silent retry before giving up — a lot of what shows up as
@@ -828,6 +918,7 @@ async function runGridFetch(centre, radiusKm) {
       mapGrid = await fetchWeatherGrid(centre, radiusKm);
       mapGridCentre = { ...centre };
       mapGridFetchedAt = Date.now();
+      saveMapGridCache(centre, radiusKm, mapGrid);
       setMapStatus("");
     } catch (retryErr) {
       // Keep whatever was last drawn rather than blanking. If the daily
@@ -1270,20 +1361,7 @@ registerMapLayer({
   id: "waterways",
   draw(ctx, view) {
     const p = mapPalette();
-    // Rivers and the coastline come from two separate datasets that
-    // don't perfectly agree at estuary mouths — a river's own line can
-    // run a short way past where the coastline data says land actually
-    // ends, which reads as the river carrying on out into open sea
-    // (reported: Exe, Sid and Teign estuaries all showing this).
-    // clipToLand() already exists for exactly this shape of problem
-    // (see the terrain layer above) — reused here rather than writing
-    // a second version, since the fix is the same: whatever geometry
-    // falls outside the land polygon just doesn't get painted,
-    // regardless of what the source data says.
-    ctx.save();
-    clipToLand(ctx, view);
     drawMapWaterways(ctx, mapVectorData.waterways, view, p.river);
-    ctx.restore();
   }
 });
 
