@@ -26,7 +26,17 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <!-- "default" (the previous value) makes iOS paint its own solid,
+       opaque bar behind the clock/battery icons — visible as a flat grey
+       strip that never matches the app's own background, on cold launch
+       and every time it happens to repaint, independent of the sheet-
+       close grey-strip issue tracked elsewhere in app.js/sw.js.
+       "black-translucent" makes that bar transparent instead, so the
+       page's own background paints all the way up — viewport-fit=cover
+       plus the existing env(safe-area-inset-top) padding on .app (see
+       style.css) already keep content clear of the notch/status-bar
+       area, so nothing else needs to change for this to be safe. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Cloude">
   <title>Cloude</title>
   <link rel="stylesheet" href="style.css">

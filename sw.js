@@ -63,7 +63,15 @@
 // ahead. tide-ui.js is in SHELL_FILES, so without this bump it would
 // keep being served from the v8 cache and the fix would look like it
 // hadn't worked.
-const CACHE_NAME = "cloude-shell-v9";
+// Bumped to v10: apple-mobile-web-app-status-bar-style changed from
+// "default" to "black-translucent" on every page (index/compare/
+// settings/help/map .html) — "default" was iOS painting its own solid
+// grey bar behind the status-bar icons on every launch, unrelated to
+// the sheet-close grey-strip issue noted in v7 above. All five .html
+// files are in SHELL_FILES, so without this bump they'd keep being
+// served from the v9 cache and the fix would look like it hadn't
+// worked.
+const CACHE_NAME = "cloude-shell-v10";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
