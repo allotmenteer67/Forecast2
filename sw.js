@@ -71,6 +71,20 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
+// Bumped to v17: map-strip.js's mapStripView scaled pixels-per-km from
+// Math.min(w, h) — on the strip's landscape canvas that locks the SHORT
+// side (height) to the intended 25km radius but lets the LONG side
+// (width) run past it, so on a typical phone aspect ratio the width was
+// showing ~40km radius while fetchMapStripGrid only fetches out to
+// ~37.5km. Anything beyond that fetched square silently skipped
+// rendering, seen on-device as the weather layer clipped to a
+// rectangle visibly inset from the strip's own left/right edges.
+// Math.max(w, h) instead caps the LONGEST side at the intended radius,
+// so neither side can ever ask for more than what's fetched. No fetch
+// or caching logic touched. map-strip.js is in SHELL_FILES, so without
+// this bump it would keep being served from the v16 cache and the fix
+// would look like it hadn't worked.
+//
 // Bumped to v16: map.js now persists its weather grid to localStorage
 // (same MAP_STALE_MS window its in-memory checks already use, keyed on
 // rounded centre + radius, values rounded to 1dp to keep the worst-case
@@ -117,7 +131,7 @@
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v16";
+const CACHE_NAME = "cloude-shell-v17";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
