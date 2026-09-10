@@ -35,7 +35,17 @@
 // any of this. Textbook case of exactly what these version bumps
 // exist to prevent: real new code sitting unseen behind a cache that
 // looks current but predates it.
-const CACHE_NAME = "cloude-shell-v6";
+// Bumped to v7: the river/estuary clip fix in map.js (rivers were
+// drawing out into the sea at estuary mouths — clipToLand now applied
+// to the waterways layer) and the iOS status-bar relayout fix in
+// app.js (forceIOSStatusBarRelayout, replacing the scroll-only nudge
+// that was confirmed on a real device NOT to clear the grey strip).
+// Both are files already in SHELL_FILES, so both would otherwise be
+// served from the v6 cache indefinitely — the exact failure mode the
+// v6 note below describes, one deploy later. The status-bar fix in
+// particular would be impossible to evaluate from behind a stale
+// cache: it'd look like the fix simply didn't work.
+const CACHE_NAME = "cloude-shell-v7";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
