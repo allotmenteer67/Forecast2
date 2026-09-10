@@ -340,15 +340,22 @@ function elevationAt(grid, lat, lon) {
   return (v === null || v === undefined) ? null : v;
 }
 
-// Returns a plain string reason if the location is too high above sea
-// level to plausibly have a tide, or null if it passes (including when
+// Returns a plain string reason if the location's elevation looks
+// unusual for a tidal spot, or null if it passes (including when
 // elevation data couldn't be loaded — see loadTideElevationGrid above).
+// A WARNING, not a rejection — see the fuller reasoning at its call
+// site in performAddTideLocation (tide-ui.js) for why this can't
+// safely be a hard block: the underlying terrain grid is coarse enough
+// to misread a coastal village near steep ground, and a genuine
+// clifftop address can correctly read high anyway. The wording here
+// deliberately doesn't tell the person their answer is wrong — it
+// doesn't know that — only that it's worth a second look.
 async function checkTideElevationPlausibility(lat, lon) {
   const grid = await loadTideElevationGrid();
   const elevation = elevationAt(grid, lat, lon);
   if (elevation === null) return null; // unknown — don't block on it
   if (elevation <= TIDE_MAX_PLAUSIBLE_ELEVATION_M) return null;
-  return `That's about ${Math.round(elevation)}m above sea level — too high for a real tide (the UK's biggest tidal range is only around 15m). If this is meant to be a tidal river reach, try a spot right on the water rather than the village/area centre.`;
+  return `That's showing as about ${Math.round(elevation)}m above sea level — unusual for a tidal location (the UK's biggest tidal range is only around 15m). Could be right if this is genuinely a clifftop spot; could also just be the terrain data missing a dip nearby, especially somewhere hilly right by the coast.`;
 }
 
 // Haversine distance in km — plenty precise for "which of 44 UK coastal

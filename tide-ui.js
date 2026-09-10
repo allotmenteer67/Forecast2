@@ -1139,6 +1139,29 @@ function renderAddToWeatherPrompt(resolved, rawInput) {
   tideAddToWeatherPrompt.hidden = false;
 }
 
+// The elevation-warning counterpart to the prompt just above — same
+// shape (a status line plus one button), different job: this one
+// resumes the SAME add that was paused, rather than starting a
+// different one. See checkTideElevationPlausibility (tide.js) and the
+// comment above its call in performAddTideLocation for why this is a
+// confirmable warning rather than a hard block.
+const tideElevationWarningPrompt = document.getElementById("tideElevationWarningPrompt");
+
+function renderTideElevationWarningPrompt(onConfirm) {
+  if (!tideElevationWarningPrompt) return;
+  tideElevationWarningPrompt.innerHTML = "";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "add-to-other-button";
+  button.textContent = "Add anyway";
+  button.addEventListener("click", () => {
+    tideElevationWarningPrompt.hidden = true;
+    onConfirm();
+  });
+  tideElevationWarningPrompt.appendChild(button);
+  tideElevationWarningPrompt.hidden = false;
+}
+
 // Matches typed input directly against the app's own 44 EA tide gauges
 // before ever reaching the general place geocoder — added after
 // "Hinkley Point" (the power station itself, not a town) failed to
@@ -1170,6 +1193,7 @@ async function performAddTideLocation() {
 
   setTideLocationStatus("Looking up location…", false);
   if (tideAddToWeatherPrompt) tideAddToWeatherPrompt.hidden = true;
+  if (tideElevationWarningPrompt) tideElevationWarningPrompt.hidden = true;
   try {
     const knownStation = matchKnownStationName(input);
     const resolved = knownStation
@@ -1180,37 +1204,34 @@ async function performAddTideLocation() {
     // tide.js for the full reasoning. Skipped for a direct known-gauge
     // match above: those 44 coordinates are real, published tide
     // stations by definition, so there's nothing to sanity-check there.
+    //
+    // A WARNING with an override, not a hard block — elevation alone
+    // can't safely be a hard yes/no gate. Two separate problems showed
+    // that up: (1) the underlying terrain grid is coarse (~8km between
+    // sample points, built for map hillshading, not precision lookups),
+    // so a coastal village right next to steep terrain — Kilve, at the
+    // foot of the Quantocks — can land its nearest sample partway up
+    // the hillside and read as ~289m when the real spot is closer to
+    // sea level; (2) even a perfectly accurate reading doesn't settle
+    // it either way — a genuine clifftop address (a lighthouse, a
+    // coastguard lookout) can correctly sit 60-100m+ directly above
+    // real tidal water, so "high" can't safely mean "reject" on its
+    // own. A confirmable warning covers both: Kilve's obviously-wrong
+    // number is a single glance and one tap through, a genuine
+    // clifftop spot is the same one tap and gets added correctly, and
+    // nobody sane taps through 1345m for Ben Nevis — the original
+    // case this was built to catch still gets caught in practice
+    // without the hard block's false positives.
     if (!knownStation) {
-      const implausible = await checkTideElevationPlausibility(resolved.lat, resolved.lon);
-      if (implausible) {
-        setTideLocationStatus(implausible, true);
+      const warning = await checkTideElevationPlausibility(resolved.lat, resolved.lon);
+      if (warning) {
+        setTideLocationStatus(warning, true);
+        renderTideElevationWarningPrompt(() => finishAddTideLocation(resolved, input));
         return;
       }
     }
 
-    const station = nearestTideStation(resolved.lat, resolved.lon);
-    const locations = loadTideLocations();
-    const newLocation = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      label: resolved.label || input,
-      // This location's OWN coordinates, distinct from the nearest EA
-      // gauge's (station.lat/lon) — needed so an Admiralty check
-      // searches near the actual saved place (e.g. Lyme Regis) rather
-      // than near its nearest gauge (Weymouth), which are often not
-      // the same station and can be tens of km apart. Without this,
-      // "nearest Admiralty station" was silently resolving to the
-      // gauge's own station instead of the real target location.
-      lat: resolved.lat,
-      lon: resolved.lon,
-      station
-    };
-    locations.push(newLocation);
-    saveTideLocations(locations);
-    if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
-    if (tideLocationInput) tideLocationInput.value = "";
-    setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
-    renderTideLocationsList();
-    renderAddToWeatherPrompt(resolved, input);
+    await finishAddTideLocation(resolved, input);
   } catch (err) {
     if (err && err.name === "AmbiguousLocationError") {
       setTideLocationStatus(`That place name matches more than one UK location — try adding a county.`, true);
@@ -1218,6 +1239,37 @@ async function performAddTideLocation() {
       setTideLocationStatus(err.message || "Couldn't look up that location.", true);
     }
   }
+}
+
+// Split out of performAddTideLocation so the elevation-warning "Add
+// anyway" button (renderTideElevationWarningPrompt) can resume from
+// here directly, reusing the SAME resolved location rather than
+// re-running the geocoder/ambiguity check a second time.
+async function finishAddTideLocation(resolved, input) {
+  const station = nearestTideStation(resolved.lat, resolved.lon);
+  const locations = loadTideLocations();
+  const newLocation = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: resolved.label || input,
+    // This location's OWN coordinates, distinct from the nearest EA
+    // gauge's (station.lat/lon) — needed so an Admiralty check
+    // searches near the actual saved place (e.g. Lyme Regis) rather
+    // than near its nearest gauge (Weymouth), which are often not
+    // the same station and can be tens of km apart. Without this,
+    // "nearest Admiralty station" was silently resolving to the
+    // gauge's own station instead of the real target location.
+    lat: resolved.lat,
+    lon: resolved.lon,
+    station
+  };
+  locations.push(newLocation);
+  saveTideLocations(locations);
+  if (!loadCurrentTideLocationId()) saveCurrentTideLocationId(newLocation.id);
+  if (tideLocationInput) tideLocationInput.value = "";
+  if (tideElevationWarningPrompt) tideElevationWarningPrompt.hidden = true;
+  setTideLocationStatus(`Added — nearest tide gauge is ${station.label}, ${station.distanceKm.toFixed(0)}km away.`, false);
+  renderTideLocationsList();
+  renderAddToWeatherPrompt(resolved, input);
 }
 
 if (addTideLocationButton) {
