@@ -35,14 +35,6 @@
 // any of this. Textbook case of exactly what these version bumps
 // exist to prevent: real new code sitting unseen behind a cache that
 // looks current but predates it.
-// Bumped to v8: the same river/estuary clip fix now applied to
-// map-strip.js as well. v7 covered map.js's own waterways layer, but
-// the front-page strip draws rivers through its own separate code
-// path and was missed — confirmed on a real device, where the
-// expanded map came out correct and the strip still showed rivers
-// running into the sea. map-strip.js is in SHELL_FILES, so without
-// this bump the strip would keep being served from the v7 cache and
-// the fix would look like it hadn't worked.
 //
 // Bumped to v7: the river/estuary clip fix in map.js (rivers were
 // drawing out into the sea at estuary mouths — clipToLand now applied
@@ -54,7 +46,24 @@
 // v6 note below describes, one deploy later. The status-bar fix in
 // particular would be impossible to evaluate from behind a stale
 // cache: it'd look like the fix simply didn't work.
-const CACHE_NAME = "cloude-shell-v8";
+//
+// Bumped to v8: the same river/estuary clip fix now applied to
+// map-strip.js as well. v7 covered map.js's own waterways layer, but
+// the front-page strip draws rivers through its own separate code
+// path and was missed — confirmed on a real device, where the
+// expanded map came out correct and the strip still showed rivers
+// running into the sea. map-strip.js is in SHELL_FILES, so without
+// this bump the strip would keep being served from the v7 cache and
+// the fix would look like it hadn't worked.
+//
+// Bumped to v9: tide sheet now opens scrolled to the last past tide
+// event instead of the raw left edge of the 24h-past/72h-future
+// window — previously every open started a full day back, showing
+// tides that had already happened before you could see what's still
+// ahead. tide-ui.js is in SHELL_FILES, so without this bump it would
+// keep being served from the v8 cache and the fix would look like it
+// hadn't worked.
+const CACHE_NAME = "cloude-shell-v9";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
