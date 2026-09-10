@@ -4082,25 +4082,39 @@ function closeHourlySheet() {
   sheet.classList.remove("is-open");
   window.setTimeout(() => {
     if (!sheet.classList.contains("is-open")) sheet.hidden = true;
-    // Best-effort attempt at the reported grey strip that appears over
-    // the status-bar area once any sheet has been opened, and stays
-    // until a real page navigation happens — never reproducible here
-    // (no physical device to test against), so this is a reasoned guess
-    // rather than a confirmed fix. .sheet is `position: fixed` with a
-    // `100dvh`-based max-height (see style.css); the working theory is
-    // that iOS commits to a particular dynamic-toolbar state while that
-    // fixed element is on screen and doesn't always cleanly release it
-    // on close, leaving the safe-area/status-bar region rendering stale
-    // — the same general class of bug already found and fixed once for
-    // the front page's own cold-launch sizing (see the matching
-    // requestAnimationFrame note in map-strip.js's initMapStrip). A
-    // no-op scroll is a standard, harmless nudge for convincing WebKit
-    // to fully recompute the viewport rather than trusting a stale one;
-    // only worth keeping if it's actually confirmed to help.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
-    });
+    // The grey strip over the status-bar area after closing the sheet
+    // is now confirmed on a real device — and confirmed that the
+    // scroll-only nudge below did NOT fix it. What DOES reliably clear
+    // it is a real page navigation (open the map, "← Back to Cloude"),
+    // which forces iOS to fully recompute the page's layout rather
+    // than trusting whatever it cached while .sheet — `position:
+    // fixed`, 100dvh-based height (see style.css) — was on screen.
+    // forceRelayout() below is a much stronger nudge than a no-op
+    // scroll: toggling display:none and back forces a genuine
+    // synchronous reflow of the whole page, the same class of
+    // recompute a real navigation gets for free. Keeping the scroll
+    // nudge too since it's harmless and was already here, but it's the
+    // reflow doing the real work now.
+    forceIOSStatusBarRelayout();
   }, 280);
+}
+
+// Forces a full synchronous reflow by briefly removing <body> from the
+// render tree and putting it back — a much heavier hammer than a
+// no-op scroll, needed because the scroll-only version (see
+// closeHourlySheet's history) was confirmed on a real device NOT to
+// clear the stale grey status-bar strip. Reading offsetHeight in
+// between is what forces the reflow to actually happen synchronously
+// rather than being batched/skipped by the browser.
+function forceIOSStatusBarRelayout() {
+  const body = document.body;
+  const prevDisplay = body.style.display;
+  body.style.display = "none";
+  void body.offsetHeight; // eslint-disable-line no-unused-expressions -- forces sync reflow
+  body.style.display = prevDisplay;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
+  });
 }
 
 function openHourlySheet(conditionName) {
@@ -5243,29 +5257,10 @@ document.addEventListener("visibilitychange", () => {
 // standalone-app resume), so it catches what visibilitychange misses.
 // Harmless to call unconditionally — resetHourly() is a no-op if hourly
 // mode wasn't active.
-window.addEventListener("pageshow", event => {
+window.addEventListener("pageshow", () => {
   if (state.hourlyActive) {
     resetHourly();
     renderHeadline();
-  }
-  // event.persisted means this page was restored from the back-forward
-  // cache rather than freshly loaded — exactly what happens navigating
-  // "← Back to Cloude" from map.html back to here. Reported: a grey
-  // strip left over the status-bar/notch area after that trip,
-  // persisting until a real navigation. A no-op scroll nudge was
-  // already tried for the sheet-open/close version of this same class
-  // of bug (see closeHourlySheet) but that only covers the sheet, not
-  // this page-to-page path, which never ran any nudge at all — a
-  // bfcache restore paints the page from a cached snapshot without
-  // necessarily re-settling iOS's own dynamic-toolbar/safe-area state,
-  // the same underlying issue as the sheet case and the cold-launch map
-  // strip sizing (map-strip.js's initMapStrip), just triggered here by
-  // navigation instead. Two rAFs, matching that cold-launch fix's own
-  // reasoning for why one alone isn't reliably enough.
-  if (event.persisted) {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
-    });
   }
 });
 
