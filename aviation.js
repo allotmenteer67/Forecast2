@@ -110,6 +110,81 @@ function nearestMetarStation(lat, lon) {
   return best ? { ...best, distanceKm: bestDist } : null;
 }
 
+// ---- Quadrant matching (up to 4 stations: one N, E, S, W of a place) ----
+//
+// Why: a single nearest station can just be a local outlier — its own
+// terrain, its own coastal quirk. Several stations spread around a
+// location let a genuine forecast bias (all four disagree the same
+// way) be told apart from a station-specific one (only the coastal
+// one does). This directly informed by the person's own worked
+// example: The Lizard has real UK stations to its north and west, but
+// none within a sane distance to the south (open Atlantic) or east —
+// forcing a quadrant to use something 150km away would make the
+// comparison worse, not better, so an empty/skipped quadrant here is
+// the CORRECT outcome, not a gap to paper over.
+//
+// Compass bearing (0-360, the direction FROM the location TO the
+// station), not just distance — needed to sort stations into N/E/S/W
+// in the first place. Standard great-circle bearing formula.
+function bearingDegrees(lat1, lon1, lat2, lon2) {
+  const toRad = d => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  const theta = Math.atan2(y, x);
+  return (theta * 180 / Math.PI + 360) % 360;
+}
+
+// Four 90° wedges centred on N/E/S/W rather than 8-point compass —
+// deliberately coarse. The goal is "is this bias general or
+// direction-specific", which four broad buckets answer; splitting
+// into 8 would mostly just multiply how often a bucket comes up empty
+// for no real gain in what the comparison can tell you.
+function quadrantForBearing(bearing) {
+  if (bearing >= 315 || bearing < 45) return "N";
+  if (bearing < 135) return "E";
+  if (bearing < 225) return "S";
+  return "W";
+}
+
+// Two thresholds, not one hard cutoff — this is the "fuzzy" part.
+// Under PREFERRED, a station is used at full confidence. Between
+// PREFERRED and FALLBACK, it's still used (better than nothing for
+// that direction) but flagged reducedConfidence so anything consuming
+// this later can choose to weight it down rather than treat a 100km
+// reading the same as an 20km one. Past FALLBACK, the quadrant is
+// left empty rather than stretched to fill it.
+const QUADRANT_PREFERRED_MAX_KM = 50;
+const QUADRANT_FALLBACK_MAX_KM = 120;
+
+// Returns 0-4 entries — however many quadrants actually have a
+// station worth using, never padded to 4. Each station can only ever
+// appear in the one quadrant its bearing puts it in, so there's no
+// risk of the same airport being double-counted from two directions.
+function nearestStationsByQuadrant(lat, lon) {
+  const byQuadrant = { N: [], E: [], S: [], W: [] };
+  UK_METAR_STATIONS.forEach(station => {
+    const distanceKm = aviationHaversineKm(lat, lon, station.lat, station.lon);
+    const bearing = bearingDegrees(lat, lon, station.lat, station.lon);
+    byQuadrant[quadrantForBearing(bearing)].push({ ...station, distanceKm, bearing });
+  });
+
+  const result = [];
+  for (const quadrant of ["N", "E", "S", "W"]) {
+    const nearest = byQuadrant[quadrant].sort((a, b) => a.distanceKm - b.distanceKm)[0];
+    if (!nearest || nearest.distanceKm > QUADRANT_FALLBACK_MAX_KM) continue; // genuinely nothing usable in this direction — skip it, don't force one
+    result.push({
+      quadrant,
+      icao: nearest.icao,
+      name: nearest.name,
+      distanceKm: nearest.distanceKm,
+      bearing: nearest.bearing,
+      reducedConfidence: nearest.distanceKm > QUADRANT_PREFERRED_MAX_KM
+    });
+  }
+  return result;
+}
+
 // ---- Proxy URL, same localStorage pattern as tide.js's Discovery proxy ----
 
 const AVIATION_PROXY_STORAGE = "cloude-aviation:proxyUrl";
@@ -235,10 +310,11 @@ function decodeMetarClouds(rawOb) {
 // range or the fetch comes back empty, so callers can treat "no
 // ground truth available here" as a normal, expected outcome rather
 // than an error state — same convention as nearestTideStation callers.
-async function getAviationGroundTruth(lat, lon) {
-  const station = nearestMetarStation(lat, lon);
-  if (!station) return null;
-
+// Shared by both entry points below: fetch one station's METAR and
+// decode it. Pulled out on its own so the quadrant version isn't just
+// copy-pasting the single-station version's fetch/decode/shape logic
+// four times over.
+async function fetchAndDecodeMetar(station) {
   const res = await fetchMetarRaw(station.icao);
   if (!res.ok) throw new Error(`METAR fetch failed: ${res.status}`);
   const data = await res.json();
@@ -248,9 +324,50 @@ async function getAviationGroundTruth(lat, lon) {
   const clouds = decodeMetarClouds(entry.rawOb);
   return {
     station: { icao: station.icao, name: station.name, distanceKm: station.distanceKm },
-    beyondUsefulRange: station.distanceKm > AVIATION_MAX_USEFUL_DISTANCE_KM,
     observedAt: entry.obsTime ? new Date(entry.obsTime * 1000).toISOString() : null,
     rawText: entry.rawOb,
     ...clouds
   };
+}
+
+// Single-station entry point — nearest station only, regardless of
+// direction. Left in place for anything that only wants one quick
+// reading rather than a directional spread (e.g. a future display use,
+// where showing four stations' worth of numbers would be exactly the
+// clutter the person didn't want).
+async function getAviationGroundTruth(lat, lon) {
+  const station = nearestMetarStation(lat, lon);
+  if (!station) return null;
+  const result = await fetchAndDecodeMetar(station);
+  if (!result) return null;
+  return { ...result, beyondUsefulRange: station.distanceKm > AVIATION_MAX_USEFUL_DISTANCE_KM };
+}
+
+// Multi-station entry point for the actual FFV-comparison use case:
+// up to 4 stations (one per compass quadrant, see
+// nearestStationsByQuadrant for why some locations get fewer), fetched
+// in parallel. Uses allSettled rather than all — one station's flaky
+// network response shouldn't discard the three others that came back
+// fine, and a place near the coast/border genuinely might have a
+// quadrant backed by a station that occasionally times out.
+async function getAviationGroundTruthByQuadrant(lat, lon) {
+  const stations = nearestStationsByQuadrant(lat, lon);
+  if (!stations.length) return [];
+
+  const settled = await Promise.allSettled(
+    stations.map(station => fetchAndDecodeMetar(station))
+  );
+
+  return stations
+    .map((station, i) => {
+      const outcome = settled[i];
+      if (outcome.status !== "fulfilled" || !outcome.value) return null;
+      return {
+        ...outcome.value,
+        quadrant: station.quadrant,
+        bearing: station.bearing,
+        reducedConfidence: station.reducedConfidence
+      };
+    })
+    .filter(Boolean); // drops quadrants whose fetch failed or came back empty, same "skip rather than force" principle as the matching itself
 }
