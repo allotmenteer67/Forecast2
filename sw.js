@@ -71,6 +71,15 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
+// Bumped to v18: map.html's header had regressed back to its old
+// three-row layout (Settings buried in a bottom nav, "Back to Cloude"
+// and "Map" stacked on separate lines) — the single-row .title-bar
+// version (Settings icon + centred title + Back to Cloude, matching
+// the front page's own header) was restored, and the now-duplicate
+// bottom-nav Settings link removed. map.html is in SHELL_FILES, so
+// without this bump it would keep being served from the v17 cache and
+// the restored header would look like it hadn't taken effect.
+//
 // Bumped to v17: map-strip.js's mapStripView scaled pixels-per-km from
 // Math.min(w, h) — on the strip's landscape canvas that locks the SHORT
 // side (height) to the intended 25km radius but lets the LONG side
@@ -131,7 +140,7 @@
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v17";
+const CACHE_NAME = "cloude-shell-v18";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

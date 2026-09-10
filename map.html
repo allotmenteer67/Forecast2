@@ -45,8 +45,38 @@
 <body>
   <main class="app">
     <header>
-      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <h1 class="map-page-title">Map</h1>
+      <!-- Matches the front page's own .title-bar exactly (see
+           index.html): Settings icon top-left, title centred, one more
+           control on the right — "Back to Cloude" standing in for the
+           front page's place chip in that slot. Was three separate
+           rows (a Settings link buried in the bottom nav, the back
+           link, and the title each on their own line) — asked to read
+           as the same header as the front page rather than its own
+           different layout.
+           RESTORED after a regression: this block had reverted back to
+           that old three-row layout in the version uploaded to Project
+           Knowledge (cause unclear — likely an out-of-date file
+           re-uploaded over the fixed one), confirmed via an on-device
+           screenshot showing "Back to Cloude" and "Map" stacked on
+           separate lines again with no settings icon. Restored here
+           character-for-character from Project Knowledge's own older,
+           correct copy of this file. -->
+      <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
+        <h1 class="map-page-title">Map</h1>
+        <div class="title-bar-right">
+          <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
+        </div>
+      </div>
     </header>
 
     <!-- Controls sit ABOVE the map, not beside or below it: there is more
@@ -203,15 +233,11 @@
       </div>
     </section>
 
-    <!-- Reduced to Settings alone — Compare/Solar/Help all live behind it
-         now, and "← Back to Cloude" above already covers the one other
-         place people actually jump to from here. A four-link row cost
-         more vertical space than it earned on a page whose whole point is
-         the map itself; see the deeper #mapCanvas aspect-ratio in
-         style.css, freed up by the same trim. -->
-    <nav class="bottom-nav">
-      <a href="settings.html">Settings</a>
-    </nav>
+    <!-- Bottom-nav Settings link removed — it duplicated the settings
+         icon restored to the header above (see that comment). The
+         front page (index.html) has no bottom-nav at all for the same
+         reason: once Settings lives in the title-bar, a second link to
+         the same place lower down is pure redundancy, not a fallback. -->
   </main>
 
   <script src="app.js"></script>
