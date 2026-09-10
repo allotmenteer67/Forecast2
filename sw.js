@@ -71,6 +71,22 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
+// Bumped to v15: the title strip overlapping the status bar, now with
+// a cause. viewport-fit=cover lets the page draw under the status bar,
+// and .app relied on env(safe-area-inset-top) to clear it — but in
+// standalone (installed PWA) mode iOS does not reliably report that
+// inset, and when it resolves to 0 the calc collapsed to 2px, putting
+// the title and chips straight on top of the clock. style.css now uses
+// max(calc(2px + env(...)), 44px) under a display-mode: standalone
+// query, so a real inset still wins and a missing one gets a floor.
+//
+// Bumped to v14: map-strip.js now caches its grid fetch (localStorage,
+// 60 min, keyed on the rounded centre). That one call asks Open-Meteo
+// for 256 locations and Open-Meteo bills per location, so every
+// uncached front-page load spent ~256 of the 10,000/day free-tier
+// allowance — about 39 launches — which is what produced the "Daily API
+// request limit exceeded" error on device.
+//
 // Bumped to v13: the grey status-bar strip, now diagnosed properly —
 // iOS samples the page colour under the status bar WHILE the sheet
 // backdrop is open (the blend computes to exactly the reported grey)
@@ -93,7 +109,7 @@
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v13";
+const CACHE_NAME = "cloude-shell-v15";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

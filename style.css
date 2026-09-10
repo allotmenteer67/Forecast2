@@ -122,6 +122,30 @@ body {
   .app { padding: calc(2px + env(safe-area-inset-top)) 12px 12px; }
 }
 
+/* Installed-PWA-on-a-phone only. The rule above is correct wherever
+   env(safe-area-inset-top) actually reports a real inset — but in
+   standalone mode iOS does not reliably expose one, and when it resolves
+   to 0 the calc() collapses to a 2px top padding while viewport-fit=cover
+   is still letting the page draw right up under the status bar. That
+   combination is exactly the reported symptom: "Cloude", the settings
+   icon and the place chip all sitting on top of the clock and the
+   battery icon. Confirmed on-device after a full cache clear and
+   relaunch, so it isn't a stale-cache artifact.
+
+   max() keeps the correct value whenever iOS does report one (a notched
+   phone reporting 47-59px still gets 47-59px, not this floor), and only
+   supplies the floor when the inset is missing or too small to clear the
+   status bar on its own. 44px is the standard iOS status-bar height in
+   CSS pixels — enough to clear it on a notched device, and harmless on a
+   non-notched one where the bar is shorter.
+
+   Scoped to display-mode: standalone so a normal Safari tab, where the
+   browser's own chrome already provides this clearance and env() behaves
+   differently, is left completely untouched. */
+@media (max-width: 700px) and (display-mode: standalone) {
+  .app { padding-top: max(calc(2px + env(safe-area-inset-top)), 44px); }
+}
+
 header {
   /* Was 18px. The gap under the title was pure dead space on the front
      page — the single easiest saving, and it buys most of the map strip

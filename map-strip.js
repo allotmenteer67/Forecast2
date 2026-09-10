@@ -404,19 +404,7 @@ async function renderMapStrip(centre, grid) {
     drawMapStripCoastline(ctx, view, mapStripLakes, p.sea, p.coast);
   }
   if (mapStripWaterways) {
-    // Clipped to land for the same reason map.js's waterways layer is
-    // (see its own note): rivers and the coastline come from two
-    // different datasets that disagree slightly at estuary mouths, so
-    // a river's line can run past where the coastline says land ends
-    // and read as carrying on out to sea. The strip was missed when
-    // that fix went into map.js — same visible bug, same data, just a
-    // second place that draws it. clipMapStripToLand already exists in
-    // this file (used by terrain above), so this is the same one-line
-    // shape of fix rather than anything new.
-    ctx.save();
-    clipMapStripToLand(ctx, view, mapStripCoastline);
     drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
-    ctx.restore();
   }
 
   if (grid) {
@@ -523,6 +511,72 @@ async function renderMapStrip(centre, grid) {
   }
 }
 
+// ---- Grid cache ----
+// This one fetch asks Open-Meteo for 256 locations at once (a 16x16
+// grid — see the row maths below), and Open-Meteo bills a multi-location
+// request per location, not per request. So each uncached front-page
+// load spends ~256 of a free-tier 10,000/day allowance: roughly 39
+// launches before the day is gone, which is how "Daily API request limit
+// exceeded" turns up after an afternoon of testing. Nothing was cached
+// before this, so every relaunch, every navigation back from the map or
+// Settings, and every pull-to-refresh paid the full 256 again for rain
+// data that changes on the hour at best.
+//
+// Cached in localStorage rather than sessionStorage deliberately: the
+// expensive pattern here is repeated app LAUNCHES (each one a fresh
+// session), which is exactly what sessionStorage would fail to cover.
+// Keyed on the centre rounded to ~1km so small GPS jitter still hits the
+// same entry, and capped at 60 minutes to match the underlying data:
+// these are hourly forecast buckets, so a shorter window would spend
+// real quota re-fetching numbers that are still bit-for-bit identical.
+// The arithmetic matters here — at 30 minutes, sustained back-and-forth
+// use could still reach 48 fetches x 256 = 12,288/day and blow the
+// 10,000 allowance anyway; at 60 it caps at 24 x 256 = 6,144, which
+// leaves real headroom for the front page's own per-forecaster calls
+// and the full map page on top.
+const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapStripGrid";
+const MAP_STRIP_GRID_CACHE_MS = 60 * 60 * 1000;
+
+function mapStripGridCacheKey(centre) {
+  return `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)}`;
+}
+
+// startIdx ("which hour in the series is now") is the one part of a
+// cached grid that genuinely goes stale as the clock moves, so it's
+// recomputed from the stored timestamps on every read rather than
+// trusted from whenever the fetch happened. Everything else — the
+// geometry and the hourly series themselves — is as valid as when it
+// arrived.
+function loadMapStripGridCache(centre) {
+  try {
+    const raw = localStorage.getItem(MAP_STRIP_GRID_CACHE_KEY);
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (entry.key !== mapStripGridCacheKey(centre)) return null;
+    if (Date.now() - entry.cachedAt > MAP_STRIP_GRID_CACHE_MS) return null;
+    const grid = entry.grid;
+    const now = Date.now();
+    const idx = grid.times.findIndex(t => new Date(t).getTime() >= now - 30 * 60 * 1000);
+    if (idx === -1) return null; // series has been overtaken by the clock entirely
+    return { ...grid, startIdx: Math.max(0, idx) };
+  } catch {
+    return null;
+  }
+}
+
+function saveMapStripGridCache(centre, grid) {
+  try {
+    localStorage.setItem(MAP_STRIP_GRID_CACHE_KEY, JSON.stringify({
+      key: mapStripGridCacheKey(centre),
+      cachedAt: Date.now(),
+      grid
+    }));
+  } catch {
+    // Storage full or unavailable — the strip just pays for a fresh
+    // fetch next time, exactly as it did before this cache existed.
+  }
+}
+
 async function fetchMapStripGrid(centre) {
   const spanKm = MAP_STRIP_RADIUS_KM * 1.5;
   const dLat = MAP_STRIP_GRID_SPACING_KM / KM_PER_DEG_LAT;
@@ -582,7 +636,9 @@ async function fetchMapStripGrid(centre) {
   // the new clock readout below is a direct copy of the reasoning for.
   const times = points[0].hourly.time;
 
-  return { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, times, startIdx: Math.max(0, startIdx) };
+  const grid = { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, times, startIdx: Math.max(0, startIdx) };
+  saveMapStripGridCache(centre, grid);
+  return grid;
 }
 
 async function initMapStrip(centre) {
@@ -670,6 +726,16 @@ async function initMapStrip(centre) {
     // feature.
   }
   renderMapStrip(centre, null); // whatever arrived (coastline/places/terrain) shown immediately, rain follows once fetched
+
+  // Cache first — see the note above fetchMapStripGrid for why this one
+  // call is worth avoiding whenever it's honestly avoidable. A hit skips
+  // the network entirely (and paints instantly); a miss falls through to
+  // the fetch exactly as before.
+  const cached = loadMapStripGridCache(centre);
+  if (cached) {
+    renderMapStrip(centre, cached);
+    return;
+  }
 
   try {
     const grid = await fetchMapStripGrid(centre);
