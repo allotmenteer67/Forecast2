@@ -4076,45 +4076,37 @@ function attachSheetScrubber({ svg, pts, extraHeight, formatReadout, defaultRead
   reset();
 }
 
+// Forces WebKit to fully recompute layout — including the status-bar/
+// safe-area rendering — rather than trusting whatever it cached while a
+// fixed-position sheet was on screen. Confirmed on a real device that
+// the previous fix here (a no-op window.scrollTo nudge) did NOT clear
+// the grey status-bar strip that reappears after closing a sheet, even
+// though a real page navigation (leaving for map.html and back) always
+// does. Toggling the viewport meta's content is a stronger, standard
+// trick for the same class of iOS bug: appending then removing a
+// harmless trailing character changes nothing about the effective
+// viewport settings, but the act of re-parsing it is enough to make
+// WebKit re-derive env(safe-area-inset-*) and the status-bar rendering
+// from the CURRENT state rather than a stale one.
+function forceIOSStatusBarRelayout() {
+  const viewportMeta = document.querySelector('meta[name="viewport"]');
+  if (!viewportMeta) return;
+  const original = viewportMeta.getAttribute("content");
+  if (!original) return;
+  viewportMeta.setAttribute("content", original + ",");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => viewportMeta.setAttribute("content", original));
+  });
+}
+
 function closeHourlySheet() {
   if (!sheet) return;
   sheetBackdrop.classList.remove("is-open");
   sheet.classList.remove("is-open");
   window.setTimeout(() => {
     if (!sheet.classList.contains("is-open")) sheet.hidden = true;
-    // The grey strip over the status-bar area after closing the sheet
-    // is now confirmed on a real device — and confirmed that the
-    // scroll-only nudge below did NOT fix it. What DOES reliably clear
-    // it is a real page navigation (open the map, "← Back to Cloude"),
-    // which forces iOS to fully recompute the page's layout rather
-    // than trusting whatever it cached while .sheet — `position:
-    // fixed`, 100dvh-based height (see style.css) — was on screen.
-    // forceRelayout() below is a much stronger nudge than a no-op
-    // scroll: toggling display:none and back forces a genuine
-    // synchronous reflow of the whole page, the same class of
-    // recompute a real navigation gets for free. Keeping the scroll
-    // nudge too since it's harmless and was already here, but it's the
-    // reflow doing the real work now.
     forceIOSStatusBarRelayout();
   }, 280);
-}
-
-// Forces a full synchronous reflow by briefly removing <body> from the
-// render tree and putting it back — a much heavier hammer than a
-// no-op scroll, needed because the scroll-only version (see
-// closeHourlySheet's history) was confirmed on a real device NOT to
-// clear the stale grey status-bar strip. Reading offsetHeight in
-// between is what forces the reflow to actually happen synchronously
-// rather than being batched/skipped by the browser.
-function forceIOSStatusBarRelayout() {
-  const body = document.body;
-  const prevDisplay = body.style.display;
-  body.style.display = "none";
-  void body.offsetHeight; // eslint-disable-line no-unused-expressions -- forces sync reflow
-  body.style.display = prevDisplay;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => window.scrollTo(window.scrollX, window.scrollY));
-  });
 }
 
 function openHourlySheet(conditionName) {

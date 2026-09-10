@@ -71,7 +71,13 @@
 // files are in SHELL_FILES, so without this bump they'd keep being
 // served from the v9 cache and the fix would look like it hadn't
 // worked.
-const CACHE_NAME = "cloude-shell-v10";
+// Bumped to v11: closeHourlySheet's grey-status-bar-strip workaround
+// replaced — a no-op scroll (v6-era) was confirmed on a real device to
+// NOT clear it; forceIOSStatusBarRelayout() (a viewport-meta toggle)
+// replaces it in app.js. app.js is in SHELL_FILES, so without this bump
+// it would keep being served from the v10 cache and the fix would look
+// like it hadn't worked.
+const CACHE_NAME = "cloude-shell-v11";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
