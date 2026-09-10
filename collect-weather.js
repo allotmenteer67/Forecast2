@@ -54,6 +54,7 @@ const MODELS = [
 ];
 
 const fs = await import("node:fs/promises");
+import { fetchAviationActual } from "./collect-aviation.js";
 
 function isoDate(date) {
   return date.toISOString().slice(0, 10);
@@ -279,6 +280,23 @@ async function main() {
     modelsByDate[id] = await fetchModel(lat, lon, model, start, end);
   }
 
+  // Genuinely observed cloud (not modelled/reanalysis) from up to 4
+  // METAR stations around this location — see collect-aviation.js's
+  // own header for the full reasoning. A separate try/catch: this is
+  // additive data collection, not a dependency of the existing
+  // actual/models pipeline, so aviationweather.gov being briefly down
+  // shouldn't ever be able to break the daily collection this app
+  // already relies on. Failing here just means this run's history.json
+  // update goes out without a fresh `aviation` field — self-heals next
+  // run, same as the rest of this file's own "a missed run self-heals"
+  // convention.
+  let aviationByDate = {};
+  try {
+    aviationByDate = await fetchAviationActual(lat, lon, start, end);
+  } catch (err) {
+    console.warn(`Aviation collection failed, continuing without it: ${err}`);
+  }
+
   const history = await loadExistingHistory();
 
   for (const date of Object.keys(actualByDate)) {
@@ -288,6 +306,14 @@ async function main() {
       if (modelsByDate[id][date]) {
         history.days[date].models[id] = modelsByDate[id][date];
       }
+    }
+    // Not every date will have this — a quadrant/station fetch failure,
+    // or simply no METAR reports landing in that calendar day for a
+    // sparser station, both just mean this key stays absent rather
+    // than present-but-null. Deliberately NOT consumed by FFV training
+    // yet (see collect-aviation.js) — this only starts the collection.
+    if (aviationByDate[date]) {
+      history.days[date].aviation = aviationByDate[date];
     }
   }
 
