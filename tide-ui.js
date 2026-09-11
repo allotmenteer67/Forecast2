@@ -4,7 +4,6 @@
 // tide.js on index.html, so it can call into either freely.
 
 const tideRow = document.getElementById("tideRow");
-const tideDots = document.getElementById("tideDots");
 
 // ---- Tide card colour ----
 // A light blue default, since that's what was asked for, with a small
@@ -200,35 +199,9 @@ async function renderTideRow() {
   }).join("");
 
   tideRow.innerHTML = `${headHtml}<div class="tide-row-events">${partsHtml}</div>`;
-  renderTideDots();
 }
 
-function renderTideDots() {
-  if (!tideDots) return;
-  tideDots.innerHTML = "";
-  const locations = loadTideLocations();
-  if (locations.length < 2) return;
-  const currentId = loadCurrentTideLocationId();
-  locations.forEach(loc => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "place-dot-button";
-    button.setAttribute("aria-label", `Switch to ${loc.label}`);
-    const icon = document.createElement("img");
-    icon.src = "icon-192.png";
-    icon.alt = "";
-    icon.className = "place-dot" + (loc.id === currentId ? " is-current" : "");
-    button.appendChild(icon);
-    button.addEventListener("click", e => {
-      e.stopPropagation(); // don't also trigger the row's own tap-to-open
-      if (loc.id === currentId) return;
-      saveCurrentTideLocationId(loc.id);
-      renderTideRow();
-      if (typeof renderFishingRow === "function") renderFishingRow();
-    });
-    tideDots.appendChild(button);
-  });
-}
+const tideFishingPair = document.getElementById("tideFishingPair");
 
 function switchToAdjacentTideLocation(direction) {  const locations = loadTideLocations();
   if (locations.length < 2) return;
@@ -241,7 +214,8 @@ function switchToAdjacentTideLocation(direction) {  const locations = loadTideLo
   if (typeof renderFishingRow === "function") renderFishingRow();
 }
 
-// ---- Swipe-to-switch-location + tap-to-open ----
+// ---- Swipe-to-switch-location (whole tide+fishing pair) + tap-to-open
+// (each card individually) ----
 // Three previous attempts at disambiguating tap-vs-swipe entirely
 // within our own pointerdown/pointermove/pointerup/pointercancel
 // tracking kept failing on real hardware despite checking out fine in
@@ -256,42 +230,57 @@ function switchToAdjacentTideLocation(direction) {  const locations = loadTideLo
 // it (both fire from the same gesture); everything else just falls
 // through to the native click, letting the browser's own tap-vs-drag
 // disambiguation do the job instead of a hand-rolled threshold.
-if (tideRow) {
-  const SWIPE_THRESHOLD_PX = 32;
-  let startX = null, startY = null, pointerId = null, swiped = false;
+//
+// This used to live on tideRow alone, so a swipe only worked if it
+// started on the tide card — starting on fishing did nothing, which is
+// exactly why the place-dot icons existed as a separate way to switch
+// location from that side. Attaching this to the whole pair instead
+// means either card can be swiped, and the dots aren't needed any more.
+// tideFishingSwiped is a plain top-level `let`, not scoped inside this
+// block, because fishingRow's own "click" listener (in fishing-ui.js,
+// loaded after this file, sharing the same global script scope) needs
+// to read and clear the exact same flag a gesture that started on this
+// side might have set.
+let tideFishingSwiped = false;
 
-  tideRow.addEventListener("pointerdown", e => {
+if (tideFishingPair) {
+  const SWIPE_THRESHOLD_PX = 32;
+  let startX = null, startY = null, pointerId = null;
+
+  tideFishingPair.addEventListener("pointerdown", e => {
     if (pointerId !== null) return;
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
     try {
-      tideRow.setPointerCapture(e.pointerId);
+      tideFishingPair.setPointerCapture(e.pointerId);
     } catch {
       // still works via normal event delivery without capture
     }
   });
 
-  tideRow.addEventListener("pointermove", e => {
+  tideFishingPair.addEventListener("pointermove", e => {
     if (startX === null || e.pointerId !== pointerId) return;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
     if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
       switchToAdjacentTideLocation(dx < 0 ? 1 : -1);
-      swiped = true;
+      tideFishingSwiped = true;
       startX = null; startY = null; pointerId = null; // one switch per gesture — don't re-trigger on further movement
     }
   });
 
-  tideRow.addEventListener("pointerup", e => {
+  tideFishingPair.addEventListener("pointerup", e => {
     if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
   });
-  tideRow.addEventListener("pointercancel", e => {
+  tideFishingPair.addEventListener("pointercancel", e => {
     if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
   });
+}
 
+if (tideRow) {
   tideRow.addEventListener("click", () => {
-    if (swiped) { swiped = false; return; } // this click belongs to the swipe gesture that just ran — not a tap
+    if (tideFishingSwiped) { tideFishingSwiped = false; return; } // this click belongs to the swipe gesture that just ran — not a tap
     openTideSheet();
   });
 }

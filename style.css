@@ -558,12 +558,20 @@ header p {
   display: flex;
   align-items: stretch;
   gap: 12px;
-  /* Was 12px, then 6px — still flagged as too much surrounding a row
-     that's only 16px of dot icons. Down to 2px: barely more than
-     touching, which is what a page-position indicator like this
-     conventionally looks like (an iOS photo carousel's dots sit right
-     under the image, not floating in their own section). */
-  margin-bottom: 2px;
+  /* Was 2px — tuned tight specifically against the place-dots row that
+     used to sit directly beneath this (see the removed #tideDots rule).
+     Now that swiping the pair itself replaces the dots entirely (see
+     tide-ui.js), this is back to an ordinary gap before the next
+     section, matching the 12px already used between the two cards
+     inside it. */
+  margin-bottom: 12px;
+  /* The pair itself is now the swipe target (see tide-ui.js) rather
+     than just the tide card alone — pan-y here, for the same reason it
+     used to sit on .tide-row-swipeable: lets an up/down scroll pass
+     through untouched while a horizontal swipe is read by the pointer
+     handlers instead of being eaten by the browser's own gesture
+     handling. */
+  touch-action: pan-y;
 }
 
 .tide-card {
@@ -667,19 +675,14 @@ header p {
   transition: background-color .15s ease;
 }
 
-/* Only tideRow does its own custom pointer-capture swipe-vs-tap
-   detection (see tide-ui.js) and needs touch-action restricted so a
-   horizontal swipe isn't eaten by the browser's own gesture handling.
-   fishingRow shares .tide-row for its visual styling only — it uses a
-   plain native click listener with no swipe support, so it must NOT
-   get this restriction (matches every other headline cell, which also
-   leaves touch-action at its unrestricted default). Giving fishingRow
-   this property by accident, just because it reused .tide-row's class,
-   was undermining the exact "let the browser's native tap handling do
-   the job" reasoning that plain click listeners rely on elsewhere. */
-.tide-row-swipeable {
-  touch-action: pan-y;
-}
+/* tideRow and fishingRow both used to leave touch-action at its
+   unrestricted default, with only tideRow doing its own pointer-
+   capture swipe detection — see the comment that used to sit here.
+   Swipe detection has since moved up to the whole .tide-fishing-pair
+   wrapper (see tide-ui.js), which is where touch-action: pan-y now
+   lives instead; neither row needs its own restriction any more, and
+   both go back to the plain native click handling every other
+   headline cell already uses. */
 
 .tide-row:hover,
 .tide-row:active {
@@ -1198,8 +1201,8 @@ button {
      after a tap until something else was tapped — turned out to be
      iOS's own default tap-highlight overlay, which paints a solid tint
      over the whole button and doesn't reliably clear on its own. This
-     is the exact same root cause already found and fixed once for
-     .place-dot-button specifically (see that rule's own comment); it
+     is the exact same root cause already found and fixed once for the
+     (since-removed) place-dot buttons specifically; it
      was never generalised to the shared button rule, so every OTHER
      plain <button> in the app — both Play buttons included — was still
      exposed to it. On the map page's text button, the overlay sitting
@@ -2052,56 +2055,10 @@ footer {
   color: #6b7d70;
 }
 
-.place-dots {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-/* The tide dots now sit under the whole pair rather than inside the tide
-   card, because swiping tide also re-renders fishing for the same
-   location — they govern both cards, so centring them under just one
-   would have implied otherwise. */
-#tideDots {
-  /* Was 12px, then 6px each side — same reasoning as
-     .tide-fishing-pair's margin-bottom above, tightened to match. */
-  margin-top: 0;
-  margin-bottom: 2px;
-}
-.place-dot {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  opacity: 0.35;
-  filter: grayscale(1);
-}
-.place-dot.is-current {
-  width: 20px;
-  height: 20px;
-  opacity: 1;
-  filter: none;
-}
-
-.place-dot-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  background: none;
-  /* Without this, iOS's own default tap-highlight overlay covers the
-     full 32px button — visibly larger than the 16-20px icon sitting
-     inside it — which reads as the icon itself darkening and growing
-     on tap, then fading back on release. The is-current class above
-     already gives a plain, instant colour/opacity change on selection;
-     this was an unrelated platform effect layered on top of it, not
-     part of the intended feedback. */
-  -webkit-tap-highlight-color: transparent;
-}
+/* .place-dots / #tideDots / .place-dot / .place-dot-button removed —
+   the small dot icons they styled are gone now that swiping the whole
+   tide+fishing pair (see tide-ui.js) replaces them as the way to
+   switch between saved tide locations from the front page. */
 
 .place-menu {
   position: absolute;

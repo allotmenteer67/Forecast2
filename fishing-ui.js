@@ -50,14 +50,7 @@ let fishingRenderToken = 0;
 
 function setFishingCardVisible(visible) {
   const card = document.querySelector(".fishing-card");
-  if (!card) return;
-  const changed = card.hidden !== !visible;
-  card.hidden = !visible;
-  // Same fix, same reasoning as tide-ui.js's setTideCardVisible — see
-  // that one for the full explanation. Fired from here too since
-  // Fishing can appear/disappear independently of Tide (different
-  // toggle, same shared location).
-  if (changed) document.dispatchEvent(new CustomEvent("cloude:layout-changed"));
+  if (card) card.hidden = !visible;
 }
 
 async function renderFishingRow() {
@@ -348,13 +341,19 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, lo
       const levels = tidePts.map(p => p.level);
       const minLevel = Math.min(...levels), maxLevel = Math.max(...levels);
       const levelSpan = maxLevel - minLevel || 1;
-      // Auto-scaled to fill the SAME plot area as the score line, purely
-      // for shape/timing comparison — deliberately no axis or labels,
-      // since the numbers themselves aren't the point here (the tide
-      // card already shows those) and adding a second labelled axis
-      // would clutter a chart that's meant to answer one question: does
-      // the timing line up.
-      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * plotH;
+      // Was auto-scaled to fill the SAME plot area as the score line —
+      // reported back as making the tide line look like a second data
+      // series on equal footing with the actual fishing score, rather
+      // than the background timing reference it's meant to be. Now
+      // confined to a band at the BOTTOM of the plot instead of the
+      // whole height: still auto-scaled within that band (so shape and
+      // relative timing are exactly as readable as before), just
+      // visually smaller and out of the way of the score curve itself.
+      // Still deliberately no axis/labels — see the reasoning below,
+      // unchanged by this.
+      const TIDE_OVERLAY_HEIGHT_FRACTION = 0.4;
+      const tideOverlayH = plotH * TIDE_OVERLAY_HEIGHT_FRACTION;
+      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * tideOverlayH;
       const tidePath = "M" + tidePts.map(p => `${xFor(p.hours)},${yForTide(p.level)}`).join(" L");
       svg.appendChild(sheetSvgEl("path", {
         d: tidePath, fill: "none", "stroke-width": 2.4,
@@ -598,7 +597,15 @@ if (fishingShowRawToggle) {
 }
 
 if (fishingRow) {
-  fishingRow.addEventListener("click", () => openFishingSheet());
+  fishingRow.addEventListener("click", () => {
+    // tideFishingSwiped is set by the swipe handling on the whole
+    // tide+fishing pair (see tide-ui.js, loaded before this file) — a
+    // swipe that started on THIS card still generates a click on it
+    // afterwards, which needs swallowing the same way tide's own row
+    // already does, or a swipe would also pop this sheet open.
+    if (tideFishingSwiped) { tideFishingSwiped = false; return; }
+    openFishingSheet();
+  });
 }
 
 renderFishingRow();

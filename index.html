@@ -100,7 +100,7 @@
     </section>
 
     <!-- Tide and fishing sit side by side rather than stacked. They always
-         share a location — swiping tide re-renders fishing for the same
+         share a location — swiping the pair re-renders both for the same
          place — so one row of two reads as a single subject, and it saves
          roughly the height of one card, which is what makes room for the
          map strip that will eventually sit above the headline.
@@ -111,21 +111,24 @@
 
          If only one is enabled in Settings, the other gets the hidden
          attribute and the survivor takes the full width automatically —
-         see .tide-fishing-pair in style.css. -->
-    <div class="tide-fishing-pair">
+         see .tide-fishing-pair in style.css.
+
+         The whole pair is the swipe target (see tide-ui.js) — swiping
+         either card cycles to the next saved tide location and re-renders
+         both, tapping either card opens its own sheet as before. This
+         used to be tide-only, with a row of small place-dot icons below
+         the pair as the only way to switch location from the fishing
+         side; both the tide-only restriction and the dots are gone now
+         that the pair itself is one swipe target. -->
+    <div id="tideFishingPair" class="tide-fishing-pair">
       <section class="tide-card">
-        <button id="tideRow" class="tide-row tide-row-swipeable" type="button" hidden></button>
+        <button id="tideRow" class="tide-row" type="button" hidden></button>
       </section>
 
       <section class="fishing-card">
         <button id="fishingRow" class="tide-row" type="button" hidden></button>
       </section>
     </div>
-
-    <!-- Moved out of the tide card and under the pair. The swipe changes
-         the location for BOTH cards, so dots centred under tide alone
-         would have implied they only governed tide. -->
-    <div id="tideDots" class="place-dots"></div>
 
     <section class="controls">
       <div class="rollback">

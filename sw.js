@@ -166,7 +166,19 @@
 // genuinely exist in the code, unlike waterways' clip, so if either is
 // still misbehaving it's a real remaining edge case, not another
 // phantom fix.
-const CACHE_NAME = "cloude-shell-v19";
+// Bumped to v20: two changes. (1) The tide overlay on the fishing
+// graph no longer auto-scales to the full plot height alongside the
+// score curve — it was reading as a second, equally-weighted data
+// series rather than the background timing reference it's meant to be;
+// now confined to a band at the bottom of the chart instead. (2) The
+// front page's tide/fishing swipe-to-switch-location gesture now works
+// from either card, not just the tide card — it used to live on
+// tideRow alone, and the small place-dot icons below the pair existed
+// specifically because there was no other way to switch location from
+// the fishing side. Both the tide-only restriction and the dots are
+// gone; swiping either card in the pair now switches both. index.html,
+// style.css, tide-ui.js and fishing-ui.js are all in SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v20";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
