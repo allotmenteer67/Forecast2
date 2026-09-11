@@ -614,12 +614,29 @@ header p {
   padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(31, 42, 36, .10), 0 12px 26px -14px rgba(31, 42, 36, .30);
   border: 1px solid rgba(31, 42, 36, .09);
+  /* Needed so .fishing-refresh-button's absolute positioning below is
+     relative to this card, not whatever other positioned ancestor
+     happens to be nearest. */
+  position: relative;
 }
 .fishing-card[data-color="blue"] { background: #e3f0f8; }
 .fishing-card[data-color="teal"] { background: #dcefec; }
 .fishing-card[data-color="sand"] { background: #f5ead9; }
 .fishing-card[data-color="lavender"] { background: #eae6f5; }
 .fishing-card[data-color="white"] { background: #ffffff; }
+
+/* fishingRow itself is a <button> filling the rest of the card (tap
+   anywhere on it to open the sheet) — a nested <button> for refresh
+   inside it isn't valid HTML (a button can't contain another
+   interactive control), so this sits as a sibling instead, positioned
+   on top of fishingRow's own corner so a tap there reaches this button
+   first rather than passing through to the row underneath it. */
+.fishing-refresh-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
 
 .fishing-row-value {
   display: flex;
@@ -915,12 +932,49 @@ header p {
   white-space: nowrap;
   min-width: 0;
   flex: 0 1 auto;
-  /* Was relying on .headline-date's own justify-content: space-between
-     to push this to the right edge — correct in principle for exactly
-     two flex items, but margin-left: auto says the same thing more
-     directly (pin THIS item to the end of the row, full stop) and
-     doesn't depend on there being exactly two items in the row if
-     anything else is ever added to it later. */
+}
+
+/* Shared "small circular icon button" treatment — same solid accent
+   fill + white icon as .hour-play-icon, reused here rather than
+   duplicated, so weather's and fishing's refresh buttons and the Play
+   button can never visually drift apart. var(--accent) rather than any
+   fixed colour deliberately: every theme's own accent is already dark
+   enough to read clearly against that theme's own pale card
+   backgrounds (confirmed against the Gold theme specifically, which is
+   the one case worth checking — its accent is a muted dark gold that
+   still reads as a distinct filled circle on the paler cream card, not
+   a fixed "gold" that would have blended into a gold-toned card). */
+.card-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  /* Same min-height/padding override .hour-play-icon needs — see that
+     rule's own comment for why the global button reset otherwise wins. */
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent);
+  color: white;
+  touch-action: manipulation;
+}
+
+.card-refresh-button svg {
+  flex-shrink: 0;
+}
+
+.card-refresh-button:disabled {
+  opacity: 0.5;
+}
+
+#headlineRefreshButton {
+  /* Pushes itself AND the place name after it (which no longer carries
+     its own margin-left: auto — see that rule above) to the right edge
+     together, so the icon sits immediately before the place name
+     rather than at a fixed distance from the date text on the left. */
   margin-left: auto;
 }
 

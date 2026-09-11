@@ -53,7 +53,7 @@ function setFishingCardVisible(visible) {
   if (card) card.hidden = !visible;
 }
 
-async function renderFishingRow() {
+async function renderFishingRow(force = false) {
   if (!fishingRow) return;
   const toggles = loadHeadlineToggles();
   if (!toggles.fishing) {
@@ -99,7 +99,7 @@ async function renderFishingRow() {
   const markType = fishingMarkType(location);
   let forecast;
   try {
-    forecast = await fetchFishingForecast(location.station.lat, location.station.lon, markType);
+    forecast = await fetchFishingForecast(location.station.lat, location.station.lon, markType, force);
   } catch {
     forecast = null;
   }
@@ -605,6 +605,26 @@ if (fishingRow) {
     // already does, or a swipe would also pop this sheet open.
     if (tideFishingSwiped) { tideFishingSwiped = false; return; }
     openFishingSheet();
+  });
+}
+
+const fishingRefreshButton = document.getElementById("fishingRefreshButton");
+if (fishingRefreshButton) {
+  fishingRefreshButton.addEventListener("click", async e => {
+    // stopPropagation as a defensive measure, not because a specific
+    // bug was confirmed here — the pair's own swipe tracking (see
+    // tide-ui.js) listens for pointerdown/move/up directly on the
+    // wrapper, not click, so a plain tap on this button shouldn't be
+    // misread as a swipe attempt either way (no threshold gets
+    // crossed). Kept anyway in case anything above this ever adds its
+    // own click listener later.
+    e.stopPropagation();
+    fishingRefreshButton.disabled = true;
+    try {
+      await renderFishingRow(true);
+    } finally {
+      fishingRefreshButton.disabled = false;
+    }
   });
 }
 

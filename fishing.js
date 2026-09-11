@@ -81,10 +81,12 @@ function saveFishingShowWindows(value) {
 const FISHING_FORECAST_TTL_MS = 30 * 60000; // 30 minutes
 const fishingForecastCache = new Map();
 
-async function fetchFishingForecast(lat, lon, markType) {
+async function fetchFishingForecast(lat, lon, markType, force = false) {
   const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)},${markType}`;
-  const cached = fishingForecastCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < FISHING_FORECAST_TTL_MS) return cached.data;
+  if (!force) {
+    const cached = fishingForecastCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < FISHING_FORECAST_TTL_MS) return cached.data;
+  }
 
   // Checked before the live fetch below, same pattern and same shared
   // data/precache-weather.json app.js's own tryPrecachedHourlyForecast
@@ -92,8 +94,10 @@ async function fetchFishingForecast(lat, lon, markType) {
   // file) — matched by proximity to lat/lon, not an exact coordinate or
   // id match, for the same reason: the precache config's hand-typed
   // coordinates for a spot will never exactly equal wherever this mark
-  // actually resolved to.
-  const precached = await tryPrecachedFishingSpot(lat, lon, markType);
+  // actually resolved to. Skipped when force is true (the card's own
+  // refresh button) — a deliberate "get me the real current figure"
+  // request should never quietly hand back GitHub's older file instead.
+  const precached = force ? null : await tryPrecachedFishingSpot(lat, lon, markType);
   if (precached) {
     fishingForecastCache.set(cacheKey, { data: precached, fetchedAt: precached.fetchedAt });
     return precached;

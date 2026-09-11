@@ -569,6 +569,23 @@ const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
 const headlineDateText = document.getElementById("headlineDateText");
 const headlineDatePlace = document.getElementById("headlineDatePlace");
+const headlineRefreshButton = document.getElementById("headlineRefreshButton");
+if (headlineRefreshButton) {
+  headlineRefreshButton.addEventListener("click", async () => {
+    // Disabling for the duration is just belt-and-braces against a
+    // rapid double-tap firing two overlapping forced fetches — the
+    // existing "only one fetch at a time" queueing in loadLocationData
+    // would already prevent them actually running concurrently, this
+    // just stops the button itself inviting a second tap in the
+    // meantime.
+    headlineRefreshButton.disabled = true;
+    try {
+      await loadLocationData(true);
+    } finally {
+      headlineRefreshButton.disabled = false;
+    }
+  });
+}
 const headlineStatus = document.getElementById("headlineStatus");
 const headlineStatusBlock = document.getElementById("headlineStatusBlock");
 const headlineRetry = document.getElementById("headlineRetry");
@@ -1600,7 +1617,7 @@ async function tryPrecachedHourlyForecast(lat, lon) {
   return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
 }
 
-async function fetchHourlyForecast(lat, lon) {
+async function fetchHourlyForecast(lat, lon, force = false) {
   state.hourly.status = "loading";
   state.hourly.error = null;
 
@@ -1613,7 +1630,10 @@ async function fetchHourlyForecast(lat, lon) {
     // (applyHourlyBlend, the headline render) treats this identically to
     // a live result — it IS a live result's exact shape, just fetched by
     // GitHub a little earlier rather than by this device right now.
-    const precached = await tryPrecachedHourlyForecast(lat, lon);
+    // Skipped entirely when force is true (the headline's own refresh
+    // button) — a deliberate "get me the real current figure" request
+    // should never quietly hand back a several-minutes-old file instead.
+    const precached = force ? null : await tryPrecachedHourlyForecast(lat, lon);
     if (precached) {
       applyHourlyBlend(precached.sources, precached.times, {
         uvIndex: precached.uvIndex,
@@ -1868,7 +1888,7 @@ let loadLocationGeneration = 0;
 // starts a second fetch or gives up on the first one.
 const LOAD_SLOW_WARNING_MS = 45000;
 
-function loadLocationData() {
+function loadLocationData(force = false) {
   // Skip the fetch ENTIRELY when a still-fresh cached snapshot already
   // covers this exact postcode — resetForLocationChange() (always called
   // immediately before this, by every caller: Switch button, saved-place
@@ -1880,7 +1900,12 @@ function loadLocationData() {
   // RECENT_LOCATION_CACHE_MS's own comment for the full reasoning.
   // Every caller gets this for free without knowing anything about it;
   // none of them need to change.
-  {
+  //
+  // force=true (the headline's own refresh button — see
+  // headlineRefreshButton below) skips this AND the precache check
+  // inside fetchHourlyForecast, going straight to a genuine live fetch
+  // regardless of either cache's age.
+  if (!force) {
     const cache = loadRecentLocationCache();
     const snap = cache[state.postcode];
     if (snap && Date.now() - snap.cachedAt <= RECENT_LOCATION_CACHE_MS) {
@@ -1920,6 +1945,13 @@ function loadLocationData() {
   // new place immediately either way (its cached snapshot, or a plain
   // loading state) — queueing only affects how soon its FRESH data
   // actually arrives, never what's shown in the meantime.
+  //
+  // A forced refresh that arrives mid-flight is queued the same way —
+  // its own "force" doesn't carry through the requeue below, so it
+  // falls back to normal caching rules on retry. Rare in practice (the
+  // button is only reachable when the page is already showing settled
+  // data, i.e. nothing mid-flight), and not worth the extra complexity
+  // of threading force through the requeue for that edge case alone.
   if (loadLocationDataPromise) {
     if (loadLocationPromisePostcode !== state.postcode) {
       loadLocationQueuedPostcode = state.postcode;
@@ -1943,7 +1975,7 @@ function loadLocationData() {
     }
   }, LOAD_SLOW_WARNING_MS);
 
-  loadLocationDataPromise = runLoadLocationData().finally(() => {
+  loadLocationDataPromise = runLoadLocationData(force).finally(() => {
     clearTimeout(warnTimeoutId);
     loadLocationDataPromise = null;
     loadLocationPromisePostcode = null;
@@ -1961,7 +1993,7 @@ function loadLocationData() {
   return loadLocationDataPromise;
 }
 
-async function runLoadLocationData() {
+async function runLoadLocationData(force = false) {
   // Captured up front so a late-arriving result from an abandoned or
   // timed-out request can tell it's been superseded by a newer switch —
   // and skip committing/rendering itself over the newer, correct data.
@@ -1998,7 +2030,7 @@ async function runLoadLocationData() {
       fetchActualWeather(lat, lon),
       ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
       loadCommittedHistory(),
-      fetchHourlyForecast(lat, lon)
+      fetchHourlyForecast(lat, lon, force)
     ]);
 
     if (state.postcode !== requestedFor) return; // a newer switch has since taken over — this result is stale, leave it alone
@@ -5762,7 +5794,7 @@ if (mapStripEl) {
   });
 }
 
-attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton");
+attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton, #headlineRefreshButton");
 
 // Trims a label down to before its first comma ("Bridgwater, Somerset"
 // -> "Bridgwater") — a separate copy of tide/fishing's own

@@ -249,6 +249,14 @@ if (tideFishingPair) {
 
   tideFishingPair.addEventListener("pointerdown", e => {
     if (pointerId !== null) return;
+    // Same reasoning as the headline's own swipe exclusion for its Hour
+    // slider/Play button (see app.js's attachSavedPlaceSwipe call) —
+    // fishingRefreshButton is a new interactive sibling inside this
+    // pair's bounds (added after this swipe tracking was first built,
+    // when both cards were plain buttons with nothing nested to worry
+    // about) and deserves the same clean tap handling, not competing
+    // with a swipe gesture that happens to start on the same pixel.
+    if (e.target.closest("#fishingRefreshButton")) return;
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;

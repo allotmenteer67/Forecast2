@@ -276,7 +276,27 @@
 // safely needs more care than this pass, given they feed the learning
 // system rather than just what's on screen. app.js and fishing.js are
 // both in SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v27";
+// Bumped to v28: refresh buttons for weather and fishing. Weather's
+// sits on the headline's own date row, immediately left of the place
+// name (index.html/style.css); fishing's sits in its card's top-right
+// corner as a sibling of fishingRow, since a <button> can't nest another
+// interactive control inside it. Both use var(--accent) — confirmed
+// against the Gold theme specifically (the one where "will this stand
+// out" was a real question) that it still reads as a distinct filled
+// circle, same as the existing Play button already does on that theme.
+//
+// Wired via a new `force` parameter threaded through loadLocationData
+// -> runLoadLocationData -> fetchHourlyForecast (app.js) and
+// renderFishingRow -> fetchFishingForecast (fishing-ui.js/fishing.js) —
+// force=true skips both the live 15/30-minute caches AND the GitHub
+// precache entirely, going straight to a genuine live fetch. Also
+// excluded both new buttons from their respective swipe-to-switch
+// trackers' pointerdown handling (the headline's own, and the
+// tide+fishing pair's), matching the same exclusion the Hour slider
+// already had, so a tap on either button can't be misread as a swipe
+// gesture starting there. index.html, style.css, app.js, fishing.js,
+// fishing-ui.js and tide-ui.js are all in SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v28";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
