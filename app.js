@@ -567,7 +567,8 @@ const accuracyMode = document.getElementById("accuracyMode");
 const accuracyBody = document.getElementById("accuracyBody");
 const historyStatus = document.getElementById("historyStatus");
 const headlineGrid = document.getElementById("headlineGrid");
-const headlineDate = document.getElementById("headlineDate");
+const headlineDateText = document.getElementById("headlineDateText");
+const headlineDatePlace = document.getElementById("headlineDatePlace");
 const headlineStatus = document.getElementById("headlineStatus");
 const headlineStatusBlock = document.getElementById("headlineStatusBlock");
 const headlineRetry = document.getElementById("headlineRetry");
@@ -3407,7 +3408,8 @@ function renderHeadline() {
   // somewhere else.
   if (!currentDisplayIsComplete && stillSettling) {
     headlineGrid.innerHTML = "";
-    if (headlineDate) headlineDate.textContent = "";
+    if (headlineDateText) headlineDateText.textContent = "";
+    if (headlineDatePlace) headlineDatePlace.textContent = "";
     const loadingMsg = document.createElement("p");
     loadingMsg.className = "headline-loading";
     loadingMsg.textContent = "Loading weather…";
@@ -3436,8 +3438,8 @@ function renderHeadline() {
 
   const day = freshestDayFor(state.rollback);
 
-  if (headlineDate) {
-    headlineDate.textContent = state.rollback === 0
+  if (headlineDateText) {
+    headlineDateText.textContent = state.rollback === 0
       // "Today" now means "the next 24/48h from now" (see
       // displayWindowHourCount) rather than the calendar day — with 48h
       // selected that window genuinely spans into tomorrow, so the
@@ -3446,6 +3448,10 @@ function renderHeadline() {
       ? (loadHourRange() === 48 ? "Today and Tomorrow" : "Today")
       : formatDateLong(targetDateForRollback(state.rollback));
   }
+  // The current place name, to the right of the date/window text — same
+  // currentPlaceLabel() the header's own place chip uses, so the two
+  // can never disagree about what the current place is called.
+  if (headlineDatePlace) headlineDatePlace.textContent = currentPlaceLabel();
 
   const hourDate = currentHourDate();
   const showHourly = state.hourlyActive && state.hourly.status === "ready";
@@ -5647,18 +5653,27 @@ if (mapStripEl) {
 
 attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton");
 
+// Shared by the header's place chip and the headline card's own place
+// label (see renderHeadline) — one source of truth for "what do we call
+// the current place right now", so the two can never show a different
+// name for the same place.
+//
+// A saved place's own label wins if there is one; otherwise fall back
+// to whatever resolveLocation() last resolved this postcode to — for an
+// adopted map coordinate, that's the reverse-geocoded village/town name
+// once it's back (or the plain lat/lon before it arrives, or if it
+// never finds one) — before falling back to the raw postcode/coordinate
+// string itself, which only shows if neither of those exist yet (e.g.
+// the very first paint, before any lookup has had a chance to run at
+// all).
+function currentPlaceLabel() {
+  const match = loadPlaces().find(place => place.postcode === state.postcode);
+  return match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
+}
+
 function renderPlaceChip() {
   if (!placeChipLabel) return;
-  const match = loadPlaces().find(place => place.postcode === state.postcode);
-  // A saved place's own label wins if there is one; otherwise fall back
-  // to whatever resolveLocation() last resolved this postcode to —
-  // for an adopted map coordinate, that's the reverse-geocoded village/
-  // town name once it's back (or the plain lat/lon before it arrives,
-  // or if it never finds one) — before falling back to the raw
-  // postcode/coordinate string itself, which only shows if neither of
-  // those exist yet (e.g. the very first paint, before any lookup has
-  // had a chance to run at all).
-  placeChipLabel.textContent = match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
+  placeChipLabel.textContent = currentPlaceLabel();
 }
 
 function closePlaceMenu() {

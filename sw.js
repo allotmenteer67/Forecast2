@@ -207,7 +207,25 @@
 // .map-strip out from being a direct child of .app-home, breaking the
 // flex-shrink sizing that keeps the date bar on screen. app.js and
 // style.css are both in SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v22";
+// Bumped to v23: two changes. (1) The place name now shows on the front
+// page's own headline card, to the right of "Today and Tomorrow" — a
+// new currentPlaceLabel() helper (app.js) is shared with the header's
+// place chip, so the two can never show a different name for the same
+// place. (2) Verified (not just assumed) that the recent-location cache
+// genuinely covers a second, third, etc. saved place, not just the
+// first — cacheCurrentLocationSnapshot() is keyed by postcode into a
+// plain dictionary, and every completed load calls it for whatever
+// place that load was actually for, so switching between several places
+// builds up a genuinely multi-entry cache. No code change was needed
+// for that part, only confirmation. index.html, app.js and style.css
+// are all in SHELL_FILES.
+// Bumped to v24: tide's fit-building (tide.js) now coalesces a
+// station's very first build the same way its weekly background
+// refresh already did — swiping to a never-before-cached station,
+// swiping away, then back again before that first EA fetch finishes no
+// longer fires a second, fully redundant fetch. tide.js is in
+// SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v24";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

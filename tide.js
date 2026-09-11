@@ -392,6 +392,15 @@ function saveTideFudge(stationId, fudge) {
 // service worker (sw.js) already uses for the app shell.
 const tideFitCache = new Map();
 const tideFitRefreshing = new Set(); // stationIds with a background refresh already in flight — avoids piling up duplicate refreshes on repeat visits while one's still running
+// stationId -> in-flight promise, for a station's very FIRST build (no
+// persisted fit yet at all) — the equivalent coalescing to
+// tideFitRefreshing above, but for buildAndCacheTideFit's other call
+// site below. Without this, swiping to a never-before-seen station,
+// swiping away, then swiping back before that first fetch has finished
+// fired a second, fully redundant EA request (each carrying its own
+// up-to-30-second timeout) rather than just waiting on the one already
+// running.
+const tideFitBuildInFlight = new Map();
 const TIDE_FIT_MAX_AGE_MS = 7 * 24 * 3600000; // a week
 
 function tideFitStorageKey(stationId) {
@@ -458,7 +467,15 @@ async function getOrBuildTideFit(station) {
     return result;
   }
 
-  return buildAndCacheTideFit(station); // never built before — this one genuinely has to wait
+  // Never built before — this one genuinely has to wait on a real EA
+  // fetch. Coalesced per station via tideFitBuildInFlight above: a
+  // swipe back to this exact station while its first-ever fetch is
+  // still running reuses that SAME promise instead of starting a
+  // second one.
+  if (tideFitBuildInFlight.has(station.id)) return tideFitBuildInFlight.get(station.id);
+  const promise = buildAndCacheTideFit(station).finally(() => tideFitBuildInFlight.delete(station.id));
+  tideFitBuildInFlight.set(station.id, promise);
+  return promise;
 }
 
 // ==== Admiralty Discovery API — secondary-port correction ====
