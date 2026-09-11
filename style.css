@@ -2323,6 +2323,31 @@ footer {
   background: #f3d9bd;
 }
 
+/* The ☆/★ shared-favourite toggle (see postFavourite() in app.js) —
+   sized and centred like .place-row-remove rather than the wider
+   .place-row-switch, since it's a single glyph, not a word. Uses the
+   theme's own accent so a filled ★ reads as "this is in" the same way
+   .card-refresh-button's filled circle does, rather than introducing a
+   third colour into this row. */
+.place-row-favourite {
+  width: 40px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+
+.place-row-favourite.is-favourited {
+  background: var(--accent);
+  color: white;
+}
+
+.place-row-favourite:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .place-row-marktype {
   margin-top: 8px;
 }
