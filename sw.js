@@ -178,7 +178,21 @@
 // the fishing side. Both the tide-only restriction and the dots are
 // gone; swiping either card in the pair now switches both. index.html,
 // style.css, tide-ui.js and fishing-ui.js are all in SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v20";
+// Bumped to v21: the expanded map's Hour slider now steps in half-hours
+// (MAP_HOUR_STEP in map.js) — a client-side blend between the two
+// nearest hourly grid values already in memory, not genuinely finer
+// weather data (Open-Meteo has none to offer here). Deliberately built
+// around one single constant: every part of it (slider step, hour
+// rounding, sampleGrid/sampleWindDir's interpolation, mapHourClock's
+// readout, the autoplay increment) collapses back to its old exact
+// behaviour at whole hours, so setting MAP_HOUR_STEP back to 1 is a
+// complete, one-line revert if this reads as too smooth or misleading.
+// Wind direction and the pressure/isobar contours still snap to the
+// nearest whole hour rather than attempting to blend an angle or a
+// traced contour line — the same call already made for wind direction,
+// extended to isobars, which was a genuine crash risk otherwise (that
+// layer indexes the grid array directly, not through sampleGrid).
+const CACHE_NAME = "cloude-shell-v21";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

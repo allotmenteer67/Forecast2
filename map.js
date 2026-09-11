@@ -72,6 +72,25 @@ const MAP_GRID_SPACING_KM = { 25: 10, 50: 14, 100: 20, 150: 25 };
 
 const MAP_STALE_MS = 30 * 60 * 1000;
 
+// Hour slider step, in hours. Open-Meteo itself has no half-hourly data
+// for anything this map draws (only precipitation offers a separate
+// 15-minute feed, on a different endpoint, and only for some models) —
+// so 0.5 here is purely a client-side blend between the two nearest
+// HOURLY values already sitting in mapGrid, not genuinely finer-grained
+// weather. It makes the scrub feel smoother; it doesn't reveal a rain
+// band's real start time any more precisely than the hourly data always
+// did.
+//
+// This single constant is meant to be the ONLY thing that needs to
+// change if this turns out to look too smooth, or to misrepresent the
+// data — every part of it (the slider's own step, mapHourValue's
+// rounding, sampleGrid/sampleWindDir's hour-axis interpolation, and
+// mapHourClock's readout) is driven from this one number and every one
+// of them already collapses back to its exact old behaviour at whole
+// hours. Setting this back to 1 is the entire "unbuild" — nothing else
+// needs touching.
+const MAP_HOUR_STEP = 0.5;
+
 const KM_PER_DEG_LAT = 111.32;
 
 // ---------------------------------------------------------------------
@@ -991,6 +1010,13 @@ function describeMapFetchError(err) {
 
 // field: "rain" | "temp" | "pressure" | "windSpeed" | "windDir" — each a
 // same-shaped [hour][row][col] array off the grid object.
+//
+// hour can be fractional (see MAP_HOUR_STEP) — h0/h1 below bracket it
+// and th is how far between them. At a whole-number hour (the only
+// case possible when MAP_HOUR_STEP is 1) th is always exactly 0, so
+// atHour(h1) is never even called and this returns precisely what the
+// old single-index lookup did — the interpolation only does anything
+// once a fractional hour can actually reach this function.
 function sampleGrid(grid, field, hour, lat, lon) {
   if (!grid) return null;
   const fr = (lat - grid.lat0) / grid.dLat;
@@ -999,28 +1025,48 @@ function sampleGrid(grid, field, hour, lat, lon) {
   const r0 = Math.floor(fr), c0 = Math.floor(fc);
   const r1 = Math.min(r0 + 1, grid.rows - 1), c1 = Math.min(c0 + 1, grid.cols - 1);
   const tr = fr - r0, tc = fc - c0;
-  const f = grid[field][Math.min(hour, grid.hours - 1)];
-  if (f[r0][c0] === null || f[r0][c1] === null || f[r1][c0] === null || f[r1][c1] === null) {
-    // Wind direction is angular — averaging raw degrees across a wrap
-    // (e.g. 350° and 10°) would bilinear-blend to 180°, exactly
-    // backwards. Nearest-point lookup sidesteps that entirely rather
-    // than doing circular interpolation for one field only.
-    return f[Math.round(fr)]?.[Math.round(fc)] ?? null;
+
+  function atHour(h) {
+    const f = grid[field][h];
+    if (f[r0][c0] === null || f[r0][c1] === null || f[r1][c0] === null || f[r1][c1] === null) {
+      // Wind direction is angular — averaging raw degrees across a wrap
+      // (e.g. 350° and 10°) would bilinear-blend to 180°, exactly
+      // backwards. Nearest-point lookup sidesteps that entirely rather
+      // than doing circular interpolation for one field only.
+      return f[Math.round(fr)]?.[Math.round(fc)] ?? null;
+    }
+    // Bilinear. Legitimate here in a way that sampling postcodes was not:
+    // the model holds a continuous field that its grid samples, so
+    // interpolating between cell centres recovers the field rather than
+    // magnifying an interpolation that already happened.
+    return (
+      f[r0][c0] * (1 - tr) * (1 - tc) + f[r0][c1] * (1 - tr) * tc +
+      f[r1][c0] * tr * (1 - tc) + f[r1][c1] * tr * tc
+    );
   }
-  // Bilinear. Legitimate here in a way that sampling postcodes was not:
-  // the model holds a continuous field that its grid samples, so
-  // interpolating between cell centres recovers the field rather than
-  // magnifying an interpolation that already happened.
-  return (
-    f[r0][c0] * (1 - tr) * (1 - tc) + f[r0][c1] * (1 - tr) * tc +
-    f[r1][c0] * tr * (1 - tc) + f[r1][c1] * tr * tc
-  );
+
+  const clampedHour = Math.min(Math.max(hour, 0), grid.hours - 1);
+  const h0 = Math.floor(clampedHour), h1 = Math.min(h0 + 1, grid.hours - 1);
+  const th = clampedHour - h0;
+  const v0 = atHour(h0);
+  if (th === 0) return v0;
+  const v1 = atHour(h1);
+  // Don't manufacture a value by blending real data with a gap — fall
+  // back to whichever side actually has one, same "no colour means no
+  // data" rule the rest of this map follows.
+  if (v0 === null || v1 === null) return v0 ?? v1;
+  return v0 * (1 - th) + v1 * th;
 }
 
 // windDir specifically: bilinear-interpolating raw compass degrees is
 // wrong across the 0°/360° wrap, so this always samples the nearest
 // grid point rather than blending — a small loss of smoothness that a
-// sparse arrow layout would hide anyway.
+// sparse arrow layout would hide anyway. Rounds to the nearest WHOLE
+// hour too, for the same reason — a fractional hour (see MAP_HOUR_STEP)
+// snaps to whichever real hourly reading is closest rather than
+// attempting to blend a direction, which circular interpolation could
+// do correctly but isn't worth the added complexity for an arrow layer
+// this sparse to begin with.
 function sampleWindDir(grid, hour, lat, lon) {
   if (!grid) return null;
   const fr = (lat - grid.lat0) / grid.dLat;
@@ -1028,7 +1074,8 @@ function sampleWindDir(grid, hour, lat, lon) {
   if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) return null;
   const r = Math.round(Math.min(Math.max(fr, 0), grid.rows - 1));
   const c = Math.round(Math.min(Math.max(fc, 0), grid.cols - 1));
-  const v = grid.windDir[Math.min(hour, grid.hours - 1)][r][c];
+  const h = Math.round(Math.min(Math.max(hour, 0), grid.hours - 1));
+  const v = grid.windDir[h][r][c];
   return v === null || v === undefined ? null : v;
 }
 
@@ -1634,7 +1681,19 @@ registerMapLayer({
     // pass and this is several.
     if (mapIsPanning) return;
     const p = mapPalette();
-    const hour = Math.min(mapHourValue(), mapGrid.hours - 1);
+    // Rounded to the nearest WHOLE hour, unlike the colour-wash layers
+    // above — marching squares traces contours directly off the raw
+    // grid array (mapGrid.pressure[hour], a real array index, not a
+    // lat/lon sample through sampleGrid), and blending an entire
+    // contour LINE between two hours isn't the same operation as
+    // blending a colour: it would mean re-running marching squares on
+    // an interpolated pressure field and somehow cross-fading the
+    // resulting paths, not just averaging two numbers. Same call as
+    // wind direction above — snap to the nearest real reading rather
+    // than attempt something more elaborate for a fractional hour that,
+    // per MAP_HOUR_STEP's own comment, isn't genuinely higher-resolution
+    // data anyway.
+    const hour = Math.round(Math.min(mapHourValue(), mapGrid.hours - 1));
     const field = mapGrid.pressure[hour];
     const flat = field.flat().filter(v => v !== null && v !== undefined);
     if (!flat.length) return;
@@ -2507,9 +2566,17 @@ let mapZoomIndex = loadMapZoom();
 const mapCanvas = document.getElementById("mapCanvas");
 const mapStatusEl = document.getElementById("mapStatus");
 const mapHourInput = document.getElementById("mapHour");
+// The HTML attribute is left at step="1" — this is the one place that
+// actually applies MAP_HOUR_STEP, so reverting that single constant is
+// the whole story regardless of what map.html happens to say.
+if (mapHourInput) mapHourInput.step = String(MAP_HOUR_STEP);
 
 function mapHourValue() {
-  return mapHourInput ? parseInt(mapHourInput.value, 10) || 0 : 0;
+  // parseFloat, not parseInt — parseInt truncates "2.5" straight down
+  // to 2, silently discarding the half-hour position entirely. Harmless
+  // either way at MAP_HOUR_STEP === 1, since the slider only ever holds
+  // whole numbers then.
+  return mapHourInput ? parseFloat(mapHourInput.value) || 0 : 0;
 }
 
 // "+7h" makes you do the arithmetic before you can act on it. The
@@ -2527,8 +2594,23 @@ function mapHourValue() {
 // app. Falls back to the old arithmetic only in the brief window before
 // the first grid has loaded.
 function mapHourClock(hoursAhead) {
-  const iso = mapGrid?.times?.[hoursAhead];
-  const when = iso ? new Date(iso) : new Date(Date.now() + hoursAhead * 3600000);
+  const times = mapGrid?.times;
+  let when;
+  if (times && times[Math.floor(hoursAhead)] !== undefined) {
+    // A fractional hoursAhead (see MAP_HOUR_STEP) is a genuine midpoint
+    // between two real hourly timestamps already in the grid — computed
+    // as such here, rather than falling through to the plain-arithmetic
+    // branch below, which anchors to the actual live clock instead of
+    // the grid's own reference time and would quietly drift out of step
+    // with it by however stale the cached grid happens to be. At a
+    // whole-number hoursAhead this is exactly times[hoursAhead], same
+    // as before.
+    const h0 = Math.floor(hoursAhead), h1 = Math.min(h0 + 1, times.length - 1);
+    const t0 = Date.parse(times[h0]), t1 = Date.parse(times[h1]);
+    when = new Date(t0 + (t1 - t0) * (hoursAhead - h0));
+  } else {
+    when = new Date(Date.now() + hoursAhead * 3600000);
+  }
   const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const isToday = when.toDateString() === new Date().toDateString();
   if (hoursAhead === 0) return `Now, ${time}`;
@@ -3084,7 +3166,11 @@ function stopMapHourPlay() {
 // hours to keep pretending it can hit a fixed cadence it can't sustain.
 function scheduleMapHourPlayStep() {
   mapHourPlayTimer = setTimeout(() => {
-    const next = (parseInt(mapHourInput.value, 10) || 0) + 1;
+    // parseFloat + MAP_HOUR_STEP, not the old hardcoded parseInt/+1 —
+    // at MAP_HOUR_STEP === 1 this behaves identically (parseFloat reads
+    // a whole number just as well as parseInt does, and +1 is +1), so
+    // this only starts stepping in halves once that constant does.
+    const next = (parseFloat(mapHourInput.value) || 0) + MAP_HOUR_STEP;
     mapHourInput.value = next > 47 ? 0 : next;
     renderMap();
     scheduleMapHourPlayStep();
