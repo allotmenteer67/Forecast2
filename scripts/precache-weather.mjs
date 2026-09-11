@@ -30,6 +30,19 @@
 // runs completely unchanged against this data, the same as it would
 // against a live fetch's result. See the "metoffice" constraint below
 // for the one place that mattered for making that swap-in work.
+//
+// ---- Favourites (added this session) ----
+// data/precache-config.json's weatherFavourites/fishingFavourites arrays
+// are written automatically by favourite-relay-worker.js and only ever
+// contain a postcode OUTWARD code (e.g. "TA6") — never lat/lon, never a
+// resolved place name. This script is what turns that bare code into an
+// actual fetchable location, via the same postcodes.io outcode lookup
+// app.js's own geocodePostcode() already trusts, at fetch time — the
+// coordinates themselves never get written back to the repo, only used
+// in-memory for this run's fetches. A favourite that fails to geocode
+// (a typo that slipped past the Worker's own shape check, a postcodes.io
+// hiccup) is skipped with a logged error rather than failing the whole
+// run.
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
@@ -39,6 +52,7 @@ const OUTPUT_PATH = new URL("../data/precache-weather.json", import.meta.url);
 
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const FISHING_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine";
+const OUTCODE_GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 
 // Kept in sync BY HAND with REAL_SOURCES in app.js — duplicated rather
 // than imported, since this script runs in Node against a plain
@@ -66,6 +80,58 @@ async function fetchJson(url, label) {
     throw new Error(`${label}: HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// Resolves a bare outward code (e.g. "TA6") to a centroid — same source
+// and same area-level precision app.js's own geocodePostcode() already
+// uses for a full postcode, just given an outcode directly rather than
+// deriving one from a longer string. Returns null (never throws) on any
+// failure, so one bad favourite can't take the whole run down — see the
+// call sites below for how that's handled.
+async function geocodeOutcode(outcode) {
+  try {
+    const res = await fetch(OUTCODE_GEOCODE_URL + encodeURIComponent(outcode), { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.result) return null;
+    return { lat: data.result.latitude, lon: data.result.longitude };
+  } catch (err) {
+    console.error(`Favourite outcode "${outcode}" failed to geocode: ${err.message}`);
+    return null;
+  }
+}
+
+// Turns config.weatherFavourites into the same {id, label, lat, lon}
+// shape as a hand-typed weatherLocations entry, so the rest of this
+// script (and the app reading its output) never needs to know a given
+// location came from a favourite rather than the hand-maintained list.
+// label is deliberately just the outcode itself, never a resolved place
+// name — keeping the same "outward code only" boundary the Worker
+// itself enforces, all the way through to what ends up in memory here
+// (though note this resolved lat/lon is NOT written back to the repo,
+// only used for this run's fetches — see the file header).
+async function resolveWeatherFavourites(favourites) {
+  const resolved = await Promise.all((favourites || []).map(async fav => {
+    const geo = await geocodeOutcode(fav.outcode);
+    if (!geo) {
+      console.error(`Skipping weather favourite "${fav.outcode}" — couldn't geocode.`);
+      return null;
+    }
+    return { id: `fav-${fav.outcode.toLowerCase()}`, label: fav.outcode, lat: geo.lat, lon: geo.lon };
+  }));
+  return resolved.filter(Boolean);
+}
+
+async function resolveFishingFavourites(favourites) {
+  const resolved = await Promise.all((favourites || []).map(async fav => {
+    const geo = await geocodeOutcode(fav.outcode);
+    if (!geo) {
+      console.error(`Skipping fishing favourite "${fav.outcode}" — couldn't geocode.`);
+      return null;
+    }
+    return { id: `fav-${fav.outcode.toLowerCase()}`, label: fav.outcode, lat: geo.lat, lon: geo.lon, markType: fav.markType || "estuary" };
+  }));
+  return resolved.filter(Boolean);
 }
 
 // Exact same params fetchHourlyForecast (app.js) builds for a single
@@ -240,9 +306,19 @@ async function main() {
   const now = new Date();
   const nowIso = now.toISOString();
 
-  console.log(`Precache run starting ${nowIso} — ${config.weatherLocations.length} weather location(s), ${config.fishingSpots.length} fishing spot(s).`);
+  // Favourites are resolved (outcode -> lat/lon) once up front, then
+  // merged into the same lists the hand-maintained entries already go
+  // through below — everything downstream treats them identically.
+  const [weatherFavouriteLocations, fishingFavouriteSpots] = await Promise.all([
+    resolveWeatherFavourites(config.weatherFavourites),
+    resolveFishingFavourites(config.fishingFavourites)
+  ]);
+  const weatherLocations = [...config.weatherLocations, ...weatherFavouriteLocations];
+  const fishingSpots = [...config.fishingSpots, ...fishingFavouriteSpots];
 
-  const weatherResults = await Promise.all(config.weatherLocations.map(async location => {
+  console.log(`Precache run starting ${nowIso} — ${weatherLocations.length} weather location(s) (${weatherFavouriteLocations.length} favourite), ${fishingSpots.length} fishing spot(s) (${fishingFavouriteSpots.length} favourite).`);
+
+  const weatherResults = await Promise.all(weatherLocations.map(async location => {
     try {
       return await fetchWeatherLocation(location, config.topForecasters);
     } catch (err) {
@@ -272,11 +348,13 @@ async function main() {
   // happened to roll over on its own, because this only ever compared
   // the CLOCK, never the actual configured spot ids against what was
   // last written. A config change is a deliberate, immediate action on
-  // your part; it shouldn't sit blocked behind an unrelated timer.
+  // your part; it shouldn't sit blocked behind an unrelated timer. A new
+  // favourite landing via the Worker counts as exactly this same kind of
+  // change, for the same reason.
   const currentBucket = fishingBucketFor(now);
   const previousBucket = previous?.fishingBucket;
   const previousSpotIds = new Set((previous?.fishing || []).map(f => f.id));
-  const currentSpotIds = new Set(config.fishingSpots.map(s => s.id));
+  const currentSpotIds = new Set(fishingSpots.map(s => s.id));
   const spotsChanged = previousSpotIds.size !== currentSpotIds.size || [...currentSpotIds].some(id => !previousSpotIds.has(id));
   const fishingDue = previousBucket === undefined || previousBucket !== currentBucket || spotsChanged;
   if (spotsChanged && previousBucket !== undefined) {
@@ -287,7 +365,7 @@ async function main() {
   let fishingDataAsOf;
   if (fishingDue) {
     console.log(`Fishing bucket ${currentBucket} due (previous was ${previousBucket ?? "none"}) — refreshing all fishing spots.`);
-    fishingResults = await Promise.all(config.fishingSpots.map(async spot => {
+    fishingResults = await Promise.all(fishingSpots.map(async spot => {
       try {
         return await fetchFishingSpot(spot);
       } catch (err) {
@@ -320,8 +398,8 @@ async function main() {
     fishing: fishingResults.filter(Boolean)
   };
 
-  const failedWeatherCount = config.weatherLocations.length - output.weather.length;
-  const failedFishingCount = fishingDue ? config.fishingSpots.length - fishingResults.filter(Boolean).length : 0;
+  const failedWeatherCount = weatherLocations.length - output.weather.length;
+  const failedFishingCount = fishingDue ? fishingSpots.length - fishingResults.filter(Boolean).length : 0;
   if (failedWeatherCount > 0 || failedFishingCount > 0) {
     console.error(`Run completed with ${failedWeatherCount} weather location(s) and ${failedFishingCount} fishing spot(s) having no data at all (no fresh fetch, no previous fallback available).`);
   }
