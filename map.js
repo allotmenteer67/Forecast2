@@ -1389,7 +1389,24 @@ registerMapLayer({
   id: "waterways",
   draw(ctx, view) {
     const p = mapPalette();
+    // Clipped to land, same technique and same clipToLand() the terrain
+    // layer above already uses. This is the actual fix for rivers
+    // drawing straight out into the sea at estuary mouths — a previous
+    // session's own handover notes claimed this had already been done,
+    // but the real code here never called clipToLand for this layer at
+    // all, and the bug was confirmed still present even after a full
+    // Safari "delete website data" wipe ruled out a stale cache as the
+    // explanation. Skipped while panning, the same trade-off terrain
+    // makes and for the same reason: clipToLand's own coastline walk
+    // isn't free, and paying it every drag frame for a layer this thin
+    // isn't worth it — rivers simply don't redraw for the handful of
+    // frames an actual drag lasts, then reappear, correctly clipped,
+    // the moment it ends.
+    if (mapIsPanning) return;
+    ctx.save();
+    clipToLand(ctx, view);
     drawMapWaterways(ctx, mapVectorData.waterways, view, p.river);
+    ctx.restore();
   }
 });
 

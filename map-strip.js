@@ -430,7 +430,17 @@ async function renderMapStrip(centre, grid) {
     drawMapStripCoastline(ctx, view, mapStripLakes, p.sea, p.coast);
   }
   if (mapStripWaterways) {
-    drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
+    // Clipped to land, same clipMapStripToLand() terrain just above
+    // already uses — the strip's own copy of the exact same bug map.js
+    // had: rivers drawing straight out into the sea at estuary mouths,
+    // because this call never clipped at all. No panning to skip for
+    // (the strip has no drag), so unlike the full map's own version of
+    // this fix there's no frame-skip needed here — just the clip.
+    ctx.save();
+    if (clipMapStripToLand(ctx, view, mapStripCoastline)) {
+      drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
+    }
+    ctx.restore();
   }
 
   if (grid) {

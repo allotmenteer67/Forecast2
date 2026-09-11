@@ -153,7 +153,20 @@
 // tide-ui.js are all in SHELL_FILES, so without this bump every one of
 // these would keep being served from the v17 cache and look like none
 // of it had worked.
-const CACHE_NAME = "cloude-shell-v18";
+// Bumped to v19: the real fix for rivers drawing out into the sea at
+// estuary mouths (#17) — a previous session's handover notes claimed
+// this was already done (clipToLand applied to the waterways layer),
+// but the actual code never called it for that layer at all, on either
+// map.js or map-strip.js; confirmed still broken even after a full
+// Safari "delete website data" wipe ruled out a stale cache as the
+// explanation. Both files' waterways layers now clip to land the same
+// way their terrain layers already did. Cross-checked the other two
+// "already fixed" items (#2's forceIOSStatusBarRelayout, #3's
+// .app-home max-height) against the real files while here — both
+// genuinely exist in the code, unlike waterways' clip, so if either is
+// still misbehaving it's a real remaining edge case, not another
+// phantom fix.
+const CACHE_NAME = "cloude-shell-v19";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
