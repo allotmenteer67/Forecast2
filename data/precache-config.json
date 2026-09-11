@@ -27,14 +27,37 @@
     "genuinely a second request for that spot, not folded into the 'one",
     "source' count. See fishing.js's own fetchFishingForecast for why.",
     "",
+    "weatherFavourites / fishingFavourites: NOT hand-maintained — these are",
+    "written automatically by the favourite-relay Cloudflare Worker (see",
+    "favourite-relay-worker.js) when someone taps the ★ button next to a",
+    "saved place in Settings. Each entry is only a postcode OUTWARD code",
+    "(e.g. 'TA6') — deliberately never a resolved place name or exact",
+    "coordinates, so a favourite never puts anyone's precise location in",
+    "this public repo. precache-weather.mjs geocodes the outcode to a",
+    "centroid (via postcodes.io, same source the app itself already",
+    "trusts) at fetch time, same as it always has for the hand-typed",
+    "entries above. Capped at 8 entries per list by the Worker itself —",
+    "once full it rejects new favourites rather than evicting an existing",
+    "one; delete an entry here by hand (or ask whoever added it to remove",
+    "their locally-saved place — that does NOT auto-remove it from here,",
+    "favourites are sticky by design) to free up a slot. You can also",
+    "still hand-edit these two arrays directly, same as the others — the",
+    "Worker only ever appends, it never assumes it's the sole writer.",
+    "",
     "Sizing formula (for updating the workflow's cron interval by hand",
     "after editing this file — GitHub Actions cron is static YAML, this",
     "script can't adjust its own schedule):",
-    "  weather/day = weatherLocations.length * topForecasters.length * (1440 / intervalMinutes)",
-    "  fishing/day = fishingSpots.length * (2 if any coastal else 1) * 4",
+    "  weather/day = (weatherLocations.length + weatherFavourites.length) *",
+    "                topForecasters.length * (1440 / intervalMinutes)",
+    "  fishing/day = (fishingSpots.length + fishingFavourites.length) *",
+    "                (2 if any coastal else 1) * 4",
     "  total/day should stay comfortably under 9000 (see the session's own",
     "  margin discussion) to leave headroom for GitHub's own scheduling",
-    "  drift meaning some days run a few extra times."
+    "  drift meaning some days run a few extra times. At the current caps",
+    "  (8 + 8 favourites, worst case all coastal) this adds at most",
+    "  8*4*72 = 2304 weather requests/day and 8*2*4 = 64 fishing",
+    "  requests/day beyond the hand-maintained entries — check this still",
+    "  clears 9000 with room to spare before raising either cap."
   ],
 
   "topForecasters": ["metoffice", "ecmwf", "gfs", "icon"],
@@ -49,5 +72,9 @@
     { "id": "lowestoft", "label": "Lowestoft", "lat": 52.475, "lon": 1.751, "markType": "coastal" },
     { "id": "lyme-regis", "label": "Lyme Regis", "lat": 50.725, "lon": -2.9375, "markType": "coastal" },
     { "id": "liverpool", "label": "Liverpool", "lat": 53.405, "lon": -2.995, "markType": "coastal" }
-  ]
+  ],
+
+  "weatherFavourites": [],
+
+  "fishingFavourites": []
 }
