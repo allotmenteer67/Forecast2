@@ -908,9 +908,16 @@ header p {
   /* A two-part row — the date/window text on the left (unchanged from
      before), the current place name pinned to the right (see app.js's
      currentPlaceLabel(), shared with the header's own place chip so the
-     two can never show a different name for the same place). */
+     two can never show a different name for the same place).
+     align-items was `baseline`, which lines up text nicely but drags a
+     circular icon button noticeably off-centre against that text (a
+     circle has no baseline to align to, so it was landing low/lopsided
+     next to "Today and Tomorrow"). `center` keeps the two text spans
+     reading correctly next to each other (they're both plain text, so
+     baseline and center look identical there) while actually centring
+     the refresh button vertically in the row. */
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
 
@@ -948,8 +955,18 @@ header p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  /* Was 20px with no overflow:hidden and no explicit svg size — the
+     inner <svg> has no intrinsic width/height of its own (only a
+     viewBox), so without a CSS size to constrain it, browsers fall
+     back to wildly inconsistent sizing and the refresh-arrow shape
+     gets lost entirely, reading as a plain filled dot. Sized up
+     slightly to a friendlier tap target and given overflow:hidden so
+     the icon (now explicitly sized below, and via width/height
+     attributes on the svg itself) is guaranteed to actually sit inside
+     the circle rather than relying on the browser to guess right. */
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
   flex-shrink: 0;
   /* Same min-height/padding override .hour-play-icon needs — see that
      rule's own comment for why the global button reset otherwise wins. */
@@ -963,6 +980,11 @@ header p {
 }
 
 .card-refresh-button svg {
+  /* Explicit size, backed up by the same width/height attributes on
+     the svg tags in index.html — belt and braces so the arrow reads
+     clearly at a glance instead of shrinking to an indistinct blob. */
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
 }
 
