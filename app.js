@@ -5666,6 +5666,18 @@ if (mapStripEl) {
 
 attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton");
 
+// Trims a label down to before its first comma ("Bridgwater, Somerset"
+// -> "Bridgwater") — a separate copy of tide/fishing's own
+// shortPlaceLabel() (tide-ui.js), not a shared call to it: tide-ui.js
+// isn't loaded on every page this could eventually run on, and this
+// file is meant to work standalone. A label with no comma (a custom
+// rename, or a plain postcode) is returned unchanged.
+function trimPlaceLabelCounty(label) {
+  const text = String(label || "");
+  const comma = text.indexOf(",");
+  return comma === -1 ? text : text.slice(0, comma).trim();
+}
+
 // Shared by the header's place chip and the headline card's own place
 // label (see renderHeadline) — one source of truth for "what do we call
 // the current place right now", so the two can never show a different
@@ -5678,10 +5690,15 @@ attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPl
 // never finds one) — before falling back to the raw postcode/coordinate
 // string itself, which only shows if neither of those exist yet (e.g.
 // the very first paint, before any lookup has had a chance to run at
-// all).
+// all). County dropped from whichever of those wins — deliberately only
+// HERE, not in the dropdown menu (renderPlaceMenu) or Settings' own
+// list (renderPlacesList), which both still show a place's full label
+// directly: two same-named places in different counties need to stay
+// tellable apart exactly where you're choosing between them, same
+// reasoning tide/fishing's own county-dropping already follows.
 function currentPlaceLabel() {
   const match = loadPlaces().find(place => place.postcode === state.postcode);
-  return match ? match.label : (state.actual.coordLabel || state.postcode || "Set location");
+  return trimPlaceLabelCounty(match ? match.label : (state.actual.coordLabel || state.postcode || "Set location"));
 }
 
 function renderPlaceChip() {

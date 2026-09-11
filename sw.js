@@ -237,7 +237,25 @@
 // event itself, using state.lat/state.lon already restored by
 // resetForLocationChange() a few lines earlier. app.js is in
 // SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v25";
+// Bumped to v26: two changes to the front page's place name (chip +
+// headline card). (1) County dropped from both — currentPlaceLabel()
+// (app.js) now trims to before the first comma, same treatment
+// tide/fishing's own cards already had, just not previously extended
+// here. Settings' places list and the switch-place dropdown menu are
+// deliberately left showing full labels still, for the same reason
+// tide/fishing's own version keeps them full: telling apart two
+// same-named places in different counties matters exactly where you're
+// choosing between them. (2) The headline card's place name now pins to
+// the right via margin-left: auto rather than the row's own
+// justify-content: space-between — functionally the same result for
+// two items, but more direct and not dependent on exactly two items
+// being in the row. If "Today and TomorrowSomerset" (no gap at all) was
+// showing on a real device despite the CSS already being correct for
+// that case, it strongly suggests the style.css from the batch that
+// added this (v23) didn't actually make it into that deploy — worth
+// double-checking all files from a batch land together. app.js and
+// style.css are both in SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v26";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

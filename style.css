@@ -888,6 +888,40 @@ header p {
   color: var(--accent-dark);
   font-weight: 700;
   font-size: 14px;
+  /* A two-part row — the date/window text on the left (unchanged from
+     before), the current place name pinned to the right (see app.js's
+     currentPlaceLabel(), shared with the header's own place chip so the
+     two can never show a different name for the same place). */
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+#headlineDateText {
+  /* Never shrinks or truncates — it's always one of a handful of short,
+     known strings ("Today", "Today and Tomorrow", a formatted date),
+     unlike the place name beside it which can be arbitrarily long. */
+  flex: 0 0 auto;
+}
+
+.headline-date-place {
+  font-weight: 600;
+  color: var(--accent-muted);
+  /* The place name is the one that gives way under a long name + a
+     narrow phone — ellipsis rather than wrapping onto a second line or
+     squeezing the date text on the other side. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+  /* Was relying on .headline-date's own justify-content: space-between
+     to push this to the right edge — correct in principle for exactly
+     two flex items, but margin-left: auto says the same thing more
+     directly (pin THIS item to the end of the row, full stop) and
+     doesn't depend on there being exactly two items in the row if
+     anything else is ever added to it later. */
+  margin-left: auto;
 }
 
 .headline-cell-dimmed .headline-value,
