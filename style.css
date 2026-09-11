@@ -469,6 +469,11 @@ header p {
   overflow: hidden;
   margin-bottom: 12px;
   box-shadow: 0 2px 4px rgba(31, 42, 36, .07), 0 14px 30px -16px rgba(31, 42, 36, .24);
+  /* Swipe-to-switch-saved-place (see app.js) has no interactive drag
+     control anywhere inside this element, unlike .headline just below —
+     safe to restrict horizontal gestures to the pointer handling
+     entirely, same as tide/fishing's own swipeable wrapper. */
+  touch-action: pan-y;
 }
 
 .map-strip canvas {
@@ -509,6 +514,15 @@ header p {
      column gap untouched (that's genuine breathing room between two
      numbers, not slack). */
   gap: 7px 16px;
+  /* Deliberately on THIS element, not .headline itself — .headline also
+     contains #hourSlider, a native range input that needs its own
+     unrestricted horizontal drag, and touch-action cascades down to
+     descendants (a child can only narrow an ancestor's value further,
+     never widen it back out). .headline-grid is a SIBLING of
+     .hour-slider, not an ancestor of it, so restricting horizontal
+     gestures here for the swipe-to-switch-place handling (see app.js)
+     can't reach the slider at all. */
+  touch-action: pan-y;
 }
 
 .headline-loading {

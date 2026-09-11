@@ -1770,6 +1770,25 @@ let loadLocationGeneration = 0;
 const LOAD_SLOW_WARNING_MS = 45000;
 
 function loadLocationData() {
+  // Skip the fetch ENTIRELY when a still-fresh cached snapshot already
+  // covers this exact postcode — resetForLocationChange() (always called
+  // immediately before this, by every caller: Switch button, saved-place
+  // tap, header chip, geolocation, page bootstrap, and swiping between
+  // saved places) already restored and painted it, a few lines up the
+  // call stack. This is what turns the recent-location cache into a
+  // genuine request-saving cache rather than only a "show something
+  // instantly while still fetching anyway" one — see
+  // RECENT_LOCATION_CACHE_MS's own comment for the full reasoning.
+  // Every caller gets this for free without knowing anything about it;
+  // none of them need to change.
+  {
+    const cache = loadRecentLocationCache();
+    const snap = cache[state.postcode];
+    if (snap && Date.now() - snap.cachedAt <= RECENT_LOCATION_CACHE_MS) {
+      return Promise.resolve();
+    }
+  }
+
   // Only ever one fetch actually runs at a time — every fetch function
   // (fetchActualWeather, fetchRealSourceLive, fetchHourlyForecast)
   // writes straight into this same shared state.actual/state.realSources/
@@ -3448,7 +3467,14 @@ function renderHeadline() {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "headline-cell";
-    cell.addEventListener("click", () => openHourlySheet(conditionName));
+    cell.addEventListener("click", () => {
+      // savedPlaceSwiped is set by the swipe-to-switch-place handling
+      // near switchToPostcode below — a swipe that started on this cell
+      // still generates a click afterwards, which needs swallowing the
+      // same way tide/fishing's own swipe already does for their rows.
+      if (savedPlaceSwiped) { savedPlaceSwiped = false; return; }
+      openHourlySheet(conditionName);
+    });
 
     const label = document.createElement("span");
     label.className = "headline-label";
@@ -5388,13 +5414,28 @@ if (backfillButton) {
 // vs hills for tomorrow, say) used to mean a full blank-then-reload every
 // single time, even switching straight back to somewhere just looked at
 // moments ago. This keeps a short-lived snapshot of the last
-// successfully completed load per place, so switching back within a few
-// minutes shows that data immediately, with a fresh fetch still kicked
-// off silently behind it. It only ever stores a genuinely COMPLETE,
-// already-rendered snapshot, never a partial one, so this doesn't reopen
-// the "flash of inconsistent data" problem fixed earlier — it's showing
-// data that was fully correct a few minutes ago, the same trade-off any
-// ordinary weather app's own caching already makes.
+// successfully completed load per place, so switching back within the
+// window below shows that data immediately.
+//
+// Used to also kick off a fresh fetch silently behind every cached
+// display, every time, regardless — which meant this only ever helped
+// perceived speed, not actual request count, and was a big part of why
+// ordinary use (a few place switches, a few scrolls) could still hit
+// Open-Meteo's daily/hourly limits. loadLocationData() now checks this
+// same cache itself and skips the fetch ENTIRELY while it's still within
+// RECENT_LOCATION_CACHE_MS — see the guard at the top of that function.
+// Widened from 5 to 15 minutes to go with that change: a 5-minute
+// skip-window would have meant "swipe over to compare, swipe back a
+// minute later" still refiring the full nine-source fetch most of the
+// time, which defeats the point of caching for a quick back-and-forth
+// comparison between two or three places.
+//
+// It only ever stores a genuinely COMPLETE, already-rendered snapshot,
+// never a partial one, so this doesn't reopen the "flash of
+// inconsistent data" problem fixed earlier — it's showing data that was
+// fully correct up to 15 minutes ago, not live-to-the-second, which is
+// the actual trade-off being made here in exchange for the fewer
+// requests and the instant redisplay.
 //
 // Backed by sessionStorage rather than a plain in-memory variable — this
 // is a plain multi-page site (index.html, compare.html, settings.html,
@@ -5404,8 +5445,11 @@ if (backfillButton) {
 // (cleared only when the browser tab/window itself actually closes),
 // which is the lifetime this feature is actually meant to have — a
 // plain variable was silently making the buffer far less reliable than
-// it looked like it should be.
-const RECENT_LOCATION_CACHE_MS = 5 * 60 * 1000;
+// it looked like it should be. Deliberately NOT localStorage: this is
+// meant to cover a session of comparing a handful of places, not "every
+// place ever looked at" — see the session's own discussion on why that
+// wider idea was shelved.
+const RECENT_LOCATION_CACHE_MS = 15 * 60 * 1000;
 const RECENT_LOCATION_CACHE_KEY = "forecast-compare:recentLocationCache";
 
 function loadRecentLocationCache() {
@@ -5510,6 +5554,98 @@ function switchToPostcode(pc) {
   renderPlacesList();
   loadLocationData();
 }
+
+// ---- Swipe-to-switch-saved-place (map strip + headline card) ----
+// Same technique as tide/fishing's own swipe (see tide-ui.js) — pointer
+// tracking used ONLY to detect a genuine swipe, which sets a flag to
+// swallow the click/tap that follows it; everything else falls through
+// to native tap handling untouched.
+//
+// Two separate swipe targets (the map strip, and the headline card)
+// rather than one shared wrapper around both: wrapping them in a new
+// parent div would pull .map-strip out from being a DIRECT child of
+// .app-home, which is exactly what the .app-home > *:not(.map-strip) /
+// .map-strip flex-shrink rule (see style.css) depends on to size the
+// strip correctly — breaking that was the one thing this needed to
+// avoid, since it's what keeps the date bar on screen.
+//
+// #hourSlider (and its Play button) are explicitly excluded from the
+// headline card's own tracking, rather than given a swipe-friendly
+// touch-action. CSS touch-action cascades down to descendants — an
+// ancestor's value can only ever be narrowed further by a child, never
+// widened back out — so giving .headline itself a pan-y touch-action
+// would have narrowed what's available to the slider inside it too,
+// right where it needs its own native drag least disturbed. Bailing out
+// of tracking entirely the moment a gesture starts on the slider
+// sidesteps that risk rather than trying to tune CSS around it.
+let savedPlaceSwiped = false;
+
+function switchToAdjacentSavedPlace(direction) {
+  const places = loadPlaces();
+  if (places.length < 2) return;
+  const currentIndex = places.findIndex(p => p.postcode === state.postcode);
+  // Not currently on a saved place at all (an adopted map coordinate, or
+  // a Switch that was never saved) — no sensible "adjacent" place to
+  // compute, so just land on the first saved one regardless of swipe
+  // direction, rather than doing nothing.
+  if (currentIndex === -1) {
+    switchToPostcode(places[0].postcode);
+    return;
+  }
+  const nextIndex = (currentIndex + direction + places.length) % places.length;
+  switchToPostcode(places[nextIndex].postcode);
+}
+
+function attachSavedPlaceSwipe(el, excludeSelector) {
+  if (!el) return;
+  const SWIPE_THRESHOLD_PX = 32;
+  let startX = null, startY = null, pointerId = null;
+
+  el.addEventListener("pointerdown", e => {
+    if (pointerId !== null) return;
+    if (excludeSelector && e.target.closest(excludeSelector)) return; // let this control handle its own gesture entirely
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      // still works via normal event delivery without capture
+    }
+  });
+
+  el.addEventListener("pointermove", e => {
+    if (startX === null || e.pointerId !== pointerId) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      switchToAdjacentSavedPlace(dx < 0 ? 1 : -1);
+      savedPlaceSwiped = true;
+      startX = null; startY = null; pointerId = null; // one switch per gesture — don't re-trigger on further movement
+    }
+  });
+
+  el.addEventListener("pointerup", e => {
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
+  });
+  el.addEventListener("pointercancel", e => {
+    if (e.pointerId === pointerId) { startX = null; startY = null; pointerId = null; }
+  });
+}
+
+const mapStripEl = document.querySelector(".map-strip");
+attachSavedPlaceSwipe(mapStripEl);
+if (mapStripEl) {
+  // The strip is a plain <a href="map.html">, not a JS click handler —
+  // preventDefault() is what swallows a swipe-generated click here,
+  // rather than simply not calling a function the way tide/fishing's
+  // buttons do.
+  mapStripEl.addEventListener("click", e => {
+    if (savedPlaceSwiped) { savedPlaceSwiped = false; e.preventDefault(); }
+  });
+}
+
+attachSavedPlaceSwipe(document.querySelector(".headline"), "#hourSlider, #hourPlayButton");
 
 function renderPlaceChip() {
   if (!placeChipLabel) return;

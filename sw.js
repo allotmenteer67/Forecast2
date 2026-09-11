@@ -192,7 +192,22 @@
 // traced contour line — the same call already made for wind direction,
 // extended to isobars, which was a genuine crash risk otherwise (that
 // layer indexes the grid array directly, not through sampleGrid).
-const CACHE_NAME = "cloude-shell-v21";
+// Bumped to v22: two changes, working together. (1) The front page's
+// recent-location cache (app.js) widened from 5 to 15 minutes and now
+// actually SKIPS the Open-Meteo fetch within that window, rather than
+// only painting a cached snapshot instantly while still refetching
+// behind it every time — this is the change that makes switching
+// between a couple of saved places feel instant on repeat visits AND
+// cuts real request count. (2) The map strip and headline card are now
+// swipeable to switch between saved weather places, same pointer-based
+// technique as tide/fishing's own swipe, with the hour slider
+// explicitly excluded from the headline's tracking so its own native
+// drag is untouched. Two separate swipe targets rather than one shared
+// wrapper, deliberately — wrapping them together would have pulled
+// .map-strip out from being a direct child of .app-home, breaking the
+// flex-shrink sizing that keeps the date bar on screen. app.js and
+// style.css are both in SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v22";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
