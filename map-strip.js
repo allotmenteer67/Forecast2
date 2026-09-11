@@ -138,7 +138,23 @@ function mapStripView(centre) {
   const rect = mapStripCanvas.getBoundingClientRect();
   const w = rect.width, h = rect.height;
   const spanKm = MAP_STRIP_RADIUS_KM * 2;
-  const pxPerKm = Math.min(w, h) / spanKm;
+  // Math.max, not Math.min. The strip is a wide, short card — width is
+  // almost always the larger of the two — and the rain (and terrain)
+  // grid is only ever FETCHED out to MAP_STRIP_RADIUS_KM in every
+  // direction, a fixed square around centre. Scaling to the SHORTER
+  // side (the old Math.min) made that square exactly fill the card's
+  // height, but the wider width then showed MORE real-world distance
+  // than the square actually covers — anything past the fetched
+  // ±25km horizontally had no data, which is exactly the blank
+  // rectangle reported at each side of the rain layer. Scaling to the
+  // LONGER side instead guarantees the whole visible card, in every
+  // direction, sits inside the square that was actually fetched — the
+  // trade-off is a smaller effective radius top-to-bottom (more
+  // zoomed in vertically) than the nominal 25km, rather than any
+  // change to how much is fetched. Coastline/terrain/places aren't
+  // grid-limited the same way, so they simply show a bit less area
+  // too, not a gap.
+  const pxPerKm = Math.max(w, h) / spanKm;
   const dLon = kmPerDegLon(centre.lat);
   return {
     w, h, pxPerKm,
@@ -149,16 +165,26 @@ function mapStripView(centre) {
   };
 }
 
+// fill is optional — omit it (see the outlineOnly call in
+// renderMapStrip below) to redraw just the stroke without repainting
+// the land colour on top of whatever's already there. Mirrors map.js's
+// own two-pass "coastline" + "coastline-outline" layers: paint once
+// with a fill before the weather layers, then a cheap second pass of
+// stroke alone afterwards so the coast edge survives on top of a rain
+// wash instead of being buried under it.
 function drawMapStripCoastline(ctx, view, geojson, fill, stroke) {
   if (!geojson) return;
-  ctx.fillStyle = fill;
+  if (fill) ctx.fillStyle = fill;
   // Was fill-only. The full map strokes the coastline outline too (see
   // map.js's own coastline layer: `stroke: p.coast`), which reads as a
   // defined edge to the land rather than just a colour boundary — this
   // was the strip's most visible remaining difference from the full
   // map once the palette itself matched.
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 1;
+  // Was 1. Bumped for the same reason the full map's own coastline
+  // stroke was — too faint to read against a heavy rain band, even
+  // once this second stroke-only pass redraws it on top.
+  ctx.lineWidth = 1.5;
   geojson.features.forEach(feature => {
     const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
     polygons.forEach(polygon => {
@@ -170,7 +196,7 @@ function drawMapStripCoastline(ctx, view, geojson, fill, stroke) {
         });
         ctx.closePath();
       });
-      ctx.fill("evenodd");
+      if (fill) ctx.fill("evenodd");
       ctx.stroke();
     });
   });
@@ -436,6 +462,17 @@ async function renderMapStrip(centre, grid) {
         ctx.globalAlpha = 1;
       }
     }
+  }
+
+  // Second, stroke-only pass over the coastline outline — the rain
+  // wash just painted above can bury the coastline stroke laid down
+  // before it entirely, matching a bug already fixed on the full map
+  // (see its own "coastline-outline" layer in map.js) but never
+  // applied here, since the strip draws its coastline once, up front,
+  // with no later chance to redraw on top of anything. No fill passed,
+  // so this only redraws the outline itself, not the land colour.
+  if (mapStripCoastline) {
+    drawMapStripCoastline(ctx, view, mapStripCoastline, null, p.coast);
   }
 
   // A few names for scale — "is this 5 miles across or 50" is hard to

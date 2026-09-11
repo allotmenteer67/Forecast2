@@ -95,25 +95,14 @@ function solveLinearSystem(A, b) {
 // than scanning history separately. Deliberately in one place and
 // easy to swap: change the wording here only, nothing else needs to
 // know about it.
-//
-// "Making" was the original wording for the two building-toward-springs
-// bins, dropped in favour of "Building": "making tide" is standard
-// British nautical/fishing usage for the water FLOODING (rising) over
-// the separate ~6-hour tide, not this ~14.77-day amplitude cycle —
-// reused here for something else entirely, it read as flatly wrong
-// whenever it happened to land during an ebbing tide (which is half the
-// time, by definition, regardless of where the spring/neap cycle
-// actually is). "Building" keeps the same "heading toward springs"
-// meaning without colliding with an already-established term for a
-// different thing.
 const TIDE_CYCLE_LABELS = [
   "Springs",       // peak
   "Taking off",    // easing from springs, early
   "Taking off",    // easing from springs, mid
   "Near neaps",
   "Neaps",         // trough
-  "Building",      // building toward springs, early
-  "Building",      // building toward springs, mid
+  "Making",        // building toward springs, early
+  "Making",        // building toward springs, mid
   "Near springs"
 ];
 
@@ -145,7 +134,7 @@ function tideCyclePhase(fit, hours) {
 
   const bin = Math.round(psi / 45) % 8;
   // Rotates the label list so index 0 (Springs) lines up with psi≈0,
-  // and walks forward through Taking off → Neaps → Building → Near
+  // and walks forward through Taking off → Neaps → Making → Near
   // springs as psi increases toward 360/0 — matching how psi actually
   // decreases over real time (see comment above), so what a person
   // sees scrubbing forward through the week moves through the labels
@@ -269,94 +258,6 @@ const EA_READINGS_BASE = "https://environment.data.gov.uk/flood-monitoring/id/me
 const EA_READINGS_MAX_LIMIT = 10000; // EA's own hard cap per request — at
                                       // 15-min readings that's just over
                                       // 104 days, plenty for a first fit
-
-// ---- Elevation sanity check for tide locations ----
-//
-// nearestTideStation (below) always returns SOMETHING — it's pure
-// distance, with no idea whether the target point could plausibly HAVE
-// a tide at all. Reported: Ben Nevis and Snowdon both got full tide and
-// fishing forecasts, because their nearest gauge is still just some
-// number of km away like anywhere else. Distance alone can't fix this
-// without breaking genuinely tidal places: rivers run tidal miles
-// inland (the Trent at Gainsborough, ~50 miles from the open sea), so
-// any distance cutoff tight enough to exclude a mountain would also
-// exclude real tidal reaches, and any cutoff loose enough to keep those
-// wouldn't touch a mountain a mere few km from a fjord-like sea loch.
-//
-// Elevation sidesteps that entirely: the UK's largest tidal range (the
-// Bristol Channel/Severn) is only around 15m even at extreme springs,
-// so anywhere meaningfully above that literally cannot be reached by
-// any UK tide, regardless of how close it sits to the coast in plan
-// view — this is what actually separates a fjord-side village from a
-// mountain overlooking the same fjord. TIDE_MAX_PLAUSIBLE_ELEVATION_M
-// is set well above that real physical ceiling specifically so it never
-// second-guesses a genuine low-lying tidal river reach — it only ever
-// catches the unambiguous cases (a summit is wrong by a factor of 50+,
-// not a borderline judgement call).
-//
-// Reuses the exact same static file map.js already loads for terrain
-// hillshading (data/elevation-uk.json) — cached by the service worker
-// after either page's first visit, so this costs nothing on repeat use
-// regardless of which page loads it first.
-const TIDE_ELEVATION_DATA_URL = "data/elevation-uk.json";
-const TIDE_MAX_PLAUSIBLE_ELEVATION_M = 20;
-let tideElevationGrid = null;
-let tideElevationLoadPromise = null;
-
-async function loadTideElevationGrid() {
-  if (tideElevationGrid) return tideElevationGrid;
-  if (tideElevationLoadPromise) return tideElevationLoadPromise;
-  tideElevationLoadPromise = (async () => {
-    try {
-      const res = await fetchWithTimeout(TIDE_ELEVATION_DATA_URL, {}, 15000);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const values = [];
-      for (let r = 0; r < data.rows; r++) {
-        values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
-      }
-      tideElevationGrid = { ...data, values };
-      return tideElevationGrid;
-    } catch {
-      // No elevation data this time — elevationAt below treats that as
-      // "unknown", which lets the add go through unchecked rather than
-      // blocking someone over a network hiccup that has nothing to do
-      // with whether their location is actually tidal.
-      return null;
-    }
-  })();
-  return tideElevationLoadPromise;
-}
-
-// Nearest-cell lookup (not interpolated, unlike map.js's own smoothed
-// terrainElevationAt) — this only ever needs a rough plausibility
-// figure, not a precise one, so the simpler lookup is enough.
-function elevationAt(grid, lat, lon) {
-  if (!grid) return null;
-  const r = Math.round((lat - grid.lat0) / grid.dLat);
-  const c = Math.round((lon - grid.lon0) / grid.dLon);
-  if (r < 0 || c < 0 || r > grid.rows - 1 || c > grid.cols - 1) return null;
-  const v = grid.values[r][c];
-  return (v === null || v === undefined) ? null : v;
-}
-
-// Returns a plain string reason if the location's elevation looks
-// unusual for a tidal spot, or null if it passes (including when
-// elevation data couldn't be loaded — see loadTideElevationGrid above).
-// A WARNING, not a rejection — see the fuller reasoning at its call
-// site in performAddTideLocation (tide-ui.js) for why this can't
-// safely be a hard block: the underlying terrain grid is coarse enough
-// to misread a coastal village near steep ground, and a genuine
-// clifftop address can correctly read high anyway. The wording here
-// deliberately doesn't tell the person their answer is wrong — it
-// doesn't know that — only that it's worth a second look.
-async function checkTideElevationPlausibility(lat, lon) {
-  const grid = await loadTideElevationGrid();
-  const elevation = elevationAt(grid, lat, lon);
-  if (elevation === null) return null; // unknown — don't block on it
-  if (elevation <= TIDE_MAX_PLAUSIBLE_ELEVATION_M) return null;
-  return `That's showing as about ${Math.round(elevation)}m above sea level — unusual for a tidal location (the UK's biggest tidal range is only around 15m). Could be right if this is genuinely a clifftop spot; could also just be the terrain data missing a dip nearby, especially somewhere hilly right by the coast.`;
-}
 
 // Haversine distance in km — plenty precise for "which of 44 UK coastal
 // stations is nearest", no need for anything more exact than that.
@@ -1130,4 +1031,186 @@ function applySecondaryOffset(fit, hours, odLevel, eaStation, offset) {
   // a same-place self-check exposed (see learnSecondaryOffset).
   const levelCD = (odLevel - eaStation.cdOffsetOD) * slope + intercept;
   return { hours: hours + timeMin / 60, levelCD };
+}
+
+// ---- Coastal suitability check, for the "are you sure?" warning when
+// adding a tide/fishing location ----
+//
+// Deliberately NOT a height-alone check. A location can be genuinely
+// high (a clifftop path, a harbour wall town built up a hillside) and
+// still be right on the coast, where tides matter completely normally
+// — Tintagel is ~90m up and a perfectly sensible tide location. What
+// actually makes a location a poor fit for tide prediction is being
+// BOTH far from the sea AND well above it — a real inland/upland spot
+// like Snowdon, not a high coastal one. So this always requires both
+// conditions together, never either alone; see
+// COASTAL_SUITABILITY_THRESHOLDS below for the two rules combined this
+// way (a coastal cliff will fail every distance check regardless of
+// its height).
+//
+// Reuses the exact same static data files map.js already depends on
+// for terrain shading (data/elevation-uk.json) and the coastline layer
+// (data/coastline-50m.json) — fetched independently here since
+// settings.html (where locations get added) never loads map.js, and
+// nothing about this check needs the rest of the map renderer. Both
+// fetches are lazy (only triggered by an actual add) and cached in
+// memory for the rest of the page's life.
+const ELEVATION_DATA_URL = "data/elevation-uk.json";
+const COASTLINE_DATA_URL = "data/coastline-50m.json";
+
+let coastalCheckDataPromise = null;
+
+async function loadCoastalCheckData() {
+  if (coastalCheckDataPromise) return coastalCheckDataPromise;
+  coastalCheckDataPromise = (async () => {
+    const [elevationResult, coastlineResult] = await Promise.allSettled([
+      fetchWithTimeout(ELEVATION_DATA_URL, {}, 20000).then(res => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      }),
+      fetchWithTimeout(COASTLINE_DATA_URL, {}, 20000).then(res => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      })
+    ]);
+
+    let elevation = null;
+    if (elevationResult.status === "fulfilled") {
+      const data = elevationResult.value;
+      const values = [];
+      for (let r = 0; r < data.rows; r++) {
+        values.push(data.values.slice(r * data.cols, (r + 1) * data.cols));
+      }
+      elevation = { ...data, values };
+    }
+
+    const coastline = coastlineResult.status === "fulfilled" ? coastlineResult.value : null;
+
+    // Either or both can be legitimately missing (not yet built, or a
+    // fetch failure) — callers treat that as "can't verify" and skip
+    // the warning rather than blocking the add, same as every other
+    // degrade-not-break pattern this app already uses for map data.
+    return { elevation, coastline };
+  })();
+  return coastalCheckDataPromise;
+}
+
+// Bilinear elevation lookup — identical maths to terrainElevationAt in
+// map.js (kept as a separate copy rather than a shared import, since
+// this is a plain multi-page static site with no build step and
+// map.js is never loaded on settings.html).
+function coastalCheckElevationAt(grid, lat, lon) {
+  const fr = (lat - grid.lat0) / grid.dLat;
+  const fc = (lon - grid.lon0) / grid.dLon;
+  if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) return null;
+  const r0 = Math.floor(fr), c0 = Math.floor(fc);
+  const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0;
+
+  const z00 = grid.values[r0][c0], z01 = grid.values[r0][c1];
+  const z10 = grid.values[r1][c0], z11 = grid.values[r1][c1];
+  if ([z00, z01, z10, z11].some(v => v === null || v === undefined)) return null;
+
+  const top = z00 + (z01 - z00) * tc;
+  const bottom = z10 + (z11 - z10) * tc;
+  return top + (bottom - top) * tr;
+}
+
+// Same ring-walking shape as eachRing in map.js (kept as a separate
+// copy for the same no-shared-import reason as above).
+function coastalCheckEachRing(geometry, visit) {
+  if (!geometry) return;
+  const t = geometry.type, c = geometry.coordinates;
+  if (t === "LineString") visit(c);
+  else if (t === "MultiLineString" || t === "Polygon") c.forEach(visit);
+  else if (t === "MultiPolygon") c.forEach(poly => poly.forEach(visit));
+}
+
+const KM_PER_DEG_LAT_APPROX = 111.32; // same constant map.js calls KM_PER_DEG_LAT — duplicated for the same no-shared-import reason as above
+
+// Straight-line (not walking-route) distance from a point to the
+// nearest coastline vertex, in km. A bounding-box pre-filter — cheap,
+// one pass over each ring's own points — skips whole rings that
+// couldn't possibly have a point within searchMarginKm before doing
+// any real distance maths, which is what keeps this fast enough to
+// run synchronously against a whole-UK coastline file on an "Add"
+// button tap. Vertex-to-point rather than segment-to-point: at the
+// distances this check actually cares about (tens of km) the
+// difference between the two is far smaller than the coastline file's
+// own simplification, so the simpler check is enough.
+function distanceToCoastKm(coastline, lat, lon, searchMarginKm) {
+  if (!coastline) return null;
+  const kmPerDegLon = KM_PER_DEG_LAT_APPROX * Math.cos(lat * Math.PI / 180);
+  const latMargin = searchMarginKm / KM_PER_DEG_LAT_APPROX;
+  const lonMargin = kmPerDegLon > 0 ? searchMarginKm / kmPerDegLon : 180;
+
+  const features = coastline.type === "FeatureCollection" ? coastline.features : [coastline];
+  let bestKm = Infinity;
+
+  features.forEach(feature => {
+    const geometry = feature.geometry || feature;
+    coastalCheckEachRing(geometry, ring => {
+      // Cheap ring bounding box first.
+      let lonMin = Infinity, lonMax = -Infinity, latMin = Infinity, latMax = -Infinity;
+      for (let i = 0; i < ring.length; i++) {
+        const [rLon, rLat] = ring[i];
+        if (rLon < lonMin) lonMin = rLon;
+        if (rLon > lonMax) lonMax = rLon;
+        if (rLat < latMin) latMin = rLat;
+        if (rLat > latMax) latMax = rLat;
+      }
+      const nearEnough = lonMax >= lon - lonMargin && lonMin <= lon + lonMargin &&
+        latMax >= lat - latMargin && latMin <= lat + latMargin;
+      if (!nearEnough) return;
+
+      for (let i = 0; i < ring.length; i++) {
+        const [rLon, rLat] = ring[i];
+        const km = haversineKm(lat, lon, rLat, rLon);
+        if (km < bestKm) bestKm = km;
+      }
+    });
+  });
+
+  return Number.isFinite(bestKm) ? bestKm : null;
+}
+
+// The two rules agreed on: either one alone is fine (a clifftop stays
+// fine on distance; a low-lying spot a long way inland stays fine on
+// height), only their combination is worth a warning. Two separate
+// combined checks rather than one, since "far and fairly high" and
+// "very far and only moderately high" are both worth flagging even
+// though neither alone crosses the other's threshold.
+const COASTAL_SUITABILITY_THRESHOLDS = [
+  { distanceKm: 15, elevationM: 100 },
+  { distanceKm: 30, elevationM: 30 }
+];
+
+// Returns { concerning, distanceKm, elevationM } — or { concerning:
+// false, distanceKm: null, elevationM: null } if either data file
+// couldn't be loaded (can't verify, so doesn't block the add). Never
+// throws.
+async function assessCoastalSuitability(lat, lon) {
+  try {
+    const { elevation, coastline } = await loadCoastalCheckData();
+    if (!elevation || !coastline) return { concerning: false, distanceKm: null, elevationM: null };
+
+    const elevationM = coastalCheckElevationAt(elevation, lat, lon);
+    // Search margin generous above the largest threshold distance
+    // (30km) so the bounding-box pre-filter can never itself be the
+    // reason a genuinely-nearby coastline point gets missed.
+    const distanceKm = distanceToCoastKm(coastline, lat, lon, 60);
+
+    if (elevationM === null || distanceKm === null) {
+      return { concerning: false, distanceKm, elevationM };
+    }
+
+    const concerning = COASTAL_SUITABILITY_THRESHOLDS.some(
+      t => distanceKm > t.distanceKm && elevationM > t.elevationM
+    );
+    return { concerning, distanceKm, elevationM };
+  } catch {
+    // Any failure here (bad JSON, unexpected shape) — treat exactly
+    // like missing data: can't verify, don't block the add.
+    return { concerning: false, distanceKm: null, elevationM: null };
+  }
 }

@@ -45,8 +45,33 @@
 <body>
   <main class="app">
     <header>
-      <p class="back-link"><a href="index.html">&larr; Back to Cloude</a></p>
-      <h1 class="map-page-title">Map</h1>
+      <!-- Reuses the exact same .title-bar/.title-bar-right structure the
+           front page's header already uses (see index.html), rather than
+           a bespoke layout for this page — settings icon left, title
+           centred, and (in place of the front page's place chip)
+           "Back to Cloude" sits in the same right-hand slot. Same classes
+           means same phone/iPad behaviour for free: icon in the true
+           top-left corner on a phone, and icon+back-link grouped at the
+           right of a centred title on iPad — identical to how the front
+           page itself already differs between the two, not a new
+           inconsistency. Replaces the old standalone right-aligned
+           back-link sitting above its own separate, centred <h1>. -->
+      <div class="title-bar">
+        <a href="settings.html" class="settings-icon-button" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="13" cy="5" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="10" x2="18" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="7" cy="10" r="2.3" fill="currentColor"/>
+            <line x1="2" y1="15" x2="18" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="15" cy="15" r="2.3" fill="currentColor"/>
+          </svg>
+        </a>
+        <h1 class="map-page-title">Map</h1>
+        <div class="title-bar-right">
+          <p class="back-link back-link-inline"><a href="index.html">&larr; Back to Cloude</a></p>
+        </div>
+      </div>
     </header>
 
     <!-- Controls sit ABOVE the map, not beside or below it: there is more
@@ -209,9 +234,6 @@
          more vertical space than it earned on a page whose whole point is
          the map itself; see the deeper #mapCanvas aspect-ratio in
          style.css, freed up by the same trim. -->
-    <nav class="bottom-nav">
-      <a href="settings.html">Settings</a>
-    </nav>
   </main>
 
   <script src="app.js"></script>

@@ -304,8 +304,18 @@ if (tideRow) {
 // separate (openHourlySheet's chain is built entirely around
 // state.hourly, which tide doesn't use at all), so this doesn't touch
 // that function.
-const TIDE_SHEET_WINDOW_PAST_HOURS = 24;
-const TIDE_SHEET_WINDOW_FUTURE_HOURS = 72;
+// Was 24/72 (a fixed, undocumented choice — no comment anywhere
+// recorded a real reason for it, and neither the self-derived harmonic
+// model nor the Admiralty correction actually needs a short window:
+// the model extrapolates indefinitely either direction, and
+// applySecondaryOffset works off whichever tide events are nearest the
+// sampled hour regardless of how far that hour sits from "now"). The
+// chart itself already scales its own width to whatever totalHours
+// works out to (see renderTideCurve's plotW below) and scrolls, so widening
+// this is just these two numbers — nothing else in the rendering or
+// event-finding assumes a short window.
+const TIDE_SHEET_WINDOW_PAST_HOURS = 24 * 7;
+const TIDE_SHEET_WINDOW_FUTURE_HOURS = 24 * 7;
 
 let openTideSheetToken = 0;
 
@@ -1120,6 +1130,28 @@ async function performAddTideLocation() {
   if (tideAddToWeatherPrompt) tideAddToWeatherPrompt.hidden = true;
   try {
     const resolved = await resolveLocation(input);
+
+    // "Are you sure?" check — only fires when a location is BOTH far
+    // from the sea AND well above it (see COASTAL_SUITABILITY_THRESHOLDS
+    // in tide.js for why height alone was deliberately rejected: a
+    // clifftop location is high but still coastal, and tides work
+    // completely normally there). Silently skipped if the terrain/
+    // coastline data isn't available — never blocks an add just
+    // because it couldn't check.
+    setTideLocationStatus("Checking distance from the coast…", false);
+    const suitability = await assessCoastalSuitability(resolved.lat, resolved.lon);
+    if (suitability.concerning) {
+      const place = resolved.label || input;
+      const proceed = confirm(
+        `${place} is about ${Math.round(suitability.distanceKm)}km from the sea and ${Math.round(suitability.elevationM)}m above it — a bit high and far for tide predictions to mean much here. Add it anyway?`
+      );
+      if (!proceed) {
+        setTideLocationStatus("Not added.", false);
+        return;
+      }
+    }
+    setTideLocationStatus("Looking up location…", false);
+
     const station = nearestTideStation(resolved.lat, resolved.lon);
     const locations = loadTideLocations();
     const newLocation = {

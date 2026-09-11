@@ -159,14 +159,24 @@ h1 {
   color: var(--accent-dark);
 }
 
-/* Map only, not every page's title — the back-link above it already
-   sits top-left, and this is the one page where a left-aligned title
-   sits directly under whatever iOS/Safari chrome occupies that corner
-   (share/tabs icons in-browser, or the notch/camera area once
-   installed as a home-screen app). Centring moves it clear of both
-   without touching the layout anywhere else. */
+/* Map's title now lives inside .title-bar alongside the settings icon
+   and "Back to Cloude" (see map.html) — .title-bar h1 already centres
+   it, so this class carries no rule of its own any more. Kept as a
+   hook (rather than deleted from the markup) in case this page's title
+   ever needs page-specific styling again without touching the shared
+   .title-bar h1 rule every other page's title also relies on. */
 .map-page-title {
-  text-align: center;
+}
+
+/* Overrides the standalone .back-link block (used at the top of
+   compare/settings/help/solar, right-aligned above its own separate
+   title) for map.html specifically, where the same link now sits
+   inside .title-bar-right on the same line as the icon and title
+   instead — no bottom margin to preserve, no right-align of its own
+   needed since .title-bar-right already handles that. */
+.back-link-inline {
+  margin: 0;
+  white-space: nowrap;
 }
 
 /* Home and Go-to now live in the control row below (.map-controls),
@@ -938,7 +948,14 @@ header p {
      above the border and the track itself. */
   margin-top: 4px;
   padding-top: 7px;
-  border-top: 1px solid rgba(76, 106, 88, 0.25);
+  /* Was 1px — reported as too faint to register as a real divider
+     between the headline grid (Dew Point being its last cell) and the
+     Today/Hour slider below it. 2px keeps the same colour, just bolder.
+     Padding-top left alone rather than trimmed to compensate, so the
+     thicker line doesn't eat into the breathing room above the slider
+     track that was deliberately tightened already (see the note just
+     above this rule). */
+  border-top: 2px solid rgba(76, 106, 88, 0.25);
 }
 
 .hour-slider-title {
@@ -2745,6 +2762,11 @@ footer {
 
 .map-nav-button {
   flex: 0 0 auto;
+  /* Belt-and-braces alongside the blur()-on-tap in map.js — removes
+     iOS's own tap-highlight flash (a separate thing from the stuck
+     focus/active look the blur() call targets) so nothing about the
+     tap gesture leaves a visible trace on these buttons afterwards. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .map-nav-button:disabled {
@@ -2851,9 +2873,16 @@ footer {
      just one side set shrink-wraps to its own content and grows
      leftward as needed, rather than stretching to fill. max-width is
      only a cap for a genuinely long line (several active layers'
-     readouts at once on a narrow phone), not the pill's normal size. */
+     readouts at once on a narrow phone), not the pill's normal size.
+
+     Moved from bottom:8px to top:8px — the pill no longer carries the
+     zoom-distance figure (dropped entirely from the text itself, see
+     updateMapChrome in map.js), so there's no reason left for it to
+     specifically anchor near the zoom buttons, and the top corner sits
+     clear of both the crosshair and the layer toggles/legends below
+     the map. */
   right: 8px;
-  bottom: 8px;
+  top: 8px;
   max-width: calc(100% - 16px);
   white-space: normal;
   font-size: 13px;

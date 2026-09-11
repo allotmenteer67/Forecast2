@@ -208,6 +208,15 @@ const MAP_TEMP_COLOR_STOPS = [
   { t: 34, rgb: [197, 48, 48] }    // red — heatwave
 ];
 
+// The layer itself paints each cell at less than full opacity (see its
+// draw() below) so terrain/land still shows through underneath —
+// named here, once, rather than left as a literal 0.55 inside draw(),
+// because the legend gradient needs the EXACT same number to preview
+// honestly (see renderMapLegends' own temperature block: a mismatch
+// here is exactly what produced the reported "17°C on the map looks
+// like the legend's swatch for 21-22°C" bug below).
+const TEMP_LAYER_ALPHA = 0.55;
+
 function tempColor(value) {
   const v = Math.max(MAP_TEMP_MIN_C, Math.min(MAP_TEMP_MAX_C, value));
   const stops = MAP_TEMP_COLOR_STOPS;
@@ -220,6 +229,25 @@ function tempColor(value) {
   const r = Math.round(lo.rgb[0] + (hi.rgb[0] - lo.rgb[0]) * f);
   const g = Math.round(lo.rgb[1] + (hi.rgb[1] - lo.rgb[1]) * f);
   const b = Math.round(lo.rgb[2] + (hi.rgb[2] - lo.rgb[2]) * f);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function hexToRgb(hex) {
+  const m = hex.replace("#", "").match(/.{2}/g).map(h => parseInt(h, 16));
+  return [m[0], m[1], m[2]];
+}
+
+// Composites an rgb(...) string at the given alpha over a solid
+// background, the same "paint at globalAlpha over whatever's
+// underneath" maths canvas itself does — used only by the temperature
+// legend below, so the gradient bar shows the colour a cell actually
+// ends up looking like once blended with land, not the pure,
+// never-actually-seen-at-full-strength stop colour.
+function blendOverBg(rgbString, alpha, bgRgb) {
+  const m = rgbString.match(/\d+/g).map(Number);
+  const r = Math.round(m[0] * alpha + bgRgb[0] * (1 - alpha));
+  const g = Math.round(m[1] * alpha + bgRgb[1] * (1 - alpha));
+  const b = Math.round(m[2] * alpha + bgRgb[2] * (1 - alpha));
   return `rgb(${r}, ${g}, ${b})`;
 }
 
@@ -1410,7 +1438,7 @@ registerMapLayer({
         const value = sampleGrid(mapGrid, "temp", hour, view.lat(py + cell / 2), view.lon(px + cell / 2));
         if (value === null || value === undefined) continue;
         ctx.fillStyle = tempColor(value);
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = TEMP_LAYER_ALPHA;
         ctx.fillRect(px, py, cell, cell);
         ctx.globalAlpha = 1;
       }
@@ -1799,6 +1827,20 @@ function renderMapLegends() {
   // it as banded again. Built from the exact same colour stops the
   // layer paints with, the same "one source of truth" rule every other
   // legend on this map already follows.
+  //
+  // Blended through blendOverBg at TEMP_LAYER_ALPHA against this
+  // palette's own land colour — NOT the pure tempColor() stop shown
+  // before this fix. The layer itself never paints a cell at full
+  // strength (see its draw(), TEMP_LAYER_ALPHA), so a legend built from
+  // the pure colour was always going to look more saturated than
+  // anything actually on the map — confirmed as the real cause behind
+  // a reported 17°C reading looking like it belonged to the legend's
+  // ~21-22°C swatch instead: the map's own blended 17° and the
+  // legend's pure, unblended ~21-22° happened to land close enough in
+  // that lighter half of the ramp to be mistaken for each other. Land
+  // is an approximation (the true backdrop varies — sea, terrain
+  // shading, other layers underneath), but it's the single most common
+  // one and a far closer preview than full strength ever was.
   if (mapLayerVisible("temperature")) {
     const row = document.createElement("div");
     row.className = "map-legend-row";
@@ -1807,9 +1849,11 @@ function renderMapLegends() {
     caption.textContent = "Temperature, °C";
     row.appendChild(caption);
 
+    const p = mapPalette();
+    const bgRgb = hexToRgb(p.land);
     const span = MAP_TEMP_MAX_C - MAP_TEMP_MIN_C;
     const stops = MAP_TEMP_COLOR_STOPS
-      .map(s => `${tempColor(s.t)} ${((s.t - MAP_TEMP_MIN_C) / span) * 100}%`)
+      .map(s => `${blendOverBg(tempColor(s.t), TEMP_LAYER_ALPHA, bgRgb)} ${((s.t - MAP_TEMP_MIN_C) / span) * 100}%`)
       .join(", ");
     const bar = document.createElement("div");
     bar.className = "map-legend-gradient";
@@ -1938,8 +1982,11 @@ registerMapLayer({
     // was — the rain's own colour and opacity are deliberately
     // untouched by this (asked not to change those), this just gives
     // the coast edge a second, later chance to still be visible on top
-    // of whatever colour layers happen to be covering it.
-    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1 });
+    // of whatever colour layers happen to be covering it. Width bumped
+    // 1 -> 1.5 on top of that second chance — still reported as too
+    // faint to read clearly against a heavy rain band even once
+    // redrawn on top of it.
+    drawGeoJson(ctx, mapVectorData.coastline, view, { stroke: p.coast, lineWidth: 1.5 });
   }
 });
 
@@ -2554,24 +2601,21 @@ function renderMap() {
 }
 
 function updateMapChrome() {
-  const radius = MAP_ZOOM_RADII_KM[mapZoomIndex];
-  const imperial = usingMiles();
-  const across = imperial ? Math.round(radius * 2 * 0.621371) : radius * 2;
-
   const scale = document.getElementById("mapScale");
   if (scale) {
     const stale = mapGrid && Date.now() - mapGridFetchedAt > MAP_STALE_MS;
     const hour = mapHourValue();
     const readout = buildMapReadout(hour);
-    // The zoom-distance figure used to live in its own row below the
-    // map, on its own with nothing to visually tie it to anything else
-    // on the page — reported back as "a random distance appearing on
-    // the screen". Folded in here instead, right alongside the clock
-    // it's genuinely related to (both describe the map above them),
-    // rather than removed outright — the whole point of it was telling
-    // you how wide an area you're looking at, and that's still useful,
-    // it just needed a clear home.
-    scale.textContent = mapHourClock(hour) + ` · ${across}${imperial ? "mi" : "km"} across` + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
+    // The zoom-distance figure ("62mi across") that used to live here
+    // has been dropped outright rather than just relocated — it was
+    // reported as clutter the pill didn't need, not as something
+    // missing a clear home. mapHourClock's own "Now, " prefix (meant
+    // for the Hour slider's label, where saying "you're at Now" is the
+    // point) is stripped here too — in this pill the time itself is
+    // already the whole story, so pill-specific formatting rather than
+    // changing mapHourClock, which mapHourLabel below still uses as-is.
+    const clock = mapHourClock(hour).replace(/^Now, /, "");
+    scale.textContent = clock + (readout ? ` · ${readout}` : "") + (stale ? " · older data" : "");
   }
 
   const hourLabel = document.getElementById("mapHourLabel");
@@ -2807,8 +2851,17 @@ function stepMapZoom(delta) {
 }
 
 // -1 zooms IN because index 0 is the closest tier — see MAP_ZOOM_RADII_KM.
-document.getElementById("mapZoomIn")?.addEventListener("click", () => stepMapZoom(-1));
-document.getElementById("mapZoomOut")?.addEventListener("click", () => stepMapZoom(1));
+// blur() after each tap — an iOS habit, not a bug in this app's own
+// CSS: these buttons carry no custom :active/:focus styling of their
+// own, so the "stuck filled-in" look reported after tapping zoom is
+// WebKit's default focus/active appearance on a touch-activated
+// button, which iOS doesn't clear until focus moves elsewhere (a
+// desktop browser clears it on its own mouseup in a way touch never
+// quite mirrors). Explicitly dropping focus the moment the tap is
+// handled is the standard fix, and does nothing on desktop/keyboard
+// use beyond returning focus to the page afterwards.
+document.getElementById("mapZoomIn")?.addEventListener("click", e => { stepMapZoom(-1); e.currentTarget.blur(); });
+document.getElementById("mapZoomOut")?.addEventListener("click", e => { stepMapZoom(1); e.currentTarget.blur(); });
 
 // Promise-based, standing in for confirm() specifically because a
 // native dialog's buttons are OS-controlled and can't be relabelled at

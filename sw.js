@@ -117,7 +117,43 @@
 // replaces it in app.js. app.js is in SHELL_FILES, so without this bump
 // it would keep being served from the v10 cache and the fix would look
 // like it hadn't worked.
-const CACHE_NAME = "cloude-shell-v16";
+//
+// Bumped to v17: adding a tide/fishing location now checks it against
+// the same elevation-uk.json and coastline-50m.json data map.js already
+// uses, and warns (doesn't block) when a location is BOTH far from the
+// sea AND well above it — genuinely inland/upland spots like Snowdon,
+// not high-but-coastal ones like a clifftop path, which stay unflagged
+// on purpose. tide.js and tide-ui.js are both in SHELL_FILES, so
+// without this bump they'd keep being served from the v16 cache and the
+// warning would never appear.
+// Bumped to v18: a batch of front-page/map/tide fixes — (1) the map
+// strip's rain grid no longer leaves blank rectangles either side (the
+// projection was scaling to the strip's shorter dimension, so the
+// wider one showed more real distance than the fetched grid covered —
+// now scales to the longer dimension instead); (2) the coastline
+// outline is bolder (1 -> 1.5px) and, on the strip, now gets a
+// stroke-only redraw AFTER the rain layer the same way the full map
+// already does, so rain can no longer bury it entirely; (3) the map's
+// time/conditions pill moved from bottom-right to top-right and no
+// longer shows the zoom-distance figure or the word "Now"; (4)
+// map.html's header now matches the front page's own icon/title/
+// back-link layout instead of a separate stacked arrangement, and its
+// now-redundant bottom Settings link is gone; (5) the divider between
+// the headline grid and the Hour slider is bolder (1 -> 2px); (6) the
+// tide sheet's scrollable window widened from 24h-past/72h-future to a
+// full 7 days each way — no technical or licensing reason was ever
+// found for the old, narrower figure; (7) the map's zoom buttons no
+// longer stay visually "pressed" after a tap (blur() plus tap-
+// highlight suppression); (8) the temperature legend now previews the
+// SAME partial-opacity blend the layer itself actually paints with,
+// instead of a full-strength colour nothing on the map ever shows —
+// the mismatch between those two was the real cause of a reported
+// reading looking like it belonged to a noticeably warmer swatch than
+// its own true value. map.js, map-strip.js, style.css, map.html and
+// tide-ui.js are all in SHELL_FILES, so without this bump every one of
+// these would keep being served from the v17 cache and look like none
+// of it had worked.
+const CACHE_NAME = "cloude-shell-v18";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
