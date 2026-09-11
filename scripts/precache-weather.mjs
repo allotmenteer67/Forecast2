@@ -264,9 +264,24 @@ async function main() {
   // last run. Spots not due yet keep last run's data untouched (not
   // refetched, not dropped) — this is what makes "4x/day" actually mean
   // 4x/day rather than "every run, accidentally".
+  //
+  // BUT also refresh regardless of bucket if the configured spots
+  // themselves have changed since the last run — confirmed as a real
+  // bug on the first live run with real locations: editing
+  // precache-config.json's fishingSpots did nothing until the bucket
+  // happened to roll over on its own, because this only ever compared
+  // the CLOCK, never the actual configured spot ids against what was
+  // last written. A config change is a deliberate, immediate action on
+  // your part; it shouldn't sit blocked behind an unrelated timer.
   const currentBucket = fishingBucketFor(now);
   const previousBucket = previous?.fishingBucket;
-  const fishingDue = previousBucket === undefined || previousBucket !== currentBucket;
+  const previousSpotIds = new Set((previous?.fishing || []).map(f => f.id));
+  const currentSpotIds = new Set(config.fishingSpots.map(s => s.id));
+  const spotsChanged = previousSpotIds.size !== currentSpotIds.size || [...currentSpotIds].some(id => !previousSpotIds.has(id));
+  const fishingDue = previousBucket === undefined || previousBucket !== currentBucket || spotsChanged;
+  if (spotsChanged && previousBucket !== undefined) {
+    console.log("Fishing spots in config differ from last run's output — refreshing regardless of bucket.");
+  }
 
   let fishingResults;
   let fishingDataAsOf;
