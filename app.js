@@ -1786,6 +1786,19 @@ function loadLocationData() {
     const cache = loadRecentLocationCache();
     const snap = cache[state.postcode];
     if (snap && Date.now() - snap.cachedAt <= RECENT_LOCATION_CACHE_MS) {
+      // cloude:location-ready is normally dispatched from inside
+      // runLoadLocationData() below, once a real fetch resolves — the
+      // map strip (map-strip.js) has no other way to learn where to
+      // re-centre itself, and this skip path bypasses that function
+      // entirely. Without firing it here too, the strip silently kept
+      // showing wherever it was before the switch — permanently, since
+      // nothing else was ever going to prompt it to move — which is
+      // exactly the "map strip doesn't match the place chip" bug this
+      // fixes. state.lat/state.lon are already correct at this point
+      // (restored from the very same cached snapshot by
+      // resetForLocationChange(), just before this function was
+      // called), so this is genuine, not a guess.
+      document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
       return Promise.resolve();
     }
   }

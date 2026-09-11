@@ -225,7 +225,19 @@
 // swiping away, then back again before that first EA fetch finishes no
 // longer fires a second, fully redundant fetch. tide.js is in
 // SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v24";
+// Bumped to v25: the map strip's own re-centring depends entirely on
+// the "cloude:location-ready" event (map-strip.js has no other way to
+// learn where to move to) — which the new caching guard in
+// loadLocationData() (app.js, v22) was bypassing on every cache hit,
+// since that event is normally only dispatched from inside
+// runLoadLocationData(), which the cache-skip path never calls. That's
+// the actual explanation for the map strip silently showing the wrong
+// place after switching — permanently, since nothing else was ever
+// going to prompt a redraw. The cache-skip path now dispatches the same
+// event itself, using state.lat/state.lon already restored by
+// resetForLocationChange() a few lines earlier. app.js is in
+// SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v25";
 const SHELL_FILES = [
   "index.html",
   "compare.html",
