@@ -40,10 +40,14 @@
   "topForecasters": ["metoffice", "ecmwf", "gfs", "icon"],
 
   "weatherLocations": [
-    { "id": "example-home", "label": "Example — replace me", "lat": 51.13, "lon": -3.02 }
+    { "id": "taunton", "label": "Taunton", "lat": 51.019, "lon": -3.100 },
+    { "id": "tiree", "label": "Tiree", "lat": 56.500, "lon": -6.880 },
+    { "id": "teesside", "label": "Teesside", "lat": 54.576, "lon": -1.235 }
   ],
 
   "fishingSpots": [
-    { "id": "example-kilve", "label": "Example — replace me", "lat": 51.19, "lon": -3.22, "markType": "coastal" }
+    { "id": "lowestoft", "label": "Lowestoft", "lat": 52.475, "lon": 1.751, "markType": "coastal" },
+    { "id": "lyme-regis", "label": "Lyme Regis", "lat": 50.725, "lon": -2.9375, "markType": "coastal" },
+    { "id": "liverpool", "label": "Liverpool", "lat": 53.405, "lon": -2.995, "markType": "coastal" }
   ]
 }
