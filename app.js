@@ -273,7 +273,7 @@ const PLACE_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 // it's a mild deterrent against casual abuse, not real security, since
 // anything here is visible in the browser. See the Worker file's own
 // "honest limitation" note.
-const FAVOURITE_RELAY_URL = ""; // e.g. "https://cloude-favourites.your-subdomain.workers.dev"
+const FAVOURITE_RELAY_URL = "https://cflaresomtimng.snick-mica-9l.workers.dev";
 const FAVOURITE_RELAY_SECRET = "";
 const FAVOURITES_ADDED_KEY = "forecast-compare:favouritesAdded";
 const FAVOURITES_PER_PERSON_CAP = 4;
