@@ -1,0 +1,49 @@
+{
+  "_readme": [
+    "Hand-maintained, not auto-generated. Edit this file directly and push —",
+    "there is no in-app editor for it, matching every other repo-level config",
+    "in this project (waterways.json, forecast-config.json, etc.).",
+    "",
+    "topForecasters: pick 4 ids from app.js's REAL_SOURCES list (metoffice,",
+    "ecmwf, gfs, icon, gem, meteofrance, jma, bom, cma). This can't be",
+    "computed automatically — the actual per-source accuracy data (FFV)",
+    "only exists in each phone's own localStorage after running Settings ->",
+    "Compare's 'Backfill 1 year of real data', never in this repo. Check",
+    "Compare's accuracy table on your own phone occasionally and update this",
+    "list by hand if the ranking has genuinely shifted — see the session",
+    "note on this: 'not a permanent list... would want an occasional",
+    "re-check, not a big burden, just not zero'.",
+    "",
+    "weatherLocations: your saved front-page places. Precached with the 4",
+    "topForecasters above, hourly-equivalent data, on the schedule set in",
+    "the workflow file (.github/workflows/precache-weather.yml).",
+    "",
+    "fishingSpots: your saved tide/fishing marks. Precached with ONE",
+    "unmodelled (default blended) source, matching what fishing.js's own",
+    "live fetch already requests — refreshed 4x/day (roughly every 6",
+    "hours), tracked via a UTC time-bucket in the output file so a late or",
+    "early-firing run still only refreshes once per bucket, not twice.",
+    "markType 'coastal' also fetches the marine API (wave height etc) —",
+    "genuinely a second request for that spot, not folded into the 'one",
+    "source' count. See fishing.js's own fetchFishingForecast for why.",
+    "",
+    "Sizing formula (for updating the workflow's cron interval by hand",
+    "after editing this file — GitHub Actions cron is static YAML, this",
+    "script can't adjust its own schedule):",
+    "  weather/day = weatherLocations.length * topForecasters.length * (1440 / intervalMinutes)",
+    "  fishing/day = fishingSpots.length * (2 if any coastal else 1) * 4",
+    "  total/day should stay comfortably under 9000 (see the session's own",
+    "  margin discussion) to leave headroom for GitHub's own scheduling",
+    "  drift meaning some days run a few extra times."
+  ],
+
+  "topForecasters": ["metoffice", "ecmwf", "gfs", "icon"],
+
+  "weatherLocations": [
+    { "id": "example-home", "label": "Example — replace me", "lat": 51.13, "lon": -3.02 }
+  ],
+
+  "fishingSpots": [
+    { "id": "example-kilve", "label": "Example — replace me", "lat": 51.19, "lon": -3.22, "markType": "coastal" }
+  ]
+}
