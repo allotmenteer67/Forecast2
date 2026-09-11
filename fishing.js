@@ -86,6 +86,19 @@ async function fetchFishingForecast(lat, lon, markType) {
   const cached = fishingForecastCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < FISHING_FORECAST_TTL_MS) return cached.data;
 
+  // Checked before the live fetch below, same pattern and same shared
+  // data/precache-weather.json app.js's own tryPrecachedHourlyForecast
+  // already uses (loadPrecacheData is defined there, loaded before this
+  // file) — matched by proximity to lat/lon, not an exact coordinate or
+  // id match, for the same reason: the precache config's hand-typed
+  // coordinates for a spot will never exactly equal wherever this mark
+  // actually resolved to.
+  const precached = await tryPrecachedFishingSpot(lat, lon, markType);
+  if (precached) {
+    fishingForecastCache.set(cacheKey, { data: precached, fetchedAt: precached.fetchedAt });
+    return precached;
+  }
+
   const weatherParams = new URLSearchParams({
     latitude: lat,
     longitude: lon,
@@ -135,6 +148,29 @@ async function fetchFishingForecast(lat, lon, markType) {
   const data = { weather, marine, fetchedAt: Date.now() };
   fishingForecastCache.set(cacheKey, { data, fetchedAt: Date.now() });
   return data;
+}
+
+// Looser than FISHING_FORECAST_TTL_MS's 30 minutes — that constant is
+// about not re-fetching within the SAME browsing session; this is about
+// how stale GitHub's own once-per-bucket data can be before it stops
+// being trusted at all. Fishing only refreshes 4x/day (a bucket roughly
+// every 6 hours, see the workflow's own script), so a tight 30-minute
+// window would reject almost every precached fishing entry outright —
+// 8 hours covers the normal bucket interval plus a generous margin for
+// GitHub's own best-effort scheduling drift.
+const FISHING_PRECACHE_MAX_AGE_MS = 8 * 3600000;
+const FISHING_PRECACHE_PROXIMITY_KM = 2;
+
+async function tryPrecachedFishingSpot(lat, lon, markType) {
+  const data = await loadPrecacheData();
+  if (!data?.fishing?.length) return null;
+  const fetchedAt = Date.parse(data.fishingDataAsOf);
+  if (Date.now() - fetchedAt > FISHING_PRECACHE_MAX_AGE_MS) return null;
+  const match = data.fishing.find(spot =>
+    spot.markType === markType && haversineKm(lat, lon, spot.lat, spot.lon) <= FISHING_PRECACHE_PROXIMITY_KM
+  );
+  if (!match) return null;
+  return { weather: match.weather, marine: match.marine, fetchedAt };
 }
 
 // Finds the hourly index nearest a given epoch-ms timestamp — every

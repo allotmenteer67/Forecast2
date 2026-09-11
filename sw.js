@@ -255,7 +255,28 @@
 // added this (v23) didn't actually make it into that deploy — worth
 // double-checking all files from a batch land together. app.js and
 // style.css are both in SHELL_FILES.
-const CACHE_NAME = "cloude-shell-v26";
+// Bumped to v27: stage 2 of GitHub precaching — app.js and fishing.js
+// now actually READ data/precache-weather.json, not just the GitHub
+// Action that writes it. fetchHourlyForecast (the 9-source fetch that
+// drives the front page's headline) and fishing.js's own forecast fetch
+// both check the precache first, matched by PROXIMITY to the resolved
+// coordinates (not postcode/id string, which would be fragile against
+// however this device's own geocoding happens to round). A genuine hit
+// skips the live Open-Meteo call(s) entirely and populates state
+// through the exact same blend/correction code a live fetch uses
+// (applyHourlyBlend, extracted from fetchHourlyForecast so there's one
+// implementation, not two that could drift). Everywhere else falls
+// through to the live fetch completely unaffected.
+//
+// Scope, stated plainly: this covers the hourly/headline fetch and
+// fishing's own fetch — the two costs this feature was actually sized
+// against. fetchActualWeather and the nine parallel fetchRealSourceLive
+// calls (accuracy tracking / FFV learning, not the instant display)
+// still run live on every switch, untouched — short-circuiting those
+// safely needs more care than this pass, given they feed the learning
+// system rather than just what's on screen. app.js and fishing.js are
+// both in SHELL_FILES.
+const CACHE_NAME = "cloude-shell-v27";
 const SHELL_FILES = [
   "index.html",
   "compare.html",

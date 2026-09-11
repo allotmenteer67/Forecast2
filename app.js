@@ -1475,11 +1475,156 @@ function hourlyUVPercent(idx) {
 // ago," which isn't what "what's happening in the next 24-48h" needs.
 // This is a plain live forecast: what the model currently thinks, right
 // now, for the hours immediately ahead.
+// Extracted from fetchHourlyForecast below so the exact same
+// correction/blend logic can also run against precached data (see
+// tryPrecachedHourlyForecast) — one implementation either way, not a
+// second copy that could quietly drift from what a live fetch does.
+//
+// perSource: { [sourceId]: { temperature, precipitation, windSpeed,
+// windGust, windDirection, pressure, soilTemperature, dewPoint } } —
+// doesn't need all nine REAL_SOURCES present; blend() below already
+// tolerates a source being absent (precache only ever carries a
+// hand-picked subset, see data/precache-config.json's topForecasters).
+// sharedTimes: array of ISO time strings, already sliced to the
+// "from now" window. metofficeExtras: { uvIndex, cloudCoverLow,
+// cloudCoverMid, cloudCoverHigh, dailyByDate: { [date]: {sunrise,
+// sunset, uvMax} } } — metoffice-only fields, required either way since
+// metoffice is the one source both the live fetch and the precache
+// config always include (see the precache config's own metoffice
+// constraint).
+function applyHourlyBlend(perSource, sharedTimes, metofficeExtras) {
+  state.hourly.times = sharedTimes;
+  state.hourly.uvIndex = metofficeExtras.uvIndex;
+  state.hourly.cloudCoverLow = metofficeExtras.cloudCoverLow;
+  state.hourly.cloudCoverMid = metofficeExtras.cloudCoverMid;
+  state.hourly.cloudCoverHigh = metofficeExtras.cloudCoverHigh;
+  state.hourly.sunriseByDate = {};
+  state.hourly.sunsetByDate = {};
+  state.hourly.uvMaxByDate = {};
+  Object.entries(metofficeExtras.dailyByDate || {}).forEach(([date, d]) => {
+    state.hourly.sunriseByDate[date] = d.sunrise;
+    state.hourly.sunsetByDate[date] = d.sunset;
+    state.hourly.uvMaxByDate[date] = d.uvMax;
+  });
+
+  const count = sharedTimes.length;
+
+  // Each real source's own FFV correction is applied per hour first
+  // (same day-bucket convention used throughout the hourly view — an
+  // hour before midnight tonight is "day 1", the next day is "day 2"),
+  // then the corrected values are medianed together across sources —
+  // mirroring exactly how the daily table blends Met Office and ECMWF.
+  function blend(field, conditionName) {
+    return Array.from({ length: count }, (_, i) => {
+      const day = i < 24 ? 1 : 2;
+      const values = REAL_SOURCES.map(({ id }) => {
+        const raw = perSource[id]?.[field]?.[i];
+        if (raw === null || raw === undefined) return null;
+        const source = CONFIG.forecasters.find(s => s.id === id);
+        const ffv = ffvFor(source, conditionName, day);
+        return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
+      }).filter(v => v !== null && v !== undefined);
+      return values.length ? median(values) : null;
+    });
+  }
+
+  state.hourly.temperature = blend("temperature", "temperature");
+  state.hourly.precipitation = blend("precipitation", "rain");
+  state.hourly.windSpeed = blend("windSpeed", "wind");
+  // Gust has no FFV history of its own — there's no dedicated Gust
+  // condition to compare against Actual the way Wind/Rain/etc. do, so
+  // this reuses Wind's own learned ratio as the closest available
+  // correction rather than showing the raw model figure uncorrected.
+  state.hourly.windGust = blend("windGust", "wind");
+  state.hourly.pressure = blend("pressure", "pressure");
+  state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
+  state.hourly.dewPoint = blend("dewPoint", "dewPoint");
+  // Direction can't be medianed the way speed can (it's angular, not
+  // linear) — first real source with a reading for that hour, same
+  // convention as anyRealWindDirection() uses for the daily table.
+  state.hourly.windDirection = Array.from({ length: count }, (_, i) => {
+    for (const { id } of REAL_SOURCES) {
+      const d = perSource[id]?.windDirection?.[i];
+      if (d !== null && d !== undefined) return d;
+    }
+    return null;
+  });
+
+  state.hourly.status = "ready";
+}
+
+// ---- GitHub-precached weather ----
+// data/precache-weather.json is written on a schedule by a GitHub
+// Action (see scripts/precache-weather.mjs) for a small, hand-maintained
+// list of places — NOT a general cache of everywhere anyone's ever
+// looked, just the handful worth keeping warm (see
+// data/precache-config.json). Anywhere else falls straight through to
+// the live fetch below, completely unaffected — this only ever SKIPS
+// work when there's a genuine match, never blocks or changes behaviour
+// otherwise.
+//
+// Matched by PROXIMITY to the resolved lat/lon (see
+// tryPrecachedHourlyForecast), not by postcode string — deliberately:
+// the precache config's hand-typed coordinates for "Taunton" will never
+// exactly equal wherever this device's own saved place happened to
+// geocode to, so an exact-string or exact-coordinate match would be
+// fragile in a way that's invisible until it silently never fires.
+// Mirrors exactly how fishing.js already matches its own precached
+// spots the same way.
+const PRECACHE_WEATHER_URL = "data/precache-weather.json";
+const PRECACHE_PROXIMITY_KM = 2;
+// Looser than RECENT_LOCATION_CACHE_MS's 15 minutes — GitHub's own
+// schedule is best-effort (can drift 15-45+ minutes under load, see the
+// workflow file's own comment on this), so judging precached data
+// "fresh" against that same tight window would mean it's almost always
+// borderline-stale the moment it's used. 30 minutes matches the target
+// refresh interval plus realistic drift.
+const PRECACHE_LOCATION_CACHE_MS = 30 * 60 * 1000;
+
+let precacheDataPromise = null;
+// Shared by fishing.js too (loaded after this file, same global scope)
+// — one fetch of the one file, not a separate copy per feature.
+function loadPrecacheData() {
+  if (!precacheDataPromise) {
+    precacheDataPromise = fetch(PRECACHE_WEATHER_URL)
+      .then(res => res.ok ? res.json() : null)
+      .catch(() => null); // missing file, offline, whatever — precache is only ever a bonus, never required
+  }
+  return precacheDataPromise;
+}
+
+async function tryPrecachedHourlyForecast(lat, lon) {
+  const data = await loadPrecacheData();
+  if (!data?.weather?.length) return null;
+  if (Date.now() - Date.parse(data.dataAsOf) > PRECACHE_LOCATION_CACHE_MS) return null;
+  return data.weather.find(w => haversineKm(lat, lon, w.lat, w.lon) <= PRECACHE_PROXIMITY_KM) || null;
+}
+
 async function fetchHourlyForecast(lat, lon) {
   state.hourly.status = "loading";
   state.hourly.error = null;
 
   try {
+    // Checked first, before spending any of the nine live requests below
+    // — this is the actual point of the precache feature: for a handful
+    // of places kept warm by the GitHub Action, the front page's own
+    // hourly/headline figures can come from a small local file instead
+    // of nine parallel Open-Meteo calls. Everything downstream
+    // (applyHourlyBlend, the headline render) treats this identically to
+    // a live result — it IS a live result's exact shape, just fetched by
+    // GitHub a little earlier rather than by this device right now.
+    const precached = await tryPrecachedHourlyForecast(lat, lon);
+    if (precached) {
+      applyHourlyBlend(precached.sources, precached.times, {
+        uvIndex: precached.uvIndex,
+        cloudCoverLow: precached.cloudCoverLow,
+        cloudCoverMid: precached.cloudCoverMid,
+        cloudCoverHigh: precached.cloudCoverHigh,
+        dailyByDate: precached.dailyByDate
+      });
+      return;
+    }
+
     // Fetched in parallel now, not one-at-a-time. Awaiting each of the
     // nine REAL_SOURCES fully before starting the next meant a single
     // slow or hung request added its own full timeout to the wait for
@@ -1520,19 +1665,6 @@ async function fetchHourlyForecast(lat, lon) {
     const from = startIdx >= 0 ? startIdx : 0;
     const sharedTimes = metofficeData.hourly.time.slice(from);
 
-    state.hourly.uvIndex = metofficeData.hourly.uv_index.slice(from);
-    state.hourly.cloudCoverLow = metofficeData.hourly.cloud_cover_low.slice(from);
-    state.hourly.cloudCoverMid = metofficeData.hourly.cloud_cover_mid.slice(from);
-    state.hourly.cloudCoverHigh = metofficeData.hourly.cloud_cover_high.slice(from);
-    state.hourly.sunriseByDate = {};
-    state.hourly.sunsetByDate = {};
-    state.hourly.uvMaxByDate = {};
-    metofficeData.daily.time.forEach((date, i) => {
-      state.hourly.sunriseByDate[date] = metofficeData.daily.sunrise[i];
-      state.hourly.sunsetByDate[date] = metofficeData.daily.sunset[i];
-      state.hourly.uvMaxByDate[date] = metofficeData.daily.uv_index_max[i];
-    });
-
     const perSource = {};
     REAL_SOURCES.forEach(({ id }) => {
       const data = byId.get(id);
@@ -1548,51 +1680,17 @@ async function fetchHourlyForecast(lat, lon) {
       };
     });
 
-    state.hourly.times = sharedTimes;
-    const count = sharedTimes.length;
-
-    // Each real source's own FFV correction is applied per hour first
-    // (same day-bucket convention used throughout the hourly view — an
-    // hour before midnight tonight is "day 1", the next day is "day 2"),
-    // then the corrected values are medianed together across sources —
-    // mirroring exactly how the daily table blends Met Office and ECMWF.
-    function blend(field, conditionName) {
-      return Array.from({ length: count }, (_, i) => {
-        const day = i < 24 ? 1 : 2;
-        const values = REAL_SOURCES.map(({ id }) => {
-          const raw = perSource[id]?.[field]?.[i];
-          if (raw === null || raw === undefined) return null;
-          const source = CONFIG.forecasters.find(s => s.id === id);
-          const ffv = ffvFor(source, conditionName, day);
-          return ffv !== null ? applyCorrection(raw, ffv, conditionName) : raw;
-        }).filter(v => v !== null && v !== undefined);
-        return values.length ? median(values) : null;
-      });
-    }
-
-    state.hourly.temperature = blend("temperature", "temperature");
-    state.hourly.precipitation = blend("precipitation", "rain");
-    state.hourly.windSpeed = blend("windSpeed", "wind");
-    // Gust has no FFV history of its own — there's no dedicated Gust
-    // condition to compare against Actual the way Wind/Rain/etc. do, so
-    // this reuses Wind's own learned ratio as the closest available
-    // correction rather than showing the raw model figure uncorrected.
-    state.hourly.windGust = blend("windGust", "wind");
-    state.hourly.pressure = blend("pressure", "pressure");
-    state.hourly.soilTemperature = blend("soilTemperature", "soilTemperature");
-    state.hourly.dewPoint = blend("dewPoint", "dewPoint");
-    // Direction can't be medianed the way speed can (it's angular, not
-    // linear) — first real source with a reading for that hour, same
-    // convention as anyRealWindDirection() uses for the daily table.
-    state.hourly.windDirection = Array.from({ length: count }, (_, i) => {
-      for (const { id } of REAL_SOURCES) {
-        const d = perSource[id]?.windDirection?.[i];
-        if (d !== null && d !== undefined) return d;
-      }
-      return null;
+    applyHourlyBlend(perSource, sharedTimes, {
+      uvIndex: metofficeData.hourly.uv_index.slice(from),
+      cloudCoverLow: metofficeData.hourly.cloud_cover_low.slice(from),
+      cloudCoverMid: metofficeData.hourly.cloud_cover_mid.slice(from),
+      cloudCoverHigh: metofficeData.hourly.cloud_cover_high.slice(from),
+      dailyByDate: Object.fromEntries(metofficeData.daily.time.map((date, i) => [date, {
+        sunrise: metofficeData.daily.sunrise[i],
+        sunset: metofficeData.daily.sunset[i],
+        uvMax: metofficeData.daily.uv_index_max[i]
+      }]))
     });
-
-    state.hourly.status = "ready";
   } catch (err) {
     state.hourly.status = "error";
     state.hourly.error = err.message || "Could not load hourly forecast";
