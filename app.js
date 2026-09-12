@@ -3375,7 +3375,7 @@ function temperatureRangeFor(rollbackDays) {
 // actually frost. Deliberately just a colour tint — no text, no
 // notification — the "gentle nudge" this was asked for, not another
 // warning to grow fatigued by.
-const FROST_TEMP_THRESHOLD = 2; // °C — ground frost can form even when air temp reads a little above freezing
+const FROST_TEMP_THRESHOLD = 4; // °C — ground frost can form even when air temp reads a few degrees above freezing
 const FROST_CLOUD_THRESHOLD = 40; // % — below this counts as "clear enough"
 const FROST_WIND_THRESHOLD = 8; // mph — below this counts as "light enough"
 
