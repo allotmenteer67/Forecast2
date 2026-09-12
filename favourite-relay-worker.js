@@ -49,23 +49,29 @@
 // ---- Setup ----
 // 1. Cloudflare dashboard -> Workers & Pages -> Create -> empty Worker.
 // 2. Paste this whole file in, Deploy.
-// 3. Settings -> Variables -> add secrets (Encrypt):
-//      GITHUB_TOKEN     - a fine-grained PAT, scoped to ONLY this repo,
-//                          with Contents: Read and write permission.
-//                          Fine-grained tokens can be scoped to a single
-//                          repo, unlike classic PATs — use that.
-//      APP_SHARED_SECRET - any random string you make up (optional but
-//                          recommended — see the honest limitation
-//                          above). Leave unset to skip this check
-//                          entirely.
+// 3. That's it — the GitHub token lives directly in this file (see the
+//    comment above GITHUB_TOKEN for why, and the one condition that
+//    keeps it safe). No Cloudflare "Variables" step needed.
 // 4. Paste the Worker's own URL into FAVOURITE_RELAY_URL near the top of
-//    app.js, and (if you set APP_SHARED_SECRET) the same value into
-//    FAVOURITE_RELAY_SECRET right next to it.
+//    app.js.
 
 const GITHUB_OWNER = "allotmenteer67";
 const GITHUB_REPO = "Forecast2";
 const CONFIG_PATH = "data/precache-config.json";
 const SHARED_CAP = 8;
+
+// Baked directly into this file rather than a Cloudflare "Variable" —
+// the dashboard's secret-entry field wouldn't accept a paste on the
+// only device available (an iPad, no Mac/PC for wrangler CLI either).
+// This is safe ONLY because the GitHub repo backing this Worker
+// (Cflaresomtimng) is set to Private — confirmed before this token was
+// added. If that repo is ever made public again, treat this token as
+// compromised: revoke it immediately (GitHub -> Developer settings ->
+// Fine-grained tokens -> this one -> Delete) and generate a fresh one
+// before re-publishing. The token is scoped to ONLY the Forecast2 repo
+// with Contents: Read and write, so even a worst-case leak is bounded
+// to that one repo, not the whole GitHub account.
+const GITHUB_TOKEN = "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";
 
 const OUTCODE_PATTERN = /^[A-Z]{1,2}\d[A-Z\d]?$/;
 
@@ -100,12 +106,12 @@ function utf8ToBase64(str) {
   return btoa(binary);
 }
 
-async function githubRequest(env, method, body) {
+async function githubRequest(method, body) {
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${CONFIG_PATH}`;
   const res = await fetch(url, {
     method,
     headers: {
-      "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
+      "Authorization": `Bearer ${GITHUB_TOKEN}`,
       "Accept": "application/vnd.github+json",
       "User-Agent": "cloude-favourite-relay",
       ...(body ? { "Content-Type": "application/json" } : {})
@@ -156,7 +162,7 @@ export default {
     // 1. Fetch the current file (need its sha to write back to it).
     let getRes;
     try {
-      getRes = await githubRequest(env, "GET");
+      getRes = await githubRequest("GET");
     } catch (err) {
       return json({ error: "Couldn't reach GitHub", detail: String(err) }, 502);
     }
@@ -196,7 +202,7 @@ export default {
     const newContent = JSON.stringify(config, null, 2) + "\n";
     let putRes;
     try {
-      putRes = await githubRequest(env, "PUT", {
+      putRes = await githubRequest("PUT", {
         message: `Add favourite ${outcode} (${type})`,
         content: utf8ToBase64(newContent),
         sha: fileData.sha
