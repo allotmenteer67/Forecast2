@@ -6044,6 +6044,18 @@ function renderPlacesList() {
       const alreadyFavourited = favouritesAdded.includes(outcode);
       const atLocalCap = favouritesAdded.length >= FAVOURITES_PER_PERSON_CAP;
 
+      // A filled star alone was too easy to miss at a glance (confirmed
+      // in testing) — this text badge makes "already favourited" legible
+      // without needing to notice a colour change. info is already
+      // appended to row above, but it's still a live reference, so
+      // appending to it here still lands in the right place.
+      if (alreadyFavourited) {
+        const badge = document.createElement("span");
+        badge.className = "place-row-favourite-badge";
+        badge.textContent = "★ Shared favourite";
+        info.appendChild(badge);
+      }
+
       const favBtn = document.createElement("button");
       favBtn.type = "button";
       favBtn.className = "place-row-favourite" + (alreadyFavourited ? " is-favourited" : "");

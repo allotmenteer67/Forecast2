@@ -1009,6 +1009,15 @@ function renderTideLocationsList() {
       const alreadyFavourited = favouritesAdded.includes(loc.outcode);
       const atLocalCap = favouritesAdded.length >= FAVOURITES_PER_PERSON_CAP;
 
+      // Same visible text badge as weather's own saved places (see
+      // app.js) — a filled star alone was too easy to miss.
+      if (alreadyFavourited) {
+        const badge = document.createElement("span");
+        badge.className = "place-row-favourite-badge";
+        badge.textContent = "★ Shared favourite";
+        info.appendChild(badge);
+      }
+
       const favBtn = document.createElement("button");
       favBtn.type = "button";
       favBtn.className = "place-row-favourite" + (alreadyFavourited ? " is-favourited" : "");

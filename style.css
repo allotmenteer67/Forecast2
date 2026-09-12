@@ -2293,6 +2293,18 @@ footer {
   word-break: break-word;
 }
 
+/* Sits under the place name/postcode when a place is already in the
+   shared favourites — legible on its own, without relying on noticing
+   the ★ button's fill colour (confirmed in testing that the button
+   alone wasn't obvious enough at a glance). */
+.place-row-favourite-badge {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
 .place-row-switch {
   flex: 0 0 auto;
   width: 76px;
