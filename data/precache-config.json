@@ -59,22 +59,60 @@
     "  requests/day beyond the hand-maintained entries — check this still",
     "  clears 9000 with room to spare before raising either cap."
   ],
-
-  "topForecasters": ["metoffice", "ecmwf", "gfs", "icon"],
-
+  "topForecasters": [
+    "metoffice",
+    "ecmwf",
+    "gfs",
+    "icon"
+  ],
   "weatherLocations": [
-    { "id": "taunton", "label": "Taunton", "lat": 51.019, "lon": -3.100 },
-    { "id": "tiree", "label": "Tiree", "lat": 56.500, "lon": -6.880 },
-    { "id": "teesside", "label": "Teesside", "lat": 54.576, "lon": -1.235 }
+    {
+      "id": "taunton",
+      "label": "Taunton",
+      "lat": 51.019,
+      "lon": -3.1
+    },
+    {
+      "id": "tiree",
+      "label": "Tiree",
+      "lat": 56.5,
+      "lon": -6.88
+    },
+    {
+      "id": "teesside",
+      "label": "Teesside",
+      "lat": 54.576,
+      "lon": -1.235
+    }
   ],
-
   "fishingSpots": [
-    { "id": "lowestoft", "label": "Lowestoft", "lat": 52.475, "lon": 1.751, "markType": "coastal" },
-    { "id": "lyme-regis", "label": "Lyme Regis", "lat": 50.725, "lon": -2.9375, "markType": "coastal" },
-    { "id": "liverpool", "label": "Liverpool", "lat": 53.405, "lon": -2.995, "markType": "coastal" }
+    {
+      "id": "lowestoft",
+      "label": "Lowestoft",
+      "lat": 52.475,
+      "lon": 1.751,
+      "markType": "coastal"
+    },
+    {
+      "id": "lyme-regis",
+      "label": "Lyme Regis",
+      "lat": 50.725,
+      "lon": -2.9375,
+      "markType": "coastal"
+    },
+    {
+      "id": "liverpool",
+      "label": "Liverpool",
+      "lat": 53.405,
+      "lon": -2.995,
+      "markType": "coastal"
+    }
   ],
-
-  "weatherFavourites": [],
-
+  "weatherFavourites": [
+    {
+      "outcode": "TA6",
+      "addedAt": "2026-09-12T17:11:50.144Z"
+    }
+  ],
   "fishingFavourites": []
 }
