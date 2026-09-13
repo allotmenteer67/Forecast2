@@ -818,6 +818,12 @@ async function initMapStrip(centre) {
 }
 
 document.addEventListener("cloude:location-ready", e => {
+  // TEMPORARY diagnostic — a plain OS alert, deliberately outside any
+  // canvas/CSS/layout, so it's impossible for it to be silently
+  // invisible the way a canvas-drawn marker could theoretically be.
+  // Proves definitively whether this listener runs at all on a given
+  // page view, independent of every assumption about drawing.
+  alert("map-strip: cloude:location-ready received, lat=" + e.detail.lat + " lon=" + e.detail.lon);
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
@@ -884,8 +890,17 @@ if (mapStripCanvas && "ResizeObserver" in window) {
 // in mapStripLastCentre/mapStripLastGrid from the original fetch), only
 // runs once something has actually loaded, and only while the page is
 // genuinely visible.
+// TEMPORARY diagnostic — fires once only, the very first tick that
+// finds a real repaint worth attempting, so it's obvious whether this
+// interval is even running and what it sees, without an alert every
+// 1.2 seconds making the app unusable.
+let mapStripIntervalAlerted = false;
 setInterval(() => {
   if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
+    if (!mapStripIntervalAlerted) {
+      mapStripIntervalAlerted = true;
+      alert("map-strip: periodic repaint tick fired, centre known, attempting redraw");
+    }
     renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
 }, 1200);
