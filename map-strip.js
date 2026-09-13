@@ -699,7 +699,7 @@ async function fetchMapStripGrid(centre) {
 
 let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supersedes any still-in-flight initMapStrip call from a previous one
 
-async function initMapStrip(centre) {
+async function initMapStrip(centre, { forceReplace = false } = {}) {
   if (!mapStripCanvas) return;
   // Confirmed via device testing: the strip's container and the canvas
   // itself are both a normal, correct, fully visible size at the exact
@@ -711,12 +711,23 @@ async function initMapStrip(centre) {
   // layer not picking up new pixel content on this particular kind of
   // page transition, even though the 2D context genuinely has been
   // redrawn underneath. Rather than try to force that layer to refresh
-  // in place, this sidesteps it entirely: on a repeat call, replace the
-  // canvas element outright with a fresh clone before drawing anything.
-  // A brand new element gets a brand new compositing layer with no stale
-  // image to possibly fall back to, guaranteed, regardless of whatever
-  // the exact underlying mechanism turns out to be.
-  if (mapStripLastCentre) {
+  // in place, this sidesteps it entirely: replace the canvas element
+  // outright with a fresh clone before drawing anything. A brand new
+  // element gets a brand new compositing layer with no stale image to
+  // possibly fall back to, guaranteed, regardless of the exact mechanism.
+  //
+  // forceReplace deliberately gates this — confirmed as a real
+  // self-inflicted bug the first time this shipped without it: the
+  // periodic safety-net timer (below) also calls initMapStrip, every
+  // 1.2 seconds, for as long as the app stays open. Replacing the
+  // canvas on EVERY one of those routine ticks (not just on a genuine
+  // return-to-page) meant the strip would render correctly for a
+  // moment, then reset back to the canvas's blank default size on the
+  // very next tick, over and over — seen on-device as "looks right for
+  // about a second, then zooms out." Only the actual transition
+  // listeners (pageshow/visibilitychange/focus) pass forceReplace now;
+  // the routine timer tick and the normal first-load path don't.
+  if (forceReplace) {
     const freshCanvas = mapStripCanvas.cloneNode(false);
     mapStripCanvas.replaceWith(freshCanvas);
     mapStripCanvas = freshCanvas;
@@ -923,14 +934,17 @@ setInterval(() => {
 
 // Kept as well — genuinely free, and each has a real chance of firing
 // sooner than the interval above on whichever devices/scenarios they DO
-// correctly fire for, even though none could be relied on alone. Same
-// initMapStrip call as the interval above, same reasoning.
+// correctly fire for, even though none could be relied on alone. These
+// three DO pass forceReplace — each only fires on a genuine transition
+// (unlike the routine timer above), so the disruptive canvas swap is
+// both warranted and safe here: at most once per real return-to-page,
+// never on a routine tick.
 window.addEventListener("pageshow", () => {
-  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
+  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
+  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
 });
 window.addEventListener("focus", () => {
-  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
+  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
 });
