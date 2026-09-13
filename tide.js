@@ -434,9 +434,18 @@ function savePersistedTideFit(stationId, result) {
 // during a quiet background refresh of a week-old one.
 async function buildAndCacheTideFit(station) {
   const backfill = await backfillTideStation(station);
-  if (!backfill || backfill.readings.length < MIN_FIT_READINGS) return null;
+  // TEMPORARY diagnostic — these two now throw a specific reason instead
+  // of silently returning null, purely so the actual cause reaches the
+  // "Not available right now" message on screen (see tide-ui.js/
+  // fishing-ui.js) rather than being swallowed. Every existing caller
+  // already handles a rejected promise here (getOrBuildTideFit's own
+  // try/catch, refreshTideFitInBackground's .catch()), so this is safe
+  // to revert to a plain `return null` once the cause is found.
+  if (!backfill || backfill.readings.length < MIN_FIT_READINGS) {
+    throw new Error(`Only ${backfill ? backfill.readings.length : 0} readings available (need ${MIN_FIT_READINGS})`);
+  }
   const fit = fitTideHarmonics(backfill.readings);
-  if (!fit) return null;
+  if (!fit) throw new Error("Harmonic fit failed on otherwise-sufficient readings");
   const result = { fit, epochIso: backfill.epochIso };
   tideFitCache.set(station.id, result);
   savePersistedTideFit(station.id, result);

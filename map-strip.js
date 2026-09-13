@@ -809,7 +809,33 @@ async function initMapStrip(centre) {
 }
 
 document.addEventListener("cloude:location-ready", e => {
-  initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
+  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
+  // console.error alone is useless here: there's no way to see it on an
+  // iPad with no attached Mac for Safari's Web Inspector. This writes
+  // any error that reaches here directly onto the strip itself instead,
+  // in plain visible text, so the actual failure (if any) is readable
+  // without needing dev tools at all.
+  try {
+    initMapStrip({ lat: e.detail.lat, lon: e.detail.lon }).catch(err => {
+      if (mapStripCanvas) {
+        const ctx = mapStripCanvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
+        ctx.fillStyle = "#c0392b";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("Map strip error (async): " + (err && err.message || err), 8, 20);
+      }
+    });
+  } catch (err) {
+    if (mapStripCanvas) {
+      const ctx = mapStripCanvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
+      ctx.fillStyle = "#c0392b";
+      ctx.font = "12px sans-serif";
+      ctx.fillText("Map strip error (sync): " + (err && err.message || err), 8, 20);
+    }
+  }
 });
 
 // Reads the SAME #hourSlider element app.js already owns and drives the
@@ -867,8 +893,29 @@ if (mapStripCanvas && "ResizeObserver" in window) {
 // this just repaints whatever was already known, no re-fetch needed,
 // since nothing about the underlying data actually went anywhere.
 window.addEventListener("pageshow", e => {
-  if (e.persisted && mapStripCanvas && mapStripLastCentre) {
-    sizeMapStripCanvas();
-    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
+  // Same reasoning as the cloude:location-ready listener above: writes
+  // what actually happened directly onto the strip, since there's no
+  // console access available to check otherwise. Fires every time
+  // pageshow fires at all (not just when persisted is true) so it's
+  // visible whether this event is even happening the way it's assumed
+  // to, or not firing/not persisted at all on this device.
+  if (!mapStripCanvas) return;
+  try {
+    const ctx = mapStripCanvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
+    ctx.fillStyle = "#2f6f4f";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(`pageshow: persisted=${e.persisted}, centre known=${!!mapStripLastCentre}`, 8, 20);
+    if (e.persisted && mapStripLastCentre) {
+      sizeMapStripCanvas();
+      renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    }
+  } catch (err) {
+    const ctx = mapStripCanvas.getContext("2d");
+    ctx.fillStyle = "#c0392b";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Map strip error (pageshow): " + (err && err.message || err), 8, 36);
   }
 });

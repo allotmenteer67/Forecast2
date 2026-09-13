@@ -85,27 +85,31 @@ async function renderFishingRow(force = false) {
   fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
 
   let built;
+  let buildError = null;
   try {
     built = await getOrBuildTideFit(location.station);
-  } catch {
+  } catch (err) {
     built = null;
+    buildError = err && err.message; // TEMPORARY diagnostic — see tide.js's buildAndCacheTideFit
   }
   if (myToken !== fishingRenderToken) return;
   if (!built) {
-    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available right now</span>`;
+    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available${buildError ? ": " + buildError : " right now"}</span>`;
     return;
   }
 
   const markType = fishingMarkType(location);
   let forecast;
+  let forecastError = null;
   try {
     forecast = await fetchFishingForecast(location.station.lat, location.station.lon, markType, force);
-  } catch {
+  } catch (err) {
     forecast = null;
+    forecastError = err && err.message; // TEMPORARY diagnostic
   }
   if (myToken !== fishingRenderToken) return;
   if (!forecast) {
-    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available right now</span>`;
+    fishingRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available${forecastError ? ": " + forecastError : " right now"}</span>`;
     return;
   }
 

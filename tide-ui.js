@@ -162,15 +162,17 @@ async function renderTideRow() {
   tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Loading…</span>`;
 
   let built;
+  let buildError = null;
   try {
     built = await getOrBuildTideFit(location.station);
-  } catch {
+  } catch (err) {
     built = null;
+    buildError = err && err.message; // TEMPORARY diagnostic — see tide.js's buildAndCacheTideFit
   }
   if (myToken !== tideRenderToken) return; // superseded by a later switch
 
   if (!built) {
-    tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available right now</span>`;
+    tideRow.innerHTML = `<span class="tide-row-label">${labelHtml}</span><span class="tide-row-value">Not available${buildError ? ": " + buildError : " right now"}</span>`;
     return;
   }
 
@@ -997,56 +999,6 @@ function renderTideLocationsList() {
     info.appendChild(renderAdmiraltyRow(loc, locations));
     row.appendChild(info);
 
-    // Same shared-favourite mechanism as weather's own saved places (see
-    // app.js) — only offered when this location was added from a real
-    // postcode outward code, never a place name or a map-dropped pin.
-    // Fishing shares tide's location list (see the front-page comment on
-    // #tideFishingPair), so this one button covers both — the markType
-    // set below in the Fishing section decides which mark type the
-    // favourite is precached as.
-    if (loc.outcode) {
-      const favouritesAdded = loadFavouritesAdded();
-      const alreadyFavourited = favouritesAdded.includes(loc.outcode);
-      const atLocalCap = favouritesAdded.length >= FAVOURITES_PER_PERSON_CAP;
-
-      // Same visible text badge as weather's own saved places (see
-      // app.js) — a filled star alone was too easy to miss.
-      if (alreadyFavourited) {
-        const badge = document.createElement("span");
-        badge.className = "place-row-favourite-badge";
-        badge.textContent = "★ Shared favourite";
-        info.appendChild(badge);
-      }
-
-      const favBtn = document.createElement("button");
-      favBtn.type = "button";
-      favBtn.className = "place-row-favourite" + (alreadyFavourited ? " is-favourited" : "");
-      favBtn.textContent = alreadyFavourited ? "★" : "☆";
-      favBtn.setAttribute("aria-label", alreadyFavourited
-        ? `${loc.outcode} is in the shared fishing favourites`
-        : `Add ${loc.outcode} to shared fishing favourites`);
-      favBtn.disabled = alreadyFavourited || (atLocalCap && !alreadyFavourited);
-      favBtn.title = alreadyFavourited
-        ? "Already in the shared favourites"
-        : atLocalCap
-          ? `You've added your ${FAVOURITES_PER_PERSON_CAP} favourites already`
-          : "Add to shared fishing favourites (visible to everyone using this app)";
-      favBtn.addEventListener("click", async () => {
-        favBtn.disabled = true;
-        favBtn.textContent = "…";
-        const result = await postFavourite("fishing", loc.outcode, loc.markType || "estuary");
-        if (result.ok || result.alreadyExists) {
-          saveFavouritesAdded([...loadFavouritesAdded(), loc.outcode]);
-          renderTideLocationsList();
-        } else {
-          favBtn.disabled = false;
-          favBtn.textContent = "☆";
-          alert(result.full ? result.message : (result.error || "Couldn't add that favourite."));
-        }
-      });
-      row.appendChild(favBtn);
-    }
-
     const switchBtn = document.createElement("button");
     switchBtn.type = "button";
     switchBtn.className = "place-row-switch";
@@ -1213,15 +1165,7 @@ async function performAddTideLocation() {
       // gauge's own station instead of the real target location.
       lat: resolved.lat,
       lon: resolved.lon,
-      station,
-      // Only set when resolved.areaCode is a genuine postcode outward
-      // code rather than the "lat,lon" fallback resolveLocation uses for
-      // a plain place name or a map-dropped pin (that fallback always
-      // contains a comma, an outward code never does) — this is what
-      // gates whether the ★ shared-favourite button appears for this
-      // location at all. See outwardCodeOf() / app.js's own weather
-      // favourite for the identical boundary applied there.
-      outcode: resolved.areaCode && !resolved.areaCode.includes(",") ? resolved.areaCode : null
+      station
     };
     locations.push(newLocation);
     saveTideLocations(locations);
