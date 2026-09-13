@@ -688,8 +688,11 @@ async function fetchMapStripGrid(centre) {
   return grid;
 }
 
+let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supersedes any still-in-flight initMapStrip call from a previous one
+
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
+  const myGeneration = ++mapStripGeneration;
   sizeMapStripCanvas();
 
   // A cold PWA launch on iOS: reported as the map strip staying at a
@@ -772,6 +775,16 @@ async function initMapStrip(centre) {
     // showing an error for what is, on the front page, a secondary
     // feature.
   }
+  // A newer swipe already started its own initMapStrip call while the
+  // fetches above were still running — confirmed as a real bug: with no
+  // guard here, whichever call's fetches happen to resolve LAST wins the
+  // canvas, regardless of which one was actually requested last. Two
+  // quick swipes could easily finish out of order (different cache
+  // states, different network timing), leaving the strip showing an
+  // earlier place than the name label next to it, which had already
+  // moved on. Bailing out here means only the most recently REQUESTED
+  // swipe is ever allowed to paint, however its fetches happen to land.
+  if (myGeneration !== mapStripGeneration) return;
   renderMapStrip(centre, null); // whatever arrived (coastline/places/terrain) shown immediately, rain follows once fetched
 
   // Cache first — see the note above fetchMapStripGrid for why this one
@@ -780,12 +793,14 @@ async function initMapStrip(centre) {
   // the fetch exactly as before.
   const cached = loadMapStripGridCache(centre);
   if (cached) {
+    if (myGeneration !== mapStripGeneration) return; // see the guard above — same reasoning
     renderMapStrip(centre, cached);
     return;
   }
 
   try {
     const grid = await fetchMapStripGrid(centre);
+    if (myGeneration !== mapStripGeneration) return; // see the guard above — same reasoning
     renderMapStrip(centre, grid);
   } catch (err) {
     console.error("Map strip weather fetch failed:", err);

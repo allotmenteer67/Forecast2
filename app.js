@@ -2128,7 +2128,16 @@ async function runLoadLocationData(force = false) {
       fetchHourlyForecast(lat, lon, force)
     ]);
 
-    if (state.postcode !== requestedFor) return; // a newer switch has since taken over — this result is stale, leave it alone
+    if (state.postcode !== requestedFor) {
+      // Superseded, but see cacheCurrentLocationSnapshot's own comment:
+      // this fetch genuinely completed for requestedFor, and nothing
+      // else could have touched state.actual/state.hourly in the
+      // meantime (switches are strictly queued, never concurrent) — so
+      // this is real, correct data for that place, worth caching under
+      // its own postcode even though display has already moved on.
+      cacheCurrentLocationSnapshot(requestedFor);
+      return;
+    }
 
     // The map strip (map-strip.js, front page only) starts its own,
     // separate fetch here — deliberately AFTER the actual weather above
@@ -5722,10 +5731,28 @@ function saveRecentLocationCache(cache) {
 // (whether or not this cache path was involved), so the screen still
 // updates once fresh data is genuinely ready.
 
-function cacheCurrentLocationSnapshot() {
+// A location switch is always strictly queued, never run concurrently
+// with another (see loadLocationData's own promise-reuse/queueing) — so
+// when a fetch's own "am I still current" check fails below because a
+// newer switch already took over, state.actual/state.hourly at THIS
+// exact moment still genuinely holds THIS fetch's own, fully correct
+// result: the next (superseding) location's fetch can't have started
+// yet, since it's queued strictly behind this one finishing. That made
+// it safe to accept an explicit postcode here instead of always reading
+// state.postcode — see the call site right before the "stale, leave it
+// alone" guard in runLoadLocationData, which is what actually needed
+// this: a completed fetch was being abandoned right at the finish line,
+// with nothing ever caching it for its OWN postcode purely because
+// display had already moved on to somewhere else by the time it landed.
+// Confirmed as the cause of a real report: swiping to a second place
+// and back again within seconds forced a full reload rather than a
+// cache hit, because the FIRST place's fetch — despite completing
+// successfully — never got the chance to cache itself if the swipe away
+// happened before it finished.
+function cacheCurrentLocationSnapshot(forPostcode = state.postcode) {
   if (state.actual.status !== "ready") return; // only a fully completed load is worth caching
   const cache = loadRecentLocationCache();
-  cache[state.postcode] = {
+  cache[forPostcode] = {
     actual: state.actual,
     realSources: state.realSources,
     hourly: state.hourly,
