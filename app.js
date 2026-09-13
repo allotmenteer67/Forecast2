@@ -2000,6 +2000,22 @@ function loadLocationData(force = false) {
       // (restored from the very same cached snapshot by
       // resetForLocationChange(), just before this function was
       // called), so this is genuine, not a guess.
+      // TEMPORARY diagnostic — remove once the blank-strip cause is
+      // found. Draws directly onto the map strip canvas from THIS file,
+      // before dispatching — proves app.js actually reached this exact
+      // line, independent of whether map-strip.js's own listener does
+      // anything with it.
+      try {
+        const c = document.getElementById("mapStripCanvas");
+        if (c) {
+          const dctx = c.getContext("2d");
+          dctx.fillStyle = "#f80";
+          dctx.fillRect(0, 32, c.width, 16);
+          dctx.fillStyle = "#000";
+          dctx.font = "11px monospace";
+          dctx.fillText("app.js dispatched (cache-hit path)", 4, 44);
+        }
+      } catch {}
       document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat: state.lat, lon: state.lon } }));
       return Promise.resolve();
     }
@@ -2146,6 +2162,19 @@ async function runLoadLocationData(force = false) {
     // as a DOM event rather than a direct function call so this file
     // doesn't need to know map-strip.js exists at all; on any other page
     // there's simply no listener and this is a no-op.
+    // TEMPORARY diagnostic — remove once the blank-strip cause is
+    // found. Same reasoning as the cache-hit path's own marker above.
+    try {
+      const c = document.getElementById("mapStripCanvas");
+      if (c) {
+        const dctx = c.getContext("2d");
+        dctx.fillStyle = "#0ff";
+        dctx.fillRect(0, 32, c.width, 16);
+        dctx.fillStyle = "#000";
+        dctx.font = "11px monospace";
+        dctx.fillText("app.js dispatched (full-fetch path)", 4, 44);
+      }
+    } catch {}
     document.dispatchEvent(new CustomEvent("cloude:location-ready", { detail: { lat, lon } }));
 
     // Everything from here on is bookkeeping (learning FFV, and the
