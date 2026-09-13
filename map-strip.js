@@ -101,7 +101,7 @@ function mapStripPalette() {
   return MAP_STRIP_PALETTES[id] || MAP_STRIP_PALETTES.paper;
 }
 
-const mapStripCanvas = document.getElementById("mapStripCanvas");
+let mapStripCanvas = document.getElementById("mapStripCanvas");
 let mapStripCoastline = null;
 let mapStripPlaces = null;
 let mapStripTerrain = null;
@@ -111,7 +111,9 @@ let mapStripLastCentre = null;
 let mapStripLastGrid = null;
 
 function sizeMapStripCanvas() {
-  if (!mapStripCanvas) return;
+  const freshCanvas = document.getElementById("mapStripCanvas");
+  if (freshCanvas && freshCanvas.isConnected) mapStripCanvas = freshCanvas;
+  if (!mapStripCanvas || !mapStripCanvas.isConnected) return;
   const rect = mapStripCanvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const w = Math.round(rect.width * dpr);
@@ -402,7 +404,14 @@ function ensureMapStripScale() {
 }
 
 async function renderMapStrip(centre, grid) {
-  if (!mapStripCanvas) return;
+  // Re-fetched fresh on every single draw, not trusted from the
+  // module-load-time reference above — see that declaration's own
+  // comment for why. isConnected specifically catches a stale reference
+  // that would otherwise draw successfully, with no error at all, onto
+  // an element that's silently no longer part of the visible page.
+  const freshCanvas = document.getElementById("mapStripCanvas");
+  if (freshCanvas && freshCanvas.isConnected) mapStripCanvas = freshCanvas;
+  if (!mapStripCanvas || !mapStripCanvas.isConnected) return;
   mapStripLastCentre = centre;
   mapStripLastGrid = grid;
   const ctx = mapStripCanvas.getContext("2d");
