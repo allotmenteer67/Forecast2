@@ -556,6 +556,21 @@ async function renderMapStrip(centre, grid) {
     scaleEl.classList.toggle("is-visible", mapStripHourOffset !== 0);
     if (mapStripHourOffset !== 0) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
   }
+
+  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
+  // Drawn LAST, after everything above, unconditionally — no try/catch
+  // needed, since the whole point is confirming whether this function
+  // runs to completion at all and what it actually had to work with.
+  // canvas.width/height here are the real backing-store pixel
+  // dimensions (view.w/h are the CSS/logical size) — if these come back
+  // as 0, that alone would explain a blank strip with no error anywhere:
+  // every draw call above would have silently done nothing onto a
+  // canvas with no actual area.
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, view.h - 16, 220, 16);
+  ctx.fillStyle = "#0f0";
+  ctx.font = "11px monospace";
+  ctx.fillText(`OK ${mapStripCanvas.width}x${mapStripCanvas.height} @${new Date().toLocaleTimeString()}`, 4, view.h - 4);
 }
 
 // ---- Grid cache ----
@@ -693,6 +708,26 @@ let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supe
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
   const myGeneration = ++mapStripGeneration;
+  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
+  // Drawn immediately, synchronously, before anything else (including
+  // sizeMapStripCanvas) — confirms initMapStrip was actually reached at
+  // all, and captures the canvas's real CSS box size at that exact
+  // moment via getBoundingClientRect (separate from the canvas's own
+  // width/height backing-store attributes, which sizeMapStripCanvas
+  // hasn't necessarily set yet here). A 0x0 rect here would mean the
+  // page's own layout hadn't given the strip any actual space yet at
+  // the moment this ran.
+  {
+    const rect = mapStripCanvas.getBoundingClientRect();
+    const ctx0 = mapStripCanvas.getContext("2d");
+    if (mapStripCanvas.width > 0 && mapStripCanvas.height > 0) {
+      ctx0.fillStyle = "#00f";
+      ctx0.fillRect(0, 0, mapStripCanvas.width, 16);
+      ctx0.fillStyle = "#fff";
+      ctx0.font = "11px monospace";
+      ctx0.fillText(`init gen${myGeneration} rect=${Math.round(rect.width)}x${Math.round(rect.height)}`, 4, 12);
+    }
+  }
   sizeMapStripCanvas();
 
   // A cold PWA launch on iOS: reported as the map strip staying at a
