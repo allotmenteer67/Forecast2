@@ -1,3 +1,34 @@
+// TEMPORARY diagnostic — a global catch-all for ANY uncaught error on
+// this page, not just inside this file's own functions. renderMapStrip
+// itself is confirmed never being reached at all (not even as a caught
+// error, via its own try/catch) even on a completely fresh install —
+// which points further upstream than anything drawing-related. This is
+// the most fundamental possible check: if something earlier in THIS
+// file's own top-level execution throws (stopping the rest of the file,
+// including the event listener registration near the bottom, from ever
+// running), or if some completely unrelated script on the page errors
+// in a way that matters, this will surface it directly rather than it
+// vanishing with no console to see it on.
+window.addEventListener("error", e => {
+  if (!window.__mapStripGlobalErrorShown) {
+    window.__mapStripGlobalErrorShown = true;
+    alert("Page error: " + e.message + " at " + e.filename + ":" + e.lineno);
+  }
+});
+window.addEventListener("unhandledrejection", e => {
+  if (!window.__mapStripGlobalRejectionShown) {
+    window.__mapStripGlobalRejectionShown = true;
+    alert("Unhandled rejection: " + (e.reason && e.reason.stack || e.reason));
+  }
+});
+
+// TEMPORARY diagnostic — fires once, the moment map-strip.js's own
+// cloude:location-ready listener is registered near the bottom of this
+// file (see there). If THIS never shows up, this file's own top-level
+// code never finished running at all — the actual problem, whatever it
+// is, is even earlier than the trigger itself.
+window.__mapStripListenerRegistering = true;
+
 // Front-page map preview strip — a small, static, tap-to-open-full-map
 // preview, deliberately NOT a shrunk-down copy of map.js's pan/zoom
 // machinery. A mini pannable map crammed into a strip this size fights
@@ -609,7 +640,6 @@ async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
   const myGeneration = ++mapStripGeneration;
   sizeMapStripSvg();
-
   // A cold PWA launch on iOS: reported as the map strip staying at a
   // wrong (too-short) height on first open, pushing everything below it
   // down far enough to need a scroll — but self-correcting the moment
@@ -669,12 +699,16 @@ async function initMapStrip(centre) {
         // No rivers/canals this time — same degrade-not-break reasoning.
       }
     }
-  } catch {
-    // No coastline/places this time — the strip still renders sea
-    // colour plus rain (or just sea colour) and is still tappable
-    // through to the full map, so this stays silent rather than
-    // showing an error for what is, on the front page, a secondary
-    // feature.
+  } catch (err) {
+    // TEMPORARY diagnostic — this block normally swallows silently by
+    // design (a missing coastline/places file shouldn't be treated as
+    // an error, the strip degrades gracefully without them). Alerting
+    // here instead, once, purely to rule out something unexpected (not
+    // a plain missing-file case) happening in here on the real device.
+    if (!window.__mapStripFetchErrorShown) {
+      window.__mapStripFetchErrorShown = true;
+      alert("Map strip data-fetch block threw: " + (err && err.stack || err));
+    }
   }
   if (myGeneration !== mapStripGeneration) return;
   renderMapStrip(centre, null); // whatever arrived (coastline/places/terrain) shown immediately, rain follows once fetched
@@ -695,7 +729,19 @@ async function initMapStrip(centre) {
   }
 }
 
+// TEMPORARY diagnostic — this file's own top-level code has now run
+// all the way down to here without throwing. If the earlier
+// "Page error" alert never appeared AND this one doesn't either, the
+// listener below genuinely did register — so the next thing to check
+// is whether app.js is actually dispatching the event at all.
+window.__mapStripListenerRegistering = "reached, about to register";
+
 document.addEventListener("cloude:location-ready", e => {
+  // TEMPORARY diagnostic — proves the event was both dispatched AND
+  // received. If this never appears, app.js either never dispatches
+  // cloude:location-ready at all on this load, or dispatches it before
+  // this listener was registered (a genuine race, not yet ruled out).
+  alert("map-strip: cloude:location-ready received, lat=" + e.detail.lat + " lon=" + e.detail.lon);
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
