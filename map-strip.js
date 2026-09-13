@@ -372,6 +372,24 @@ function ensureMapStripScale() {
 }
 
 async function renderMapStrip(centre, grid) {
+  // TEMPORARY diagnostic wrapper — if anything inside renderMapStripInner
+  // throws (very plausible against the real, much larger/more complex
+  // coastline/places data than a simplified test could exercise), it
+  // would otherwise vanish completely silently: this isn't awaited or
+  // wrapped anywhere it's called from, so an exception here becomes an
+  // unhandled promise rejection with no console to see it on this
+  // device. This converts that silence into a visible, readable error.
+  try {
+    await renderMapStripInner(centre, grid);
+  } catch (err) {
+    if (!window.__mapStripErrorShown) {
+      window.__mapStripErrorShown = true;
+      alert("renderMapStrip threw: " + (err && err.stack || err));
+    }
+  }
+}
+
+async function renderMapStripInner(centre, grid) {
   // Re-fetched fresh on every single draw, not trusted from the
   // module-load-time reference above — cheap, harmless, and guards
   // against the rare case of the element having been replaced by
