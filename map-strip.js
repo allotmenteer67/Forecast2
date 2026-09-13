@@ -699,8 +699,30 @@ async function fetchMapStripGrid(centre) {
 
 let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supersedes any still-in-flight initMapStrip call from a previous one
 
+let mapStripRepeatAlertShown = false; // TEMPORARY diagnostic flag
+
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
+  // TEMPORARY diagnostic — fires exactly once, only on a REPEAT call
+  // (mapStripLastCentre already set means this isn't the very first
+  // load), reporting the strip's actual on-screen size at that exact
+  // moment via a plain OS alert. Checks the wrapping <a class="map-strip">
+  // link's own box, not just the canvas — a collapsed container would
+  // explain everything drawn "successfully" still being invisible,
+  // which would fit every result so far (repaint fixes confirmed to
+  // run, confirmed to not fix anything visible).
+  if (mapStripLastCentre && !mapStripRepeatAlertShown) {
+    mapStripRepeatAlertShown = true;
+    const wrapper = mapStripCanvas.closest(".map-strip") || mapStripCanvas.parentElement;
+    const wrapRect = wrapper ? wrapper.getBoundingClientRect() : null;
+    const canvasRect = mapStripCanvas.getBoundingClientRect();
+    alert(
+      "map-strip repeat call — wrapper=" + (wrapRect ? Math.round(wrapRect.width) + "x" + Math.round(wrapRect.height) : "no wrapper found") +
+      ", canvas=" + Math.round(canvasRect.width) + "x" + Math.round(canvasRect.height) +
+      ", display=" + (wrapper ? getComputedStyle(wrapper).display : "?") +
+      ", visibility=" + (wrapper ? getComputedStyle(wrapper).visibility : "?")
+    );
+  }
   const myGeneration = ++mapStripGeneration;
   sizeMapStripCanvas();
 
