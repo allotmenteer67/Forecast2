@@ -954,3 +954,40 @@ window.addEventListener("pageshow", e => {
     ctx.fillText("Map strip error (pageshow): " + (err && err.message || err), 8, 36);
   }
 });
+
+// TEMPORARY diagnostic — remove once the blank-strip cause is found.
+// pageshow alone turned out to fire zero times at all when returning
+// from map.html on-device (confirmed: not even its own always-drawn
+// marker appeared, even after waiting several seconds to rule out
+// catching an unsettled frame) — so this casts a wider net with two
+// other, differently-triggered signals, purely to see whether ANY
+// standard page-lifecycle event fires here at all. Each draws its own
+// distinct coloured marker immediately, so it's obvious on screen which
+// (if any) actually happened.
+document.addEventListener("visibilitychange", () => {
+  if (!mapStripCanvas) return;
+  const ctx = mapStripCanvas.getContext("2d");
+  ctx.fillStyle = "#ff0";
+  ctx.fillRect(0, 0, mapStripCanvas.width, 16);
+  ctx.fillStyle = "#000";
+  ctx.font = "11px monospace";
+  ctx.fillText(`visibilitychange: ${document.visibilityState}, centre=${!!mapStripLastCentre}`, 4, 12);
+  if (document.visibilityState === "visible" && mapStripLastCentre) {
+    sizeMapStripCanvas();
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  }
+});
+
+window.addEventListener("focus", () => {
+  if (!mapStripCanvas) return;
+  const ctx = mapStripCanvas.getContext("2d");
+  ctx.fillStyle = "#f0f";
+  ctx.fillRect(0, 16, mapStripCanvas.width, 16);
+  ctx.fillStyle = "#fff";
+  ctx.font = "11px monospace";
+  ctx.fillText(`focus fired, centre=${!!mapStripLastCentre}`, 4, 28);
+  if (mapStripLastCentre) {
+    sizeMapStripCanvas();
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  }
+});
