@@ -474,6 +474,18 @@ async function renderMapStrip(centre, grid) {
   svg += `<circle cx="${(view.w / 2).toFixed(1)}" cy="${(view.h / 2).toFixed(1)}" r="4" fill="${p.ink}"/>`;
 
   setSvgContent(mapStripCanvas, defs + svg);
+  // TEMPORARY diagnostic — proven separately (in a real browser test
+  // harness) that setSvgContent itself correctly populates an SVG from
+  // markup just like this. So if this alert never appears at all on a
+  // real device, the actual problem is upstream of here entirely (the
+  // trigger, or something earlier in this function) — not the drawing.
+  // If it DOES appear, childCount tells us whether the content actually
+  // landed even though it's still not visible, which would point to a
+  // CSS/layout issue instead of a script one.
+  if (!window.__mapStripAlertShown) {
+    window.__mapStripAlertShown = true;
+    alert("renderMapStrip ran — viewBox=" + mapStripCanvas.getAttribute("viewBox") + " childCount=" + mapStripCanvas.children.length + " rectW=" + Math.round(mapStripCanvas.getBoundingClientRect().width) + " rectH=" + Math.round(mapStripCanvas.getBoundingClientRect().height));
+  }
 
   // Bottom-right time pill, matching the full map's own version in
   // spirit. Hidden at "Now" — that's the strip's own default state
