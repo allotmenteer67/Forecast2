@@ -699,29 +699,28 @@ async function fetchMapStripGrid(centre) {
 
 let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supersedes any still-in-flight initMapStrip call from a previous one
 
-let mapStripRepeatAlertShown = false; // TEMPORARY diagnostic flag
-
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
-  // TEMPORARY diagnostic — fires exactly once, only on a REPEAT call
-  // (mapStripLastCentre already set means this isn't the very first
-  // load), reporting the strip's actual on-screen size at that exact
-  // moment via a plain OS alert. Checks the wrapping <a class="map-strip">
-  // link's own box, not just the canvas — a collapsed container would
-  // explain everything drawn "successfully" still being invisible,
-  // which would fit every result so far (repaint fixes confirmed to
-  // run, confirmed to not fix anything visible).
-  if (mapStripLastCentre && !mapStripRepeatAlertShown) {
-    mapStripRepeatAlertShown = true;
-    const wrapper = mapStripCanvas.closest(".map-strip") || mapStripCanvas.parentElement;
-    const wrapRect = wrapper ? wrapper.getBoundingClientRect() : null;
-    const canvasRect = mapStripCanvas.getBoundingClientRect();
-    alert(
-      "map-strip repeat call — wrapper=" + (wrapRect ? Math.round(wrapRect.width) + "x" + Math.round(wrapRect.height) : "no wrapper found") +
-      ", canvas=" + Math.round(canvasRect.width) + "x" + Math.round(canvasRect.height) +
-      ", display=" + (wrapper ? getComputedStyle(wrapper).display : "?") +
-      ", visibility=" + (wrapper ? getComputedStyle(wrapper).visibility : "?")
-    );
+  // Confirmed via device testing: the strip's container and the canvas
+  // itself are both a normal, correct, fully visible size at the exact
+  // moment a repeat call runs (351x258, display:flex, visibility:visible)
+  // — so this was never a layout/sizing problem. Every previous attempt
+  // (a plain repaint, a full re-fetch, several different trigger events)
+  // ran successfully and still produced nothing visible. That combination
+  // points to something more specific: the canvas's own GPU-composited
+  // layer not picking up new pixel content on this particular kind of
+  // page transition, even though the 2D context genuinely has been
+  // redrawn underneath. Rather than try to force that layer to refresh
+  // in place, this sidesteps it entirely: on a repeat call, replace the
+  // canvas element outright with a fresh clone before drawing anything.
+  // A brand new element gets a brand new compositing layer with no stale
+  // image to possibly fall back to, guaranteed, regardless of whatever
+  // the exact underlying mechanism turns out to be.
+  if (mapStripLastCentre) {
+    const freshCanvas = mapStripCanvas.cloneNode(false);
+    mapStripCanvas.replaceWith(freshCanvas);
+    mapStripCanvas = freshCanvas;
+    if (mapStripResizeObserver) mapStripResizeObserver.observe(mapStripCanvas);
   }
   const myGeneration = ++mapStripGeneration;
   sizeMapStripCanvas();
@@ -869,8 +868,14 @@ if (mapStripHourSlider) {
 // blank gap in the newly-freed space instead of the map filling it.
 // ResizeObserver watches the canvas's own box directly, so it fires for
 // that case too, not just an actual window resize.
+// Hoisted out of the if-block (was a local const) so initMapStrip can
+// re-observe it below — needed now that a repeat call replaces the
+// canvas element itself (see initMapStrip's own comment on why), which
+// would otherwise leave this watching a detached, permanently-frozen
+// old node forever after the very first replacement.
+let mapStripResizeObserver = null;
 if (mapStripCanvas && "ResizeObserver" in window) {
-  const mapStripResizeObserver = new ResizeObserver(() => {
+  mapStripResizeObserver = new ResizeObserver(() => {
     if (sizeMapStripCanvas() && mapStripLastCentre) {
       renderMapStrip(mapStripLastCentre, mapStripLastGrid);
     }
