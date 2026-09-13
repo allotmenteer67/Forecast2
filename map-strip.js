@@ -149,6 +149,30 @@ function escapeXml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
 }
 
+// Replaces an SVG element's children from a markup string, WITHOUT
+// using element.innerHTML — Safari's support for setting innerHTML on
+// SVG elements specifically has a patchy history, and silently doing
+// nothing (no error, no content) fits the actual on-device symptom
+// exactly: weather updates fine, the strip stays empty, even a forced
+// refresh changes nothing. DOMParser is a much older, more universally
+// solid API for exactly this job — it genuinely parses the string as
+// real XML and hands back real nodes, which are then imported into the
+// live document and appended one by one. A parse failure (malformed
+// markup) surfaces as a <parsererror> node in the result rather than a
+// thrown exception, so that's checked explicitly too.
+function setSvgContent(svgEl, innerMarkup) {
+  const wrapped = `<svg xmlns="http://www.w3.org/2000/svg">${innerMarkup}</svg>`;
+  const parsed = new DOMParser().parseFromString(wrapped, "image/svg+xml");
+  while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+  if (parsed.querySelector("parsererror")) {
+    console.error("Map strip SVG markup failed to parse — check for an unescaped character.");
+    return;
+  }
+  Array.from(parsed.documentElement.childNodes).forEach(node => {
+    svgEl.appendChild(document.importNode(node, true));
+  });
+}
+
 // Builds one <path> element's "d" data for a Polygon/MultiPolygon
 // GeoJSON geometry, projected through view — the SVG equivalent of the
 // old canvas version's per-ring moveTo/lineTo/closePath walk. fill-rule
@@ -449,7 +473,7 @@ async function renderMapStrip(centre, grid) {
   // Centre marker, same small dot map.html itself uses for Home.
   svg += `<circle cx="${(view.w / 2).toFixed(1)}" cy="${(view.h / 2).toFixed(1)}" r="4" fill="${p.ink}"/>`;
 
-  mapStripCanvas.innerHTML = defs + svg;
+  setSvgContent(mapStripCanvas, defs + svg);
 
   // Bottom-right time pill, matching the full map's own version in
   // spirit. Hidden at "Now" — that's the strip's own default state
