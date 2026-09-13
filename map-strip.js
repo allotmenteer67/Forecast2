@@ -818,12 +818,6 @@ async function initMapStrip(centre) {
 }
 
 document.addEventListener("cloude:location-ready", e => {
-  // TEMPORARY diagnostic — a plain OS alert, deliberately outside any
-  // canvas/CSS/layout, so it's impossible for it to be silently
-  // invisible the way a canvas-drawn marker could theoretically be.
-  // Proves definitively whether this listener runs at all on a given
-  // page view, independent of every assumption about drawing.
-  alert("map-strip: cloude:location-ready received, lat=" + e.detail.lat + " lon=" + e.detail.lon);
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
@@ -881,48 +875,35 @@ if (mapStripCanvas && "ResizeObserver" in window) {
 // instantly), it's specifically the VISIBLE canvas pixels that don't
 // reliably survive the transition.
 //
-// Rather than depend on correctly identifying and hooking whatever
-// WebKit-internal mechanism is actually responsible (attempted at
-// length — see the removed diagnostic markers this replaced), this
-// takes a simpler, more robust approach: periodically re-paint
-// regardless of why it might be needed. Cheap (a few hundred synchronous
-// canvas draw calls, no network — everything it needs is already sitting
-// in mapStripLastCentre/mapStripLastGrid from the original fetch), only
-// runs once something has actually loaded, and only while the page is
-// genuinely visible.
-// TEMPORARY diagnostic — fires once only, the very first tick that
-// finds a real repaint worth attempting, so it's obvious whether this
-// interval is even running and what it sees, without an alert every
-// 1.2 seconds making the app unusable.
-let mapStripIntervalAlerted = false;
+// Confirmed directly on-device (five rounds of diagnosis, the last
+// using plain OS alerts to rule out any doubt about visibility): a
+// lightweight repaint — just redrawing mapStripLastCentre/
+// mapStripLastGrid straight onto the canvas — genuinely does NOT fix
+// this, even when it demonstrably runs. The one thing that DID reliably
+// fix it every time was the manual refresh button, which goes through
+// the full initMapStrip() — not a plain repaint. So that's what this
+// calls instead. This sounds like it should cost a fresh network fetch
+// on every tick, but initMapStrip checks its own local grid cache
+// first (loadMapStripGridCache) — as long as that's still fresh
+// (15 minutes), this is exactly as cheap as the plain repaint attempt
+// it replaces; it only becomes a genuine fetch on the same schedule a
+// normal cache expiry would have caused anyway.
 setInterval(() => {
   if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
-    if (!mapStripIntervalAlerted) {
-      mapStripIntervalAlerted = true;
-      alert("map-strip: periodic repaint tick fired, centre known, attempting redraw");
-    }
-    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    initMapStrip(mapStripLastCentre);
   }
 }, 1200);
 
 // Kept as well — genuinely free, and each has a real chance of firing
 // sooner than the interval above on whichever devices/scenarios they DO
-// correctly fire for, even though none could be relied on alone.
+// correctly fire for, even though none could be relied on alone. Same
+// initMapStrip call as the interval above, same reasoning.
 window.addEventListener("pageshow", () => {
-  if (mapStripCanvas && mapStripLastCentre) {
-    sizeMapStripCanvas();
-    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-  }
+  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
-    sizeMapStripCanvas();
-    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-  }
+  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
 });
 window.addEventListener("focus", () => {
-  if (mapStripCanvas && mapStripLastCentre) {
-    sizeMapStripCanvas();
-    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-  }
+  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre);
 });
