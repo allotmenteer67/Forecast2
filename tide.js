@@ -290,7 +290,27 @@ function nearestTideStation(lat, lon) {
 // to fit (see MIN_FIT_READINGS in the fit function itself).
 async function backfillTideStation(station) {
   const url = `${EA_READINGS_BASE}/${station.measureId}/readings?_sorted&_limit=${EA_READINGS_MAX_LIMIT}`;
-  const res = await fetchWithTimeout(url, {}, 30000);
+  // One retry on a timeout/network failure specifically — this is a
+  // genuinely large request (up to 10,000 readings) against a public
+  // government API with no CDN or paid-tier reliability guarantees,
+  // independent of anything else going on in the app at the time. A
+  // single slow or dropped attempt shouldn't need a full manual retry
+  // (switching away and back, or reopening the app) when trying once
+  // more automatically is nearly free by comparison. Only retries on a
+  // fetch-level failure (timeout, network drop) — a real HTTP error
+  // status from EA itself (4xx/5xx) fails straight away, same as
+  // before, since retrying an error EA already answered definitively
+  // isn't going to change its mind.
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {}, 30000);
+  } catch (err) {
+    try {
+      res = await fetchWithTimeout(url, {}, 30000);
+    } catch {
+      throw err; // report the original failure, not the retry's
+    }
+  }
   if (!res.ok) throw new Error(`Tide gauge fetch failed: ${res.status}`);
   const data = await res.json();
   const parsed = data.items
