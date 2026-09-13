@@ -341,19 +341,18 @@ function renderFishingCurve(points, epochIso, nowHours, startHours, endHours, lo
       const levels = tidePts.map(p => p.level);
       const minLevel = Math.min(...levels), maxLevel = Math.max(...levels);
       const levelSpan = maxLevel - minLevel || 1;
-      // Was auto-scaled to fill the SAME plot area as the score line —
-      // reported back as making the tide line look like a second data
-      // series on equal footing with the actual fishing score, rather
-      // than the background timing reference it's meant to be. Now
-      // confined to a band at the BOTTOM of the plot instead of the
-      // whole height: still auto-scaled within that band (so shape and
-      // relative timing are exactly as readable as before), just
-      // visually smaller and out of the way of the score curve itself.
-      // Still deliberately no axis/labels — see the reasoning below,
-      // unchanged by this.
-      const TIDE_OVERLAY_HEIGHT_FRACTION = 0.4;
-      const tideOverlayH = plotH * TIDE_OVERLAY_HEIGHT_FRACTION;
-      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * tideOverlayH;
+      // Auto-scaled across the FULL plot height, same as the score line —
+      // deliberately reversed back from a previous fix that confined this
+      // to a bottom 40% band. That earlier change was solving a different
+      // complaint (the tide line looking like a second data series on
+      // equal footing with the score). The current ask is the opposite:
+      // lining up fishing condition against tide state at a glance needs
+      // both curves sharing the same vertical space, not separated into
+      // stacked bands. If "reads as a competing series" comes up again,
+      // that's a styling problem (opacity/colour/line-weight) to solve
+      // without re-separating the two into different height bands, since
+      // that directly breaks the superimposed reading this is now for.
+      const yForTide = level => padT + plotH - ((level - minLevel) / levelSpan) * plotH;
       const tidePath = "M" + tidePts.map(p => `${xFor(p.hours)},${yForTide(p.level)}`).join(" L");
       svg.appendChild(sheetSvgEl("path", {
         d: tidePath, fill: "none", "stroke-width": 2.4,

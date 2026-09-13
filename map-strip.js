@@ -837,3 +837,23 @@ if (mapStripCanvas && "ResizeObserver" in window) {
     if (sizeMapStripCanvas() && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   });
 }
+
+// Confirmed on-device: tapping the strip to open map.html, then tapping
+// back, left the strip permanently blank. Safari restored the page from
+// its back-forward cache rather than reloading it — every JS variable
+// here (mapStripLastCentre, mapStripLastGrid, the coastline/places/
+// terrain data already fetched) survives that restore untouched, but
+// iOS is known to discard the canvas's own drawn pixels during a bfcache
+// restore regardless. Nothing else here ever re-paints in that
+// situation: cloude:location-ready doesn't fire (the location hasn't
+// changed), the hour slider hasn't moved, and the canvas's own box size
+// hasn't changed either, so ResizeObserver stays silent too. pageshow's
+// persisted flag is the one signal a bfcache restore reliably fires —
+// this just repaints whatever was already known, no re-fetch needed,
+// since nothing about the underlying data actually went anywhere.
+window.addEventListener("pageshow", e => {
+  if (e.persisted && mapStripCanvas && mapStripLastCentre) {
+    sizeMapStripCanvas();
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  }
+});

@@ -261,85 +261,6 @@ function convertForDisplay(value, conditionName, isDelta = false) {
 // recorded days alongside today. No key required for either.
 const GEOCODE_URL = "https://api.postcodes.io/outcodes/";
 const PLACE_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
-
-// ---- Shared favourites (GitHub precache) ----
-// Lets a ★ tap in Settings add a saved place to the shared GitHub
-// precache (see favourite-relay-worker.js) without anyone touching
-// GitHub themselves — see that file's own header for the full design
-// (privacy boundary, dedup, shared cap). Paste your deployed Worker's
-// URL here once — everyone using this build of the app then shares the
-// same relay, the same repo, and the same 8-slot cap per list.
-// FAVOURITE_RELAY_SECRET is optional (leave "" to skip it entirely) —
-// it's a mild deterrent against casual abuse, not real security, since
-// anything here is visible in the browser. See the Worker file's own
-// "honest limitation" note.
-const FAVOURITE_RELAY_URL = "https://cflaresomtimng.snick-mica-9l.workers.dev";
-const FAVOURITE_RELAY_SECRET = "";
-const FAVOURITES_ADDED_KEY = "forecast-compare:favouritesAdded";
-const FAVOURITES_PER_PERSON_CAP = 4;
-
-// Tracked ONLY on this device — there's no account system, so this is
-// what enforces "4 favourites per person" (a shared cap of 8 is also
-// enforced server-side by the Worker, protecting the list itself
-// regardless of any one device's own count — see that file). Losing
-// this (clearing site data, a new phone) just resets this device's own
-// count to zero; it doesn't remove anything already committed to
-// GitHub, which is the sticky behaviour agreed on.
-function loadFavouritesAdded() {
-  try {
-    const raw = localStorage.getItem(FAVOURITES_ADDED_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // fall through to default
-  }
-  return [];
-}
-function saveFavouritesAdded(list) {
-  try {
-    localStorage.setItem(FAVOURITES_ADDED_KEY, JSON.stringify(list));
-  } catch {
-    // Storage unavailable — this device's own favourite count just
-    // won't persist across a reload; harmless, just re-derives to zero.
-  }
-}
-
-// A UK postcode outward code only (e.g. "TA6" out of "TA6 1AB") — the
-// same shape looksLikePostcode already accepts, reduced to just the
-// area part. Deliberately never a full postcode or a plain place name;
-// see the Worker's own comment for why that boundary matters here.
-function outwardCodeOf(input) {
-  const match = String(input || "").replace(/\s+/g, "").toUpperCase().match(/^[A-Z]{1,2}\d[A-Z\d]?/);
-  return match ? match[0] : null;
-}
-
-// POSTs one favourite to the shared relay. Returns
-// { ok, alreadyExists?, full?, message?, error? } — the caller decides
-// what to show; this never throws.
-async function postFavourite(type, outcode, markType) {
-  if (!FAVOURITE_RELAY_URL) {
-    return { error: "Favourites aren't set up yet — add FAVOURITE_RELAY_URL in app.js once the Worker's deployed." };
-  }
-  try {
-    const res = await fetchWithTimeout(FAVOURITE_RELAY_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(FAVOURITE_RELAY_SECRET ? { "X-Cloude-App": FAVOURITE_RELAY_SECRET } : {})
-      },
-      body: JSON.stringify({ type, outcode, ...(markType ? { markType } : {}) })
-    }, 15000);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 409 && data.error === "full") {
-      return { full: true, message: data.message || "List full for now — delete a favourite to add more." };
-    }
-    if (!res.ok) {
-      return { error: data.error || `Request failed (${res.status})` };
-    }
-    return { ok: true, alreadyExists: !!data.alreadyExists };
-  } catch (err) {
-    return { error: err.message || "Couldn't reach the favourites relay." };
-  }
-}
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
 const PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast";
@@ -2105,6 +2026,22 @@ async function runLoadLocationData(force = false) {
     // than waiting for the weather fetches below (which can take
     // noticeably longer) to finish first.
     renderPlaceChip();
+    // Tide and fishing depend on none of the fetches below — not the
+    // headline forecast, not the nine parallel FFV accuracy-tracking
+    // calls, nothing. They only get their own coordinates and hit their
+    // own, entirely separate sources (EA/Admiralty for tide, Open-Meteo
+    // wind/pressure for fishing). Previously they were only ever reached
+    // via renderHeadlineGrid at the very end of this function, meaning
+    // every launch made them wait behind the full Promise.all below —
+    // up to eleven unrelated fetches — for no correctness reason at all.
+    // Firing them here, right when lat/lon become known, lets both start
+    // their own (independently cached) work immediately. renderTideRow
+    // cascades into renderFishingRow itself. The later call still made
+    // from renderHeadlineGrid becomes a cheap, harmless re-render of
+    // whatever's now settled — getOrBuildTideFit/fetchFishingForecast
+    // already coalesce a second call while the first's still in flight,
+    // so this never triggers a duplicate fetch.
+    if (typeof renderTideRow === "function") renderTideRow();
     await Promise.all([
       fetchActualWeather(lat, lon),
       ...REAL_SOURCES.map(({ id, model }) => fetchRealSourceLive(id, model, lat, lon)),
@@ -3375,7 +3312,7 @@ function temperatureRangeFor(rollbackDays) {
 // actually frost. Deliberately just a colour tint — no text, no
 // notification — the "gentle nudge" this was asked for, not another
 // warning to grow fatigued by.
-const FROST_TEMP_THRESHOLD = 4; // °C — ground frost can form even when air temp reads a few degrees above freezing
+const FROST_TEMP_THRESHOLD = 2; // °C — ground frost can form even when air temp reads a little above freezing
 const FROST_CLOUD_THRESHOLD = 40; // % — below this counts as "clear enough"
 const FROST_WIND_THRESHOLD = 8; // mph — below this counts as "light enough"
 
@@ -6033,58 +5970,6 @@ function renderPlacesList() {
 
     row.appendChild(info);
 
-    // Only offered for a real postcode-shaped place — a plain place name
-    // resolves to rounded coordinates (see resolveLocation), not an
-    // outward code, and the whole point of the shared favourite list is
-    // never putting anything less anonymous than that in the public
-    // repo. See outwardCodeOf() and favourite-relay-worker.js.
-    const outcode = outwardCodeOf(place.postcode);
-    if (outcode) {
-      const favouritesAdded = loadFavouritesAdded();
-      const alreadyFavourited = favouritesAdded.includes(outcode);
-      const atLocalCap = favouritesAdded.length >= FAVOURITES_PER_PERSON_CAP;
-
-      // A filled star alone was too easy to miss at a glance (confirmed
-      // in testing) — this text badge makes "already favourited" legible
-      // without needing to notice a colour change. info is already
-      // appended to row above, but it's still a live reference, so
-      // appending to it here still lands in the right place.
-      if (alreadyFavourited) {
-        const badge = document.createElement("span");
-        badge.className = "place-row-favourite-badge";
-        badge.textContent = "★ Shared favourite";
-        info.appendChild(badge);
-      }
-
-      const favBtn = document.createElement("button");
-      favBtn.type = "button";
-      favBtn.className = "place-row-favourite" + (alreadyFavourited ? " is-favourited" : "");
-      favBtn.textContent = alreadyFavourited ? "★" : "☆";
-      favBtn.setAttribute("aria-label", alreadyFavourited
-        ? `${outcode} is in the shared favourites`
-        : `Add ${outcode} to shared favourites`);
-      favBtn.disabled = alreadyFavourited || (atLocalCap && !alreadyFavourited);
-      favBtn.title = alreadyFavourited
-        ? "Already in the shared favourites"
-        : atLocalCap
-          ? `You've added your ${FAVOURITES_PER_PERSON_CAP} favourites already`
-          : "Add to shared favourites (visible to everyone using this app)";
-      favBtn.addEventListener("click", async () => {
-        favBtn.disabled = true;
-        favBtn.textContent = "…";
-        const result = await postFavourite("weather", outcode);
-        if (result.ok || result.alreadyExists) {
-          saveFavouritesAdded([...loadFavouritesAdded(), outcode]);
-          renderPlacesList();
-        } else {
-          favBtn.disabled = false;
-          favBtn.textContent = "☆";
-          alert(result.full ? result.message : (result.error || "Couldn't add that favourite."));
-        }
-      });
-      row.appendChild(favBtn);
-    }
-
     const switchBtn = document.createElement("button");
     switchBtn.type = "button";
     switchBtn.className = "place-row-switch";
@@ -6099,10 +5984,6 @@ function renderPlacesList() {
     removeBtn.setAttribute("aria-label", `Remove ${place.label}`);
     removeBtn.textContent = "✕";
     removeBtn.addEventListener("click", () => {
-      // Deliberately does NOT touch the shared favourites list or this
-      // device's own favouritesAdded record — favourites are sticky by
-      // design (agreed: removing a locally saved place shouldn't pull
-      // it out from under anyone else relying on the same shared slot).
       savePlaces(loadPlaces().filter(saved => saved.postcode !== place.postcode));
       renderPlacesList();
       renderPlaceMenu();

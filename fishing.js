@@ -74,18 +74,53 @@ function saveFishingShowWindows(value) {
 // weather" reasoning), so it needs its own forecast, the same way
 // solar.js fetches its own rather than borrowing state's.
 //
-// Cached in memory only, with a short time-to-live — unlike tide's
-// harmonic fit (which is stable for weeks), wind/pressure/wave forecasts
-// genuinely change hour to hour, so there's no sense persisting them
-// the way tide.js persists its fit.
+// In-memory cache with a short time-to-live — wind/pressure/wave
+// forecasts genuinely change hour to hour, so nothing here is EVER
+// treated as fresh for longer than FISHING_FORECAST_TTL_MS, unlike
+// tide's harmonic fit (stable for weeks, and persisted accordingly).
+//
+// ALSO mirrored to localStorage now (same TTL, same staleness check on
+// read) — purely to cover the "closed and reopened within the same 30
+// minutes" case, which is exactly what a fresh app launch usually is.
+// This adds no staleness risk at all: a persisted entry is only ever
+// used if it's still within the same freshness window the in-memory
+// cache already enforced, it just survives the reload that previously
+// wiped it for no reason.
 const FISHING_FORECAST_TTL_MS = 30 * 60000; // 30 minutes
 const fishingForecastCache = new Map();
+const FISHING_FORECAST_STORAGE_PREFIX = "cloude-fishing:forecast:";
+
+function loadPersistedFishingForecast(cacheKey) {
+  try {
+    const raw = localStorage.getItem(FISHING_FORECAST_STORAGE_PREFIX + cacheKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.fetchedAt && Date.now() - parsed.fetchedAt < FISHING_FORECAST_TTL_MS) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedFishingForecast(cacheKey, entry) {
+  try {
+    localStorage.setItem(FISHING_FORECAST_STORAGE_PREFIX + cacheKey, JSON.stringify(entry));
+  } catch {
+    // Storage unavailable — falls back to the in-memory cache only,
+    // same as before this change.
+  }
+}
 
 async function fetchFishingForecast(lat, lon, markType, force = false) {
   const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)},${markType}`;
   if (!force) {
     const cached = fishingForecastCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < FISHING_FORECAST_TTL_MS) return cached.data;
+    const persisted = loadPersistedFishingForecast(cacheKey);
+    if (persisted) {
+      fishingForecastCache.set(cacheKey, persisted);
+      return persisted.data;
+    }
   }
 
   // Checked before the live fetch below, same pattern and same shared
@@ -99,7 +134,9 @@ async function fetchFishingForecast(lat, lon, markType, force = false) {
   // request should never quietly hand back GitHub's older file instead.
   const precached = force ? null : await tryPrecachedFishingSpot(lat, lon, markType);
   if (precached) {
-    fishingForecastCache.set(cacheKey, { data: precached, fetchedAt: precached.fetchedAt });
+    const entry = { data: precached, fetchedAt: precached.fetchedAt };
+    fishingForecastCache.set(cacheKey, entry);
+    savePersistedFishingForecast(cacheKey, entry);
     return precached;
   }
 
@@ -150,7 +187,9 @@ async function fetchFishingForecast(lat, lon, markType, force = false) {
   }
 
   const data = { weather, marine, fetchedAt: Date.now() };
-  fishingForecastCache.set(cacheKey, { data, fetchedAt: Date.now() });
+  const entry = { data, fetchedAt: Date.now() };
+  fishingForecastCache.set(cacheKey, entry);
+  savePersistedFishingForecast(cacheKey, entry);
   return data;
 }
 
