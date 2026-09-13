@@ -556,21 +556,6 @@ async function renderMapStrip(centre, grid) {
     scaleEl.classList.toggle("is-visible", mapStripHourOffset !== 0);
     if (mapStripHourOffset !== 0) scaleEl.textContent = mapStripHourClock(grid, mapStripHourOffset);
   }
-
-  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
-  // Drawn LAST, after everything above, unconditionally — no try/catch
-  // needed, since the whole point is confirming whether this function
-  // runs to completion at all and what it actually had to work with.
-  // canvas.width/height here are the real backing-store pixel
-  // dimensions (view.w/h are the CSS/logical size) — if these come back
-  // as 0, that alone would explain a blank strip with no error anywhere:
-  // every draw call above would have silently done nothing onto a
-  // canvas with no actual area.
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, view.h - 16, 220, 16);
-  ctx.fillStyle = "#0f0";
-  ctx.font = "11px monospace";
-  ctx.fillText(`OK ${mapStripCanvas.width}x${mapStripCanvas.height} @${new Date().toLocaleTimeString()}`, 4, view.h - 4);
 }
 
 // ---- Grid cache ----
@@ -708,26 +693,6 @@ let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supe
 async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
   const myGeneration = ++mapStripGeneration;
-  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
-  // Drawn immediately, synchronously, before anything else (including
-  // sizeMapStripCanvas) — confirms initMapStrip was actually reached at
-  // all, and captures the canvas's real CSS box size at that exact
-  // moment via getBoundingClientRect (separate from the canvas's own
-  // width/height backing-store attributes, which sizeMapStripCanvas
-  // hasn't necessarily set yet here). A 0x0 rect here would mean the
-  // page's own layout hadn't given the strip any actual space yet at
-  // the moment this ran.
-  {
-    const rect = mapStripCanvas.getBoundingClientRect();
-    const ctx0 = mapStripCanvas.getContext("2d");
-    if (mapStripCanvas.width > 0 && mapStripCanvas.height > 0) {
-      ctx0.fillStyle = "#00f";
-      ctx0.fillRect(0, 0, mapStripCanvas.width, 16);
-      ctx0.fillStyle = "#fff";
-      ctx0.font = "11px monospace";
-      ctx0.fillText(`init gen${myGeneration} rect=${Math.round(rect.width)}x${Math.round(rect.height)}`, 4, 12);
-    }
-  }
   sizeMapStripCanvas();
 
   // A cold PWA launch on iOS: reported as the map strip staying at a
@@ -844,33 +809,7 @@ async function initMapStrip(centre) {
 }
 
 document.addEventListener("cloude:location-ready", e => {
-  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
-  // console.error alone is useless here: there's no way to see it on an
-  // iPad with no attached Mac for Safari's Web Inspector. This writes
-  // any error that reaches here directly onto the strip itself instead,
-  // in plain visible text, so the actual failure (if any) is readable
-  // without needing dev tools at all.
-  try {
-    initMapStrip({ lat: e.detail.lat, lon: e.detail.lon }).catch(err => {
-      if (mapStripCanvas) {
-        const ctx = mapStripCanvas.getContext("2d");
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
-        ctx.fillStyle = "#c0392b";
-        ctx.font = "12px sans-serif";
-        ctx.fillText("Map strip error (async): " + (err && err.message || err), 8, 20);
-      }
-    });
-  } catch (err) {
-    if (mapStripCanvas) {
-      const ctx = mapStripCanvas.getContext("2d");
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
-      ctx.fillStyle = "#c0392b";
-      ctx.font = "12px sans-serif";
-      ctx.fillText("Map strip error (sync): " + (err && err.message || err), 8, 20);
-    }
-  }
+  initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
 // Reads the SAME #hourSlider element app.js already owns and drives the
@@ -914,79 +853,51 @@ if (mapStripCanvas && "ResizeObserver" in window) {
   });
 }
 
-// Confirmed on-device: tapping the strip to open map.html, then tapping
-// back, left the strip permanently blank. Safari restored the page from
-// its back-forward cache rather than reloading it — every JS variable
-// here (mapStripLastCentre, mapStripLastGrid, the coastline/places/
-// terrain data already fetched) survives that restore untouched, but
-// iOS is known to discard the canvas's own drawn pixels during a bfcache
-// restore regardless. Nothing else here ever re-paints in that
-// situation: cloude:location-ready doesn't fire (the location hasn't
-// changed), the hour slider hasn't moved, and the canvas's own box size
-// hasn't changed either, so ResizeObserver stays silent too. pageshow's
-// persisted flag is the one signal a bfcache restore reliably fires —
-// this just repaints whatever was already known, no re-fetch needed,
-// since nothing about the underlying data actually went anywhere.
-window.addEventListener("pageshow", e => {
-  // TEMPORARY diagnostic — remove once the blank-strip cause is found.
-  // Same reasoning as the cloude:location-ready listener above: writes
-  // what actually happened directly onto the strip, since there's no
-  // console access available to check otherwise. Fires every time
-  // pageshow fires at all (not just when persisted is true) so it's
-  // visible whether this event is even happening the way it's assumed
-  // to, or not firing/not persisted at all on this device.
-  if (!mapStripCanvas) return;
-  try {
-    const ctx = mapStripCanvas.getContext("2d");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, mapStripCanvas.width, mapStripCanvas.height);
-    ctx.fillStyle = "#2f6f4f";
-    ctx.font = "12px sans-serif";
-    ctx.fillText(`pageshow: persisted=${e.persisted}, centre known=${!!mapStripLastCentre}`, 8, 20);
-    if (e.persisted && mapStripLastCentre) {
-      sizeMapStripCanvas();
-      renderMapStrip(mapStripLastCentre, mapStripLastGrid);
-    }
-  } catch (err) {
-    const ctx = mapStripCanvas.getContext("2d");
-    ctx.fillStyle = "#c0392b";
-    ctx.font = "12px sans-serif";
-    ctx.fillText("Map strip error (pageshow): " + (err && err.message || err), 8, 36);
+// Tapping "back" from the full map to return here was confirmed (via
+// frame-by-frame screen recording) to complete in under 70ms — far too
+// fast to be a genuine page reload, and no standard page-lifecycle event
+// (pageshow, visibilitychange, focus — all three tried and confirmed,
+// via on-screen markers during diagnosis) reliably fires at the moment
+// it actually matters. The likely real cause: iOS's own back-navigation
+// transition shows an animated preview snapshot of the destination page,
+// and canvas content is a known weak spot for that snapshot mechanism —
+// the live page underneath is probably untouched throughout (the
+// refresh button, acting on that same live page, always worked
+// instantly), it's specifically the VISIBLE canvas pixels that don't
+// reliably survive the transition.
+//
+// Rather than depend on correctly identifying and hooking whatever
+// WebKit-internal mechanism is actually responsible (attempted at
+// length — see the removed diagnostic markers this replaced), this
+// takes a simpler, more robust approach: periodically re-paint
+// regardless of why it might be needed. Cheap (a few hundred synchronous
+// canvas draw calls, no network — everything it needs is already sitting
+// in mapStripLastCentre/mapStripLastGrid from the original fetch), only
+// runs once something has actually loaded, and only while the page is
+// genuinely visible.
+setInterval(() => {
+  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
-});
+}, 1200);
 
-// TEMPORARY diagnostic — remove once the blank-strip cause is found.
-// pageshow alone turned out to fire zero times at all when returning
-// from map.html on-device (confirmed: not even its own always-drawn
-// marker appeared, even after waiting several seconds to rule out
-// catching an unsettled frame) — so this casts a wider net with two
-// other, differently-triggered signals, purely to see whether ANY
-// standard page-lifecycle event fires here at all. Each draws its own
-// distinct coloured marker immediately, so it's obvious on screen which
-// (if any) actually happened.
-document.addEventListener("visibilitychange", () => {
-  if (!mapStripCanvas) return;
-  const ctx = mapStripCanvas.getContext("2d");
-  ctx.fillStyle = "#ff0";
-  ctx.fillRect(0, 0, mapStripCanvas.width, 16);
-  ctx.fillStyle = "#000";
-  ctx.font = "11px monospace";
-  ctx.fillText(`visibilitychange: ${document.visibilityState}, centre=${!!mapStripLastCentre}`, 4, 12);
-  if (document.visibilityState === "visible" && mapStripLastCentre) {
+// Kept as well — genuinely free, and each has a real chance of firing
+// sooner than the interval above on whichever devices/scenarios they DO
+// correctly fire for, even though none could be relied on alone.
+window.addEventListener("pageshow", () => {
+  if (mapStripCanvas && mapStripLastCentre) {
     sizeMapStripCanvas();
     renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
 });
-
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
+    sizeMapStripCanvas();
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+  }
+});
 window.addEventListener("focus", () => {
-  if (!mapStripCanvas) return;
-  const ctx = mapStripCanvas.getContext("2d");
-  ctx.fillStyle = "#f0f";
-  ctx.fillRect(0, 16, mapStripCanvas.width, 16);
-  ctx.fillStyle = "#fff";
-  ctx.font = "11px monospace";
-  ctx.fillText(`focus fired, centre=${!!mapStripLastCentre}`, 4, 28);
-  if (mapStripLastCentre) {
+  if (mapStripCanvas && mapStripLastCentre) {
     sizeMapStripCanvas();
     renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
