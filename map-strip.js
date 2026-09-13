@@ -19,6 +19,24 @@
 // Fires only after app.js's own weather fetch has already landed (see
 // the "cloude:location-ready" event in app.js) — never competing with
 // the data the person actually came to this page for.
+//
+// ---- SVG, not canvas — why, briefly ----
+// This used to draw onto a <canvas>. After an extended, evidence-led
+// debugging session, the actual cause of a real bug (the strip going
+// permanently blank after returning from the full map or Settings, no
+// error anywhere, not fixed by repainting, not fixed by replacing the
+// canvas element outright) was narrowed down to something about how
+// iOS composites a live <canvas> 2D context specifically not reliably
+// surviving that particular page transition — confirmed by ruling out
+// every other explanation first (layout/sizing, staleness, a detached
+// element, several different trigger events). Rather than keep hunting
+// for a way to force that specific compositing layer to refresh, the
+// strip now draws with ordinary SVG elements instead. SVG has no
+// separate bitmap to desync from what's declared — what you see IS the
+// DOM, always, so this whole category of bug has nothing left to hide
+// in. Every trigger, every data source, and the actual visual result
+// are all unchanged; only how the picture gets onto the screen is
+// different.
 
 const MAP_STRIP_RADIUS_KM = 25;
 // Was 10km. Halved to roughly quadruple the number of sampled points
@@ -65,32 +83,7 @@ function rainBandIndex(value) {
 // Same three palettes as map.js's own MAP_PALETTES, and now genuinely
 // the SAME values, not a bolder stand-in — see the note this replaces
 // below for what changed and why.
-//
-// This used to deliberately diverge from map.js: land was bolder here
-// (#9fcbae vs the real #e4efe6) on the reasoning that the full map's
-// soft green sat too close to the sea colour to read as two different
-// things at this strip's smaller size. That trade favoured legibility
-// over consistency. Explicitly reversed now that the ask is for the
-// strip to look like the same map, not its own variant — if the softer
-// land colour turns out to be a genuine problem at a glance (rather
-// than just a different look), that's the thing to revisit, not a
-// silent partial match.
 const MAP_STRIP_PALETTES = {
-  // river added to match map.js's own MAP_PALETTES exactly (same hex
-  // values, same reasoning — a mid-tone pulled from that palette's own
-  // rain ramp, since a river is the same "water" concept as the sea and
-  // rain rather than a new colour of its own).
-  //
-  // tideMarker is deliberately NOT that same water tone — a tide
-  // location marker drawn in "water blue" blended straight into the
-  // coastline/sea it was sitting next to, which was the actual
-  // complaint. A warm red reads as a marker (a deliberately placed
-  // pin) rather than more of the map's own geography, the same way the
-  // full map's own weather-place markers use a colour nothing else on
-  // the map is painted in. Mono keeps its monochrome premise instead of
-  // introducing red — solid near-black against that theme's pale
-  // land/sea is already a bigger jump in contrast than river's mid-grey
-  // was.
   paper: { land: "#e4efe6", sea: "#EEF5FA", coast: "#9c9a92", ink: "#4a4844", river: "#8FB9E2", tideMarker: "#CC3B2E", ramp: ["#BBD5EE", "#8FB9E2", "#6098D2", "#3B76BC", "#22539B", "#12376F"] },
   slate: { land: "#234f39", sea: "#33454f", coast: "#7a7a72", ink: "#d8d6cf", river: "#85B7EB", tideMarker: "#FF6B52", ramp: ["#E6F1FB", "#B5D4F4", "#85B7EB", "#378ADD", "#185FA5", "#0C447C"] },
   mono: { land: "#FFFFFF", sea: "#ECECEC", coast: "#555555", ink: "#111111", river: "#7C7C7C", tideMarker: "#141414", ramp: ["#C9C9C9", "#A2A2A2", "#7C7C7C", "#585858", "#363636", "#141414"] }
@@ -101,6 +94,11 @@ function mapStripPalette() {
   return MAP_STRIP_PALETTES[id] || MAP_STRIP_PALETTES.paper;
 }
 
+// Still called mapStripCanvas throughout — kept the name on purpose
+// rather than renaming every reference, since this file's whole history
+// (and every comment explaining a past fix) refers to it that way; it's
+// now an <svg> element, not a <canvas>, but "the strip's own drawing
+// surface" is still exactly what it is.
 let mapStripCanvas = document.getElementById("mapStripCanvas");
 let mapStripCoastline = null;
 let mapStripPlaces = null;
@@ -110,25 +108,21 @@ let mapStripWaterways = null;
 let mapStripLastCentre = null;
 let mapStripLastGrid = null;
 
-function sizeMapStripCanvas() {
-  const freshCanvas = document.getElementById("mapStripCanvas");
-  if (freshCanvas && freshCanvas.isConnected) mapStripCanvas = freshCanvas;
-  if (!mapStripCanvas || !mapStripCanvas.isConnected) return;
+// Simpler than the old canvas version by a wide margin — no devicePixelRatio
+// backing-store math, no destructive resize-clears-content behaviour to
+// work around (SVG doesn't lose its content just because its viewBox
+// changed). Just measures the box and updates the viewBox to match.
+function sizeMapStripSvg() {
+  const freshSvg = document.getElementById("mapStripCanvas");
+  if (freshSvg && freshSvg.isConnected) mapStripCanvas = freshSvg;
+  if (!mapStripCanvas || !mapStripCanvas.isConnected) return false;
   const rect = mapStripCanvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.round(rect.width * dpr);
-  const h = Math.round(rect.height * dpr);
-  // Skip the resize (and the caller's redraw) if nothing actually
-  // changed — ResizeObserver below can fire on subpixel layout
-  // settling that doesn't move the rounded pixel size at all, and
-  // resizing a canvas clears it even when the new size is identical to
-  // the old one, which would mean redrawing every single one of those
-  // for no visible reason.
-  if (mapStripCanvas.width === w && mapStripCanvas.height === h) return false;
-  mapStripCanvas.width = w;
-  mapStripCanvas.height = h;
-  const ctx = mapStripCanvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = Math.round(rect.width), h = Math.round(rect.height);
+  if (w <= 0 || h <= 0) return false;
+  const current = mapStripCanvas.getAttribute("viewBox");
+  const wanted = `0 0 ${w} ${h}`;
+  if (current === wanted) return false;
+  mapStripCanvas.setAttribute("viewBox", wanted);
   return true;
 }
 
@@ -140,22 +134,6 @@ function mapStripView(centre) {
   const rect = mapStripCanvas.getBoundingClientRect();
   const w = rect.width, h = rect.height;
   const spanKm = MAP_STRIP_RADIUS_KM * 2;
-  // Math.max, not Math.min. The strip is a wide, short card — width is
-  // almost always the larger of the two — and the rain (and terrain)
-  // grid is only ever FETCHED out to MAP_STRIP_RADIUS_KM in every
-  // direction, a fixed square around centre. Scaling to the SHORTER
-  // side (the old Math.min) made that square exactly fill the card's
-  // height, but the wider width then showed MORE real-world distance
-  // than the square actually covers — anything past the fetched
-  // ±25km horizontally had no data, which is exactly the blank
-  // rectangle reported at each side of the rain layer. Scaling to the
-  // LONGER side instead guarantees the whole visible card, in every
-  // direction, sits inside the square that was actually fetched — the
-  // trade-off is a smaller effective radius top-to-bottom (more
-  // zoomed in vertically) than the nominal 25km, rather than any
-  // change to how much is fetched. Coastline/terrain/places aren't
-  // grid-limited the same way, so they simply show a bit less area
-  // too, not a gap.
   const pxPerKm = Math.max(w, h) / spanKm;
   const dLon = kmPerDegLon(centre.lat);
   return {
@@ -167,65 +145,31 @@ function mapStripView(centre) {
   };
 }
 
-// fill is optional — omit it (see the outlineOnly call in
-// renderMapStrip below) to redraw just the stroke without repainting
-// the land colour on top of whatever's already there. Mirrors map.js's
-// own two-pass "coastline" + "coastline-outline" layers: paint once
-// with a fill before the weather layers, then a cheap second pass of
-// stroke alone afterwards so the coast edge survives on top of a rain
-// wash instead of being buried under it.
-function drawMapStripCoastline(ctx, view, geojson, fill, stroke) {
-  if (!geojson) return;
-  if (fill) ctx.fillStyle = fill;
-  // Was fill-only. The full map strokes the coastline outline too (see
-  // map.js's own coastline layer: `stroke: p.coast`), which reads as a
-  // defined edge to the land rather than just a colour boundary — this
-  // was the strip's most visible remaining difference from the full
-  // map once the palette itself matched.
-  ctx.strokeStyle = stroke;
-  // Was 1. Bumped for the same reason the full map's own coastline
-  // stroke was — too faint to read against a heavy rain band, even
-  // once this second stroke-only pass redraws it on top.
-  ctx.lineWidth = 1.5;
-  geojson.features.forEach(feature => {
-    const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
-    polygons.forEach(polygon => {
-      ctx.beginPath();
-      polygon.forEach(ring => {
-        ring.forEach(([lon, lat], i) => {
-          const x = view.x(lon), y = view.y(lat);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.closePath();
-      });
-      if (fill) ctx.fill("evenodd");
-      ctx.stroke();
-    });
-  });
+function escapeXml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
 }
 
-// Clips to the same coastline outline the land fill uses, so shading
-// stops exactly at the shore rather than bleeding over open water —
-// same reasoning and same technique as clipToLand() in map.js, kept as
-// its own small copy rather than shared (see the file-level note at
-// the top of this file for why nothing here imports from map.js).
-function clipMapStripToLand(ctx, view, geojson) {
-  if (!geojson) return false;
-  ctx.beginPath();
+// Builds one <path> element's "d" data for a Polygon/MultiPolygon
+// GeoJSON geometry, projected through view — the SVG equivalent of the
+// old canvas version's per-ring moveTo/lineTo/closePath walk. fill-rule
+// evenodd (set by the caller on the <path> itself) is what makes a
+// polygon-with-holes (an island's lake, a lake's island) render
+// correctly from a single path string, exactly as ctx.fill("evenodd")
+// did before.
+function svgPolygonPath(geojson, view) {
+  if (!geojson) return "";
+  const parts = [];
   geojson.features.forEach(feature => {
     const polygons = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
     polygons.forEach(polygon => {
       polygon.forEach(ring => {
-        ring.forEach(([lon, lat], i) => {
-          const x = view.x(lon), y = view.y(lat);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        });
-        ctx.closePath();
+        if (!ring.length) return;
+        const points = ring.map(([lon, lat]) => `${view.x(lon).toFixed(1)},${view.y(lat).toFixed(1)}`);
+        parts.push(`M${points.join("L")}Z`);
       });
     });
   });
-  ctx.clip("evenodd");
-  return true;
+  return parts.join(" ");
 }
 
 // Same ring-walking shape as map.js's own eachRing — rivers/canals are
@@ -241,44 +185,28 @@ function eachMapStripRing(geometry, visit) {
 
 // Per-feature styling (canal dashed, river solid — the traditional
 // "this was built, not carved by the land" OS-map convention), same as
-// map.js's own drawMapWaterways, which is why this isn't built on
-// drawMapStripCoastline's shared fill/stroke above. Deliberately WITHOUT
-// that function's bounding-box culling: a 25km strip view only ever has
-// a handful of waterway features in range at all, so the skip-what's-
-// off-screen optimisation that matters on the full map's much larger
-// file (see map.js) isn't earning its cost at this scale.
-function drawMapStripWaterways(ctx, view, geo, colour) {
-  if (!geo) return;
+// map.js's own drawMapWaterways. Returns markup for one <path> per
+// ring, since canal/river rings need different dash styling from each
+// other and a single path element can only carry one stroke-dasharray.
+function svgWaterwaysPaths(geo, view, colour) {
+  if (!geo) return "";
   const features = geo.type === "FeatureCollection" ? geo.features : [geo];
-  ctx.strokeStyle = colour;
-  ctx.lineWidth = 1;
+  const parts = [];
   features.forEach(feature => {
     const geometry = feature.geometry || feature;
-    ctx.setLineDash(feature.properties?.kind === "canal" ? [4, 3] : []);
+    const dash = feature.properties?.kind === "canal" ? ' stroke-dasharray="4,3"' : "";
     eachMapStripRing(geometry, ring => {
-      ctx.beginPath();
-      ring.forEach(([lon, lat], i) => {
-        const x = view.x(lon), y = view.y(lat);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
+      if (!ring.length) return;
+      const points = ring.map(([lon, lat]) => `${view.x(lon).toFixed(1)},${view.y(lat).toFixed(1)}`);
+      parts.push(`<path d="M${points.join("L")}" fill="none" stroke="${colour}" stroke-width="1"${dash}/>`);
     });
   });
-  ctx.setLineDash([]); // reset — later layers (place labels, centre marker) must not inherit this
+  return parts.join("");
 }
 
 // Bilinear elevation + shading, ported from map.js's terrainElevationAt/
 // terrainShadeAt/terrainShadeBilinear (see that file for the full
-// reasoning). The strip's first terrain attempt used plain
-// nearest-neighbour differencing instead, on the theory that a strip
-// this small couldn't show more detail than that anyway — backwards, as
-// it turned out: a small view over an 8.3km grid means only a handful
-// of real grid points fall inside it at all, so nearest-neighbour
-// produced a few large flat rectangles rather than a few small ones —
-// confirmed on-device as a blocky, "Tetris" look. Interpolating between
-// the few points there ARE is exactly what turns them into a smooth
-// gradient instead of hard-edged blocks, which matters more on a small
-// view with few points than on the full map with many.
+// reasoning) — unchanged by the SVG rewrite, purely maths, no drawing.
 function mapStripElevationAt(grid, fr, fc) {
   const r0 = Math.floor(fr), c0 = Math.floor(fc);
   const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
@@ -295,9 +223,6 @@ function mapStripElevationAt(grid, fr, fc) {
 function mapStripShadeAt(grid, fr, fc) {
   const zC = mapStripElevationAt(grid, fr, fc);
   if (zC === null) return 0;
-  // Sea substitution, same reasoning as map.js: without this, the real
-  // 0-metre sea value reads as a cliff at every coastline, which on a
-  // 25km view is a big share of what's on screen at all.
   const landOr = v => (v === null || v <= 0 ? zC : v);
   const zN = landOr(mapStripElevationAt(grid, fr - 1, fc));
   const zS = landOr(mapStripElevationAt(grid, fr + 1, fc));
@@ -323,37 +248,36 @@ function mapStripShadeBilinear(grid, fr, fc) {
   return top + (bottom - top) * tr;
 }
 
-function drawMapStripTerrain(ctx, view, grid) {
-  if (!grid) return;
-  const cell = 3;
+// Builds the terrain shading layer as a grid of small <rect> elements —
+// the SVG equivalent of the old per-cell ctx.fillRect loop. Cell size
+// bumped from the canvas version's 3px to 6px: purely an SVG element-
+// count concession (a 350x260 strip at 3px is ~10,000 individual
+// elements just for terrain, which is more DOM than is sensible to
+// rebuild on every redraw; 6px keeps the same shading technique and a
+// still-detailed look at roughly a quarter the element count).
+function svgTerrainRects(view, grid) {
+  if (!grid) return "";
+  const cell = 6;
+  const parts = [];
   for (let px = 0; px < view.w; px += cell) {
     for (let py = 0; py < view.h; py += cell) {
       const lat = view.lat(py + cell / 2), lon = view.lon(px + cell / 2);
       const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
       if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-      // Sea check uses the nearest node, not the interpolated value —
-      // same reasoning as map.js: blending across the coast would
-      // produce fractional "heights" just offshore and shade open water.
       const z = grid.values[Math.round(fr)][Math.round(fc)];
       if (z === null || z === undefined || z <= 0) continue;
       const shade = mapStripShadeBilinear(grid, fr, fc);
       if (Math.abs(shade) < 0.02) continue;
-      ctx.fillStyle = shade > 0 ? "#ffffff" : "#000000";
-      ctx.globalAlpha = Math.min(0.50, Math.abs(shade) * 0.7);
-      ctx.fillRect(px, py, cell, cell);
+      const colour = shade > 0 ? "#ffffff" : "#000000";
+      const opacity = Math.min(0.50, Math.abs(shade) * 0.7).toFixed(2);
+      parts.push(`<rect x="${px}" y="${py}" width="${cell}" height="${cell}" fill="${colour}" fill-opacity="${opacity}"/>`);
     }
   }
-  ctx.globalAlpha = 1;
+  return parts.join("");
 }
 
-// Bilinear blend of the 4 nearest grid points, same technique that
-// took terrain from hard-edged blocks to smooth shading a few sessions
-// back. No new data needed for this one — it's the same 256-point grid
-// already being fetched, just blended between rather than snapped to
-// whichever single point is nearest. That "snap to nearest" is what
-// actually caused the blockiness: it isn't fixed by a denser grid on
-// its own (that only shrinks the blocks), only by not having hard
-// edges between points at all.
+// Bilinear blend of the 4 nearest grid points — unchanged maths from
+// the canvas version, purely a lookup, no drawing.
 function mapStripRainAt(grid, fr, fc, hourIndex) {
   const r0 = Math.floor(fr), c0 = Math.floor(fc);
   const r1 = Math.min(grid.rows - 1, r0 + 1), c1 = Math.min(grid.cols - 1, c0 + 1);
@@ -367,13 +291,35 @@ function mapStripRainAt(grid, fr, fc, hourIndex) {
   return top + (bottom - top) * tr;
 }
 
+// Same cell-size concession as terrain above, same reasoning — 6px
+// rather than the canvas version's 3px, to keep the rebuilt-every-
+// redraw SVG element count reasonable.
+function svgRainRects(view, centre, grid, palette) {
+  if (!grid) return "";
+  const hourIndex = Math.min(
+    grid.startIdx + mapStripHourOffset,
+    grid.rainByHour[0][0].length - 1
+  );
+  const cell = 6;
+  const parts = [];
+  for (let px = 0; px < view.w; px += cell) {
+    for (let py = 0; py < view.h; py += cell) {
+      const lon = centre.lon + (px - view.w / 2) / (view.pxPerKm * kmPerDegLon(centre.lat));
+      const lat = centre.lat - (py - view.h / 2) / (view.pxPerKm * KM_PER_DEG_LAT);
+      const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
+      if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
+      const value = mapStripRainAt(grid, fr, fc, hourIndex);
+      const band = rainBandIndex(value);
+      if (band < 0) continue;
+      parts.push(`<rect x="${px}" y="${py}" width="${cell}" height="${cell}" fill="${palette.ramp[band]}" fill-opacity="0.85"/>`);
+    }
+  }
+  return parts.join("");
+}
+
 // Direct copy of map.js's own mapHourClock and its full reasoning
 // (kept as its own small copy rather than shared, same reasoning as
 // everything else in this file — see the file-level note at the top).
-// "+Nh" makes you do the arithmetic before you can act on it; the
-// question being asked is "will it be raining when I get there", which
-// is a clock time, and days are named once they stop being today
-// because "09:00" alone is ambiguous over a 48-hour range.
 function mapStripHourClock(grid, hoursAhead) {
   const idx = grid && grid.times ? Math.min(grid.startIdx + hoursAhead, grid.times.length - 1) : null;
   const iso = idx !== null ? grid.times[idx] : null;
@@ -386,12 +332,10 @@ function mapStripHourClock(grid, hoursAhead) {
 }
 
 // Reuses the full map's own .map-scale class outright — same pill, same
-// corner, same look, rather than a strip-specific class that could drift
-// out of sync with it over time (style.css only needs .map-strip itself
-// given `position: relative` for this to have something to sit inside).
-// Created lazily and appended once rather than requiring index.html to
-// carry a dedicated element for it — keeps this file self-contained
-// against .map-strip's existing markup, same as everything else here.
+// corner, same look. Created lazily and appended once rather than
+// requiring index.html to carry a dedicated element for it. Unaffected
+// by the SVG rewrite — this was always a plain DOM element sitting
+// next to the drawing surface, never inside it.
 let mapStripScaleEl = null;
 function ensureMapStripScale() {
   if (mapStripScaleEl || !mapStripCanvas) return mapStripScaleEl;
@@ -405,161 +349,113 @@ function ensureMapStripScale() {
 
 async function renderMapStrip(centre, grid) {
   // Re-fetched fresh on every single draw, not trusted from the
-  // module-load-time reference above — see that declaration's own
-  // comment for why. isConnected specifically catches a stale reference
-  // that would otherwise draw successfully, with no error at all, onto
-  // an element that's silently no longer part of the visible page.
-  const freshCanvas = document.getElementById("mapStripCanvas");
-  if (freshCanvas && freshCanvas.isConnected) mapStripCanvas = freshCanvas;
+  // module-load-time reference above — cheap, harmless, and guards
+  // against the rare case of the element having been replaced by
+  // something else entirely outside this file's control.
+  const freshSvg = document.getElementById("mapStripCanvas");
+  if (freshSvg && freshSvg.isConnected) mapStripCanvas = freshSvg;
   if (!mapStripCanvas || !mapStripCanvas.isConnected) return;
   mapStripLastCentre = centre;
   mapStripLastGrid = grid;
-  const ctx = mapStripCanvas.getContext("2d");
   const view = mapStripView(centre);
   const p = mapStripPalette();
 
-  ctx.fillStyle = p.sea;
-  ctx.fillRect(0, 0, view.w, view.h);
-  drawMapStripCoastline(ctx, view, mapStripCoastline, p.land, p.coast);
+  const coastlinePath = svgPolygonPath(mapStripCoastline, view);
+  const lakesPath = svgPolygonPath(mapStripLakes, view);
 
-  if (mapStripTerrain) {
-    ctx.save();
-    if (clipMapStripToLand(ctx, view, mapStripCoastline)) {
-      drawMapStripTerrain(ctx, view, mapStripTerrain);
-    }
-    ctx.restore();
+  // Land/sea/coastline first — sea as a plain background rect, land as
+  // one combined <path> (fill-rule evenodd handles islands-in-lakes,
+  // lakes-in-islands correctly from a single path, same as the old
+  // ctx.fill("evenodd") did). A second, fill-less copy of the same path
+  // is layered in again right at the end — see the comment down there
+  // for why, same reasoning the canvas version already had.
+  let svg = `<rect width="${view.w}" height="${view.h}" fill="${p.sea}"/>`;
+  if (coastlinePath) {
+    svg += `<path d="${coastlinePath}" fill="${p.land}" stroke="${p.coast}" stroke-width="1.5" fill-rule="evenodd"/>`;
+  }
+
+  // Terrain and waterways both clip to the land outline — an SVG
+  // <clipPath>, defined once here and referenced by both groups below,
+  // doing the same job ctx.clip() + ctx.save()/restore() did around each
+  // one individually on the canvas version.
+  const clipId = "mapStripLandClip";
+  let defs = "";
+  if (coastlinePath) {
+    defs = `<defs><clipPath id="${clipId}"><path d="${coastlinePath}"/></clipPath></defs>`;
+  }
+
+  if (mapStripTerrain && coastlinePath) {
+    svg += `<g clip-path="url(#${clipId})">${svgTerrainRects(view, mapStripTerrain)}</g>`;
   }
 
   // Lakes then waterways, same order as map.js's own layer registration
   // (terrain -> lakes -> waterways -> weather). Lakes reuse the generic
-  // coastline-drawing function above — a lake is just another sea-
-  // coloured polygon with a coastline-style outline, nothing waterway-
-  // specific about it.
-  if (mapStripLakes) {
-    drawMapStripCoastline(ctx, view, mapStripLakes, p.sea, p.coast);
+  // polygon path builder above — a lake is just another sea-coloured
+  // polygon with a coastline-style outline, nothing waterway-specific
+  // about it.
+  if (lakesPath) {
+    svg += `<path d="${lakesPath}" fill="${p.sea}" stroke="${p.coast}" stroke-width="1.5" fill-rule="evenodd"/>`;
   }
-  if (mapStripWaterways) {
-    // Clipped to land, same clipMapStripToLand() terrain just above
-    // already uses — the strip's own copy of the exact same bug map.js
-    // had: rivers drawing straight out into the sea at estuary mouths,
-    // because this call never clipped at all. No panning to skip for
-    // (the strip has no drag), so unlike the full map's own version of
-    // this fix there's no frame-skip needed here — just the clip.
-    ctx.save();
-    if (clipMapStripToLand(ctx, view, mapStripCoastline)) {
-      drawMapStripWaterways(ctx, view, mapStripWaterways, p.river);
-    }
-    ctx.restore();
+  if (mapStripWaterways && coastlinePath) {
+    svg += `<g clip-path="url(#${clipId})">${svgWaterwaysPaths(mapStripWaterways, view, p.river)}</g>`;
   }
 
   if (grid) {
-    // Clamped rather than trusted outright: the front page's hour
-    // slider can go up to +48h, comfortably inside the 72 hours
-    // fetched, but clamping here means a future change to either
-    // range can't quietly read past the end of a real point's array.
-    const hourIndex = Math.min(
-      grid.startIdx + mapStripHourOffset,
-      grid.rainByHour[0][0].length - 1
-    );
-    // Was 6px, matched to the old nearest-neighbour lookup. Smaller
-    // now there's genuine sub-grid-point detail to resolve between —
-    // same reasoning as terrain's own 4px-to-3px change when it first
-    // gained interpolation.
-    const cell = 3;
-    for (let px = 0; px < view.w; px += cell) {
-      for (let py = 0; py < view.h; py += cell) {
-        const lon = centre.lon + (px - view.w / 2) / (view.pxPerKm * kmPerDegLon(centre.lat));
-        const lat = centre.lat - (py - view.h / 2) / (view.pxPerKm * KM_PER_DEG_LAT);
-        const fr = (lat - grid.lat0) / grid.dLat, fc = (lon - grid.lon0) / grid.dLon;
-        if (fr < 0 || fc < 0 || fr > grid.rows - 1 || fc > grid.cols - 1) continue;
-        const value = mapStripRainAt(grid, fr, fc, hourIndex);
-        const band = rainBandIndex(value);
-        if (band < 0) continue;
-        ctx.fillStyle = p.ramp[band];
-        ctx.globalAlpha = 0.85;
-        ctx.fillRect(px, py, cell, cell);
-        ctx.globalAlpha = 1;
-      }
-    }
+    svg += svgRainRects(view, centre, grid, p);
   }
 
-  // Second, stroke-only pass over the coastline outline — the rain
-  // wash just painted above can bury the coastline stroke laid down
-  // before it entirely, matching a bug already fixed on the full map
-  // (see its own "coastline-outline" layer in map.js) but never
-  // applied here, since the strip draws its coastline once, up front,
-  // with no later chance to redraw on top of anything. No fill passed,
-  // so this only redraws the outline itself, not the land colour.
-  if (mapStripCoastline) {
-    drawMapStripCoastline(ctx, view, mapStripCoastline, null, p.coast);
+  // Second, stroke-only copy of the coastline outline — the rain wash
+  // just added above can bury the coastline stroke laid down before it
+  // entirely, matching a bug already fixed on the full map (see its own
+  // "coastline-outline" layer in map.js) but never applied here, since
+  // the strip only ever drew its coastline once, up front, on the
+  // canvas version. No fill this time, so it only redraws the outline
+  // itself, sitting on top of everything painted since the first copy.
+  if (coastlinePath) {
+    svg += `<path d="${coastlinePath}" fill="none" stroke="${p.coast}" stroke-width="1.5"/>`;
   }
 
   // A few names for scale — "is this 5 miles across or 50" is hard to
-  // judge from an unlabelled outline. Nearest-and-biggest few only:
-  // this is a strip, not the full map's places layer, so crowding it
-  // with everything nearby would defeat the point.
+  // judge from an unlabelled outline. Nearest-and-biggest few only.
+  // Outline-then-fill on one <text> (paint-order handles this natively
+  // in SVG — no separate strokeText/fillText calls needed) keeps a name
+  // readable whether it lands on sea, land, or a rain cell.
   if (mapStripPlaces) {
     const withDistance = mapStripPlaces
       .map(place => ({ place, d: Math.hypot(place.lat - centre.lat, place.lon - centre.lon) }))
-      .filter(({ d }) => d < 0.35) // roughly within the strip's own view, degrees not km, but fine at this latitude/scale
+      .filter(({ d }) => d < 0.35)
       .sort((a, b) => (a.place.rank - b.place.rank) || (a.d - b.d))
       .slice(0, 4);
 
-    // Regular weight now, matching the full map's own place labels
-    // exactly (was 600/bold here, a leftover from when the strip's
-    // palette and styling generally diverged from the full map on
-    // purpose — see MAP_STRIP_PALETTES' own note).
-    ctx.font = "11px -apple-system, system-ui, sans-serif";
     withDistance.forEach(({ place }) => {
       const x = view.x(place.lon), y = view.y(place.lat);
       if (x < 0 || x > view.w || y < 0 || y > view.h) return;
-      ctx.fillStyle = p.ink;
-      ctx.beginPath();
-      ctx.arc(x, y, 2, 0, Math.PI * 2);
-      ctx.fill();
-      // Outlined in the land colour first — same trick map.js's own
-      // ring labels use — so a name stays readable whether it lands on
-      // sea, land, or a rain-coloured cell.
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = p.land;
-      ctx.strokeText(place.name, x + 5, y + 4);
-      ctx.fillText(place.name, x + 5, y + 4);
+      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="${p.ink}"/>`;
+      svg += `<text x="${(x + 5).toFixed(1)}" y="${(y + 4).toFixed(1)}" font-size="11" font-family="-apple-system, system-ui, sans-serif" fill="${p.ink}" stroke="${p.land}" stroke-width="3" stroke-linejoin="round" paint-order="stroke fill">${escapeXml(place.name)}</text>`;
     });
   }
 
   // Small icon only, no label — see map.js's own tide-locations layer
-  // for the full version (name, tap-to-recentre). Deliberately just a
-  // dot here: several saved tide spots near each other would clutter a
-  // strip this size fast if each one also carried its own name, the
-  // way the full map can afford to.
+  // for the full version (name, tap-to-recentre).
   if (typeof loadTideLocations === "function") {
     const tideLocations = loadTideLocations();
-    ctx.fillStyle = p.tideMarker;
     tideLocations.forEach(loc => {
       const x = view.x(loc.lon), y = view.y(loc.lat);
       if (x < 0 || x > view.w || y < 0 || y > view.h) return;
-      ctx.beginPath();
-      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = "#fff";
-      ctx.stroke();
+      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${p.tideMarker}" stroke="#fff" stroke-width="1"/>`;
     });
   }
 
   // Centre marker, same small dot map.html itself uses for Home.
-  ctx.fillStyle = p.ink;
-  ctx.beginPath();
-  ctx.arc(view.w / 2, view.h / 2, 4, 0, Math.PI * 2);
-  ctx.fill();
+  svg += `<circle cx="${(view.w / 2).toFixed(1)}" cy="${(view.h / 2).toFixed(1)}" r="4" fill="${p.ink}"/>`;
 
-  // Bottom-right time pill, matching the full map's own version in spirit
-  // but its own small class (see style.css) rather than a full-width bar
-  // across a card this size. Hidden at "Now" — that's the strip's own
-  // default state already, so a clock permanently repeating the current
-  // time added nothing; it only earns a place once the shared Hour
-  // slider (Play button included — this is exactly the state Play
-  // drives) has moved somewhere else worth naming.
+  mapStripCanvas.innerHTML = defs + svg;
+
+  // Bottom-right time pill, matching the full map's own version in
+  // spirit. Hidden at "Now" — that's the strip's own default state
+  // already, so a clock permanently repeating the current time added
+  // nothing; it only earns a place once the shared Hour slider has
+  // moved somewhere else worth naming.
   const scaleEl = ensureMapStripScale();
   if (scaleEl) {
     scaleEl.classList.toggle("is-visible", mapStripHourOffset !== 0);
@@ -567,42 +463,14 @@ async function renderMapStrip(centre, grid) {
   }
 }
 
-// ---- Grid cache ----
-// This one fetch asks Open-Meteo for 256 locations at once (a 16x16
-// grid — see the row maths below), and Open-Meteo bills a multi-location
-// request per location, not per request. So each uncached front-page
-// load spends ~256 of a free-tier 10,000/day allowance: roughly 39
-// launches before the day is gone, which is how "Daily API request limit
-// exceeded" turns up after an afternoon of testing. Nothing was cached
-// before this, so every relaunch, every navigation back from the map or
-// Settings, and every pull-to-refresh paid the full 256 again for rain
-// data that changes on the hour at best.
-//
-// Cached in localStorage rather than sessionStorage deliberately: the
-// expensive pattern here is repeated app LAUNCHES (each one a fresh
-// session), which is exactly what sessionStorage would fail to cover.
-// Keyed on the centre rounded to ~1km so small GPS jitter still hits the
-// same entry, and capped at 60 minutes to match the underlying data:
-// these are hourly forecast buckets, so a shorter window would spend
-// real quota re-fetching numbers that are still bit-for-bit identical.
-// The arithmetic matters here — at 30 minutes, sustained back-and-forth
-// use could still reach 48 fetches x 256 = 12,288/day and blow the
-// 10,000 allowance anyway; at 60 it caps at 24 x 256 = 6,144, which
-// leaves real headroom for the front page's own per-forecaster calls
-// and the full map page on top.
-const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapStripGrid";
-const MAP_STRIP_GRID_CACHE_MS = 60 * 60 * 1000;
+const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
+const MAP_STRIP_GRID_CACHE_KEY = "forecast-compare:mapstrip:grid";
+const MAP_STRIP_GRID_CACHE_MS = 15 * 60 * 1000;
 
 function mapStripGridCacheKey(centre) {
   return `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)}`;
 }
 
-// startIdx ("which hour in the series is now") is the one part of a
-// cached grid that genuinely goes stale as the clock moves, so it's
-// recomputed from the stored timestamps on every read rather than
-// trusted from whenever the fetch happened. Everything else — the
-// geometry and the hourly series themselves — is as valid as when it
-// arrived.
 function loadMapStripGridCache(centre) {
   try {
     const raw = localStorage.getItem(MAP_STRIP_GRID_CACHE_KEY);
@@ -613,7 +481,7 @@ function loadMapStripGridCache(centre) {
     const grid = entry.grid;
     const now = Date.now();
     const idx = grid.times.findIndex(t => new Date(t).getTime() >= now - 30 * 60 * 1000);
-    if (idx === -1) return null; // series has been overtaken by the clock entirely
+    if (idx === -1) return null;
     return { ...grid, startIdx: Math.max(0, idx) };
   } catch {
     return null;
@@ -656,12 +524,6 @@ async function fetchMapStripGrid(centre) {
     forecast_days: String(MAP_STRIP_FORECAST_DAYS),
     timezone: "auto"
   });
-  // Routed through fetchOpenMeteo (app.js), which this page also loads —
-  // same shared concurrency gate + 429 backoff as every other Open-Meteo
-  // call in the app. This fetch fires right after the front page's own
-  // 19-ish-request burst lands (see the file-level note above), so it's
-  // exactly the kind of follow-up call that could land in the middle of
-  // a rate-limit window the burst itself just caused.
   const res = await fetchOpenMeteo(`${WEATHER_URL}?${params.toString()}`, {}, 20000);
   if (!res.ok) throw new Error(`Map strip fetch failed: ${res.status}`);
   const data = await res.json();
@@ -671,12 +533,6 @@ async function fetchMapStripGrid(centre) {
   const now = new Date();
   const startIdx = points[0].hourly.time.findIndex(t => new Date(t).getTime() >= now.getTime() - 30 * 60 * 1000);
 
-  // Keeps each point's FULL hourly series rather than collapsing to a
-  // single "now" value the way this used to — that's what lets the
-  // render step below pick out whichever hour the front page's own
-  // slider is currently on, without a separate fetch per hour moved.
-  // 3 days (72 hours) comfortably covers the front page's slider range
-  // (up to +48h), so nothing here needed to grow to support this.
   const rainByHour = [];
   for (let r = 0; r < rows; r++) {
     const row = [];
@@ -686,10 +542,6 @@ async function fetchMapStripGrid(centre) {
     }
     rainByHour.push(row);
   }
-  // Same series for every point (Open-Meteo's hourly buckets are aligned
-  // across all requested locations), so the first point's own timestamps
-  // stand in for all of them — matches map.js's own mapGrid.times, which
-  // the new clock readout below is a direct copy of the reasoning for.
   const times = points[0].hourly.time;
 
   const grid = { lat0, lon0, dLat, dLon, rows, cols: rows, rainByHour, times, startIdx: Math.max(0, startIdx) };
@@ -699,61 +551,23 @@ async function fetchMapStripGrid(centre) {
 
 let mapStripGeneration = 0; // see the guard checks below — a fresh swipe supersedes any still-in-flight initMapStrip call from a previous one
 
-async function initMapStrip(centre, { forceReplace = false } = {}) {
+async function initMapStrip(centre) {
   if (!mapStripCanvas) return;
-  // Confirmed via device testing: the strip's container and the canvas
-  // itself are both a normal, correct, fully visible size at the exact
-  // moment a repeat call runs (351x258, display:flex, visibility:visible)
-  // — so this was never a layout/sizing problem. Every previous attempt
-  // (a plain repaint, a full re-fetch, several different trigger events)
-  // ran successfully and still produced nothing visible. That combination
-  // points to something more specific: the canvas's own GPU-composited
-  // layer not picking up new pixel content on this particular kind of
-  // page transition, even though the 2D context genuinely has been
-  // redrawn underneath. Rather than try to force that layer to refresh
-  // in place, this sidesteps it entirely: replace the canvas element
-  // outright with a fresh clone before drawing anything. A brand new
-  // element gets a brand new compositing layer with no stale image to
-  // possibly fall back to, guaranteed, regardless of the exact mechanism.
-  //
-  // forceReplace deliberately gates this — confirmed as a real
-  // self-inflicted bug the first time this shipped without it: the
-  // periodic safety-net timer (below) also calls initMapStrip, every
-  // 1.2 seconds, for as long as the app stays open. Replacing the
-  // canvas on EVERY one of those routine ticks (not just on a genuine
-  // return-to-page) meant the strip would render correctly for a
-  // moment, then reset back to the canvas's blank default size on the
-  // very next tick, over and over — seen on-device as "looks right for
-  // about a second, then zooms out." Only the actual transition
-  // listeners (pageshow/visibilitychange/focus) pass forceReplace now;
-  // the routine timer tick and the normal first-load path don't.
-  if (forceReplace) {
-    const freshCanvas = mapStripCanvas.cloneNode(false);
-    mapStripCanvas.replaceWith(freshCanvas);
-    mapStripCanvas = freshCanvas;
-    if (mapStripResizeObserver) mapStripResizeObserver.observe(mapStripCanvas);
-  }
   const myGeneration = ++mapStripGeneration;
-  sizeMapStripCanvas();
+  sizeMapStripSvg();
 
   // A cold PWA launch on iOS: reported as the map strip staying at a
   // wrong (too-short) height on first open, pushing everything below it
   // down far enough to need a scroll — but self-correcting the moment
-  // anything else forces a fresh layout pass (opening the full map and
-  // coming back). .map-strip's height comes from a plain CSS flex-grow
-  // against .app-home's `min-height: 100svh` (see style.css) — no JS
-  // computes it — but `svh` itself is measured against iOS's own
-  // dynamic toolbar, which isn't necessarily settled at the very first
-  // paint right after launch. The existing ResizeObserver below already
-  // catches a LATER size change correctly; this only covers the case
-  // where the very first measurement, taken here before that observer
-  // is even attached, was against a viewport iOS hadn't finished
-  // settling yet. Two rAFs (not a guessed timeout) waits for the
-  // browser's own next two paint opportunities, by which point iOS's
-  // real viewport has consistently settled in testing.
+  // anything else forces a fresh layout pass. .map-strip's height comes
+  // from a plain CSS flex-grow against .app-home's `min-height: 100svh`
+  // (see style.css) — no JS computes it — but `svh` itself is measured
+  // against iOS's own dynamic toolbar, which isn't necessarily settled
+  // at the very first paint right after launch. Two rAFs (not a guessed
+  // timeout) waits for the browser's own next two paint opportunities.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (sizeMapStripCanvas() && mapStripLastCentre) {
+      if (sizeMapStripSvg() && mapStripLastCentre) {
         renderMapStrip(mapStripLastCentre, mapStripLastGrid);
       }
     });
@@ -769,11 +583,6 @@ async function initMapStrip(centre, { forceReplace = false } = {}) {
       if (res.ok) mapStripPlaces = await res.json();
     }
     if (!mapStripTerrain) {
-      // Static file, same one map.js uses — already cached by the
-      // service worker/browser cache after the first full-map visit, so
-      // this is typically a local read rather than a real fetch. Kept
-      // to its own try/catch inside the outer one so a slow or failed
-      // terrain load never holds up coastline/places, which matter more.
       try {
         const res = await fetchWithTimeout("data/elevation-uk.json", {}, 15000);
         if (res.ok) {
@@ -791,9 +600,6 @@ async function initMapStrip(centre, { forceReplace = false } = {}) {
       }
     }
     if (!mapStripLakes) {
-      // Own try/catch, same reasoning as terrain above: a missing or
-      // slow lakes file shouldn't hold up coastline/places, and the
-      // strip is still doing everything it promises without it.
       try {
         const res = await fetchWithTimeout("data/lakes-50m.json", {}, 15000);
         if (res.ok) mapStripLakes = await res.json();
@@ -816,36 +622,22 @@ async function initMapStrip(centre, { forceReplace = false } = {}) {
     // showing an error for what is, on the front page, a secondary
     // feature.
   }
-  // A newer swipe already started its own initMapStrip call while the
-  // fetches above were still running — confirmed as a real bug: with no
-  // guard here, whichever call's fetches happen to resolve LAST wins the
-  // canvas, regardless of which one was actually requested last. Two
-  // quick swipes could easily finish out of order (different cache
-  // states, different network timing), leaving the strip showing an
-  // earlier place than the name label next to it, which had already
-  // moved on. Bailing out here means only the most recently REQUESTED
-  // swipe is ever allowed to paint, however its fetches happen to land.
   if (myGeneration !== mapStripGeneration) return;
   renderMapStrip(centre, null); // whatever arrived (coastline/places/terrain) shown immediately, rain follows once fetched
 
-  // Cache first — see the note above fetchMapStripGrid for why this one
-  // call is worth avoiding whenever it's honestly avoidable. A hit skips
-  // the network entirely (and paints instantly); a miss falls through to
-  // the fetch exactly as before.
   const cached = loadMapStripGridCache(centre);
   if (cached) {
-    if (myGeneration !== mapStripGeneration) return; // see the guard above — same reasoning
+    if (myGeneration !== mapStripGeneration) return;
     renderMapStrip(centre, cached);
     return;
   }
 
   try {
     const grid = await fetchMapStripGrid(centre);
-    if (myGeneration !== mapStripGeneration) return; // see the guard above — same reasoning
+    if (myGeneration !== mapStripGeneration) return;
     renderMapStrip(centre, grid);
   } catch (err) {
     console.error("Map strip weather fetch failed:", err);
-    // Silent on screen, same reasoning as the coastline catch above.
   }
 }
 
@@ -853,13 +645,6 @@ document.addEventListener("cloude:location-ready", e => {
   initMapStrip({ lat: e.detail.lat, lon: e.detail.lon });
 });
 
-// Reads the SAME #hourSlider element app.js already owns and drives the
-// headline grid with — a second listener on it, not a shared state
-// object, since that's all this needs and app.js's own "input" handler
-// is left completely untouched. Only re-renders (never re-fetches): the
-// full hourly series for every point is already sitting in
-// mapStripLastGrid from the one fetch on load, so moving the slider is
-// just picking a different index out of data already in hand.
 const mapStripHourSlider = document.getElementById("hourSlider");
 if (mapStripHourSlider) {
   mapStripHourOffset = Number(mapStripHourSlider.value) || 0;
@@ -869,82 +654,46 @@ if (mapStripHourSlider) {
   });
 }
 
-// Was a window "resize" listener only, which never fires when the
-// PAGE's own layout changes size without the window itself changing —
-// exactly what happens when Tide/Fishing or a headline cell gets
-// switched off in Settings: .map-strip's flex-grow (see style.css)
-// gives the strip more height, but nothing tells this canvas that its
-// own box just changed shape. Confirmed on-device: the card grew, but
-// the drawing inside stayed the old, smaller size, leaving a plain
-// blank gap in the newly-freed space instead of the map filling it.
-// ResizeObserver watches the canvas's own box directly, so it fires for
-// that case too, not just an actual window resize.
-// Hoisted out of the if-block (was a local const) so initMapStrip can
-// re-observe it below — needed now that a repeat call replaces the
-// canvas element itself (see initMapStrip's own comment on why), which
-// would otherwise leave this watching a detached, permanently-frozen
-// old node forever after the very first replacement.
+// ResizeObserver watches the element's own box directly, catching a
+// page-layout change (e.g. Tide/Fishing toggled off in Settings, which
+// gives the strip more height via flex-grow) that a plain window
+// "resize" listener would miss entirely. No cloneNode/replace dance
+// needed here any more now the drawing surface is SVG — that machinery
+// existed purely to work around canvas-specific compositing behaviour
+// that doesn't apply here at all.
 let mapStripResizeObserver = null;
 if (mapStripCanvas && "ResizeObserver" in window) {
   mapStripResizeObserver = new ResizeObserver(() => {
-    if (sizeMapStripCanvas() && mapStripLastCentre) {
+    if (sizeMapStripSvg() && mapStripLastCentre) {
       renderMapStrip(mapStripLastCentre, mapStripLastGrid);
     }
   });
   mapStripResizeObserver.observe(mapStripCanvas);
 } else {
-  // ResizeObserver has been in Safari since 2020 — this is only a
-  // fallback for something unexpectedly old, not an expected path.
   window.addEventListener("resize", () => {
-    if (sizeMapStripCanvas() && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
+    if (sizeMapStripSvg() && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   });
 }
 
-// Tapping "back" from the full map to return here was confirmed (via
-// frame-by-frame screen recording) to complete in under 70ms — far too
-// fast to be a genuine page reload, and no standard page-lifecycle event
-// (pageshow, visibilitychange, focus — all three tried and confirmed,
-// via on-screen markers during diagnosis) reliably fires at the moment
-// it actually matters. The likely real cause: iOS's own back-navigation
-// transition shows an animated preview snapshot of the destination page,
-// and canvas content is a known weak spot for that snapshot mechanism —
-// the live page underneath is probably untouched throughout (the
-// refresh button, acting on that same live page, always worked
-// instantly), it's specifically the VISIBLE canvas pixels that don't
-// reliably survive the transition.
-//
-// Confirmed directly on-device (five rounds of diagnosis, the last
-// using plain OS alerts to rule out any doubt about visibility): a
-// lightweight repaint — just redrawing mapStripLastCentre/
-// mapStripLastGrid straight onto the canvas — genuinely does NOT fix
-// this, even when it demonstrably runs. The one thing that DID reliably
-// fix it every time was the manual refresh button, which goes through
-// the full initMapStrip() — not a plain repaint. So that's what this
-// calls instead. This sounds like it should cost a fresh network fetch
-// on every tick, but initMapStrip checks its own local grid cache
-// first (loadMapStripGridCache) — as long as that's still fresh
-// (15 minutes), this is exactly as cheap as the plain repaint attempt
-// it replaces; it only becomes a genuine fetch on the same schedule a
-// normal cache expiry would have caused anyway.
+// Belt-and-braces repaint on the handful of signals that MIGHT fire on
+// a "returned to this page" transition — kept from the canvas-debugging
+// session even though the underlying bug they were chasing turned out
+// to be canvas-specific and shouldn't exist any more with SVG. Left in
+// because they're genuinely free (a plain re-render, cheap, no network
+// unless the grid cache has actually expired) and there's no reason to
+// remove a harmless safety net just because the thing it was guarding
+// against has hopefully gone away.
 setInterval(() => {
   if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) {
-    initMapStrip(mapStripLastCentre);
+    renderMapStrip(mapStripLastCentre, mapStripLastGrid);
   }
 }, 1200);
-
-// Kept as well — genuinely free, and each has a real chance of firing
-// sooner than the interval above on whichever devices/scenarios they DO
-// correctly fire for, even though none could be relied on alone. These
-// three DO pass forceReplace — each only fires on a genuine transition
-// (unlike the routine timer above), so the disruptive canvas swap is
-// both warranted and safe here: at most once per real return-to-page,
-// never on a routine tick.
 window.addEventListener("pageshow", () => {
-  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
+  if (mapStripCanvas && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
+  if (document.visibilityState === "visible" && mapStripCanvas && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
 });
 window.addEventListener("focus", () => {
-  if (mapStripCanvas && mapStripLastCentre) initMapStrip(mapStripLastCentre, { forceReplace: true });
+  if (mapStripCanvas && mapStripLastCentre) renderMapStrip(mapStripLastCentre, mapStripLastGrid);
 });

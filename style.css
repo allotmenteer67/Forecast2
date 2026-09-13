@@ -476,18 +476,20 @@ header p {
   touch-action: pan-y;
 }
 
-.map-strip canvas {
+#mapStripCanvas {
   display: block;
   width: 100%;
   /* Was height: 100% — see .map-strip's own note above for why that
      didn't reliably work. flex-grow here instead of a percentage. */
   flex: 1 1 auto;
   /* Flex items default to min-height: auto (their content's own
-     size), not 0 — for most elements that rarely matters, but a
-     canvas's "content size" can behave unlike a normal element's, and
-     this removes any ambiguity about it being allowed to shrink to
-     fully match whatever the flex algorithm decides rather than some
-     content-derived floor. */
+     size), not 0 — for most elements that rarely matters, but this
+     removes any ambiguity about it being allowed to shrink to fully
+     match whatever the flex algorithm decides rather than some
+     content-derived floor. Was written against a <canvas> — an <svg>
+     has the exact same default-min-height quirk as a flex item, so
+     this line carries over unchanged; see map-strip.js's own file-level
+     comment for why the element itself changed from canvas to svg. */
   min-height: 0;
 }
 
