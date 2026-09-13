@@ -1,3 +1,13 @@
+// TEMPORARY diagnostic — the single simplest possible check: does this
+// file even start executing at all on this page? Placed as the
+// literal first statement, before anything else (even the global
+// error handlers just below) — if this alert never appears on a fresh
+// launch, map-strip.js itself isn't running, which is a script-loading
+// problem (wrong path, blocked request, wrong MIME type causing the
+// browser to refuse to execute it, etc.), not anything about canvas,
+// SVG, or any of the drawing logic this whole file otherwise contains.
+alert("map-strip.js: file started executing");
+
 // TEMPORARY diagnostic — a global catch-all for ANY uncaught error on
 // this page, not just inside this file's own functions. renderMapStrip
 // itself is confirmed never being reached at all (not even as a caught
